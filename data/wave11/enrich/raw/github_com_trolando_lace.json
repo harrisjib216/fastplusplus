@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/trolando/lace",
+  "one_liner": "C11 fork-join work-stealing runtime (split deque, leapfrogging) from the Sylvan BDD author; claims Wool-level overhead, no reproducible numbers against TBB, Cilk or OpenMP.",
+  "what_it_does": "Lace runs fine-grained, strictly nested fork-join parallelism on a fixed pool of worker threads. You declare a task with TASK(rtype, name, type, arg, ...), write its body as name_CALL(lace_worker*, ...), and fork and join with name_SPAWN/name_SYNC (or cancel with name_DROP) in LIFO order; calling name(...) from any thread runs it on the pool and blocks. It is a C library with a C++-compatible header (extern \"C\", _Atomic mapped to std::atomic), not a general thread pool: there are no futures, no detached tasks and no parallel_for.",
+  "how_it_is_fast": "Each worker owns a split deque (van Dijk and van de Pol, Euro-Par 2014 workshops): the owner pushes and pops the private end wait-free with no atomics on the SYNC fast path, thieves CAS a packed 64-bit tail/split word, and the split point moves only on request (a movesplit flag), so fences are needed only when the shared part shrinks. Tasks live in fixed-size 32/64/128-byte deque slots instead of heap objects, and a worker whose stolen task is not finished steals back from the thief (leapfrogging) instead of blocking. Idle workers yield for 256 attempts, then futex-sleep with a 100 us to 1 ms ramp, and a per-worker bump arena replaces malloc and alloca for task-local scratch memory.",
+  "when_to_use": [
+    "Recursive divide-and-conquer in C or C++ with very small tasks (fib-style spawn/sync, tree or decision-diagram traversal, UTS, N-Queens, recursive matmul) where per-task overhead dominates.",
+    "Programs that cannot rely on a Cilk compiler (OpenCilk) or on TBB but want Cilk-style SPAWN/SYNC on GCC, Clang or MSVC across Linux, macOS, Windows and FreeBSD.",
+    "Long-running parallel engines that need stop-the-world points: NAME_NEWFRAME suspends all workers to run one task (e.g. garbage collection, table resize) and NAME_TOGETHER runs a copy on every worker, as Sylvan uses them.",
+    "Multi-socket machines where you can enable LACE_USE_HWLOC so workers are pinned and their stacks and deques are NUMA-local."
+  ],
+  "when_not_to_use": [
+    "General task-pool needs (fire-and-forget jobs, futures that escape their scope, async I/O, parallel_for over ranges): use TBB, Taskflow or a thread pool instead.",
+    "Processes that share cores with other parallel runtimes or need an elastic worker count: the pool size is fixed at lace_start, changing it means stop and restart (issue #9), and the author says it targets research programs running alone on a large machine.",
+    "Unbounded or very deep spawn chains: each worker's deque defaults to 100,000 slots and overflow terminates the process; worker stacks are clamped to 16-64 MB.",
+    "Tasks whose arguments plus result exceed 48 bytes (lace.h), 16 bytes (lace32.h) or 112 bytes (lace128.h); larger data must be passed by pointer.",
+    "Choosing on proven speed: no repo, paper or third-party table opened here shows Lace beating TBB, Cilk Plus or OpenMP with numbers."
+  ],
+  "integration": {
+    "form": "static lib (CMake targets lace::lace, lace::lace32, lace::lace128; shared build possible but warned against)",
+    "dependencies": "pthreads (or Windows threads); optional hwloc; Synchronization.lib on Windows",
+    "min_toolchain": "C11 compiler (GCC, Clang, or MSVC with /experimental:c11atomics); CMake 3.23 per CMakeLists.txt (the getting-started page still says 3.15); header also compiles as C++ (benchmarks build fib-lace.cpp as C++11)",
+    "platforms": "Linux, macOS (os_sync wait/wake on 14.4+, __ulock below), Windows 8+, FreeBSD; x86-64 and aarch64, with i386 and armv7 builds tested in CI via QEMU since 2.1.0",
+    "thread_safety": "Tasks run on Lace workers; any non-Lace thread may call NAME(...), which posts into one of 64 external slots and blocks until done (multiple submitters allowed). One Lace instance per process; SPAWN/SYNC/DROP must be used by the owning worker in LIFO order.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "LACE_NATIVE_OPT defaults to ON, so the library and benchmarks build with -march=native and the binaries may not run on other CPUs; the building docs say to turn it off for distributed builds. The library also compiles with -Werror plus -Wconversion/-Wsign-conversion, which broke a downstream build in 2.2.2 (issue #20, fixed).",
+    "Fixed sizes: lace_start(.., 0, ..) gives 100,000 deque slots per worker (the source's static 1M default and the design page's '1M task slots x 64 bytes' are overwritten), and exceeding it prints 'lace_task stack overflow' and exits; requested stack sizes are silently clamped to 16-64 MB, unlike the header comment that describes the default as the minimum of 16 MB and the caller's stack size.",
+    "SPAWN/SYNC must match in strict LIFO order (out-of-order SYNC is undefined behaviour) and every spawned task must be synced or dropped before the frame returns; scratch-arena allocations need a matching lace_scratch_reset on every return path (leaks are only reported at the next deep idle).",
+    "Weak-memory confidence: in still-open issue #16 (32-bit builds, latest comment 2026-04-26) the FreeBSD port works around suspected ordering bugs by rewriting every memory_order_* to seq_cst, and test_together segfaulted on armv7 and arm64 with no confirmed root cause; the 2.x design page now documents the release/acquire/seq_cst points for ARM and POWER, but the port workaround had not been dropped."
+  ],
+  "pick_this_over_siblings_when": "Pick Lace over OpenCilk when you cannot switch compilers but want the same spawn/sync model in plain C, and over Staccato or Weave when you need C (not C++ templates or Nim) plus stop-the-world NEWFRAME/TOGETHER interrupts and NUMA pinning; pick Staccato, Nowa or OpenCilk if you want a published comparison against TBB and Cilk Plus with numbers, which Lace's repo does not provide.",
+  "verified_claims_summary": "No reproducible comparison exists: the repo's bench.py and benchmarks/CMakeLists.txt build only Lace and sequential versions of the Cilk-5/Nowa-derived programs, the Euro-Par 2014 paper claims only parity with Wool (abstract seen as a snippet), and the 2020 Twente essay ranking Lace ahead of Cilk Plus, TBB and OpenMP on UTS, Fibonacci and Strassen was seen only as a snippet. The only numbers seen are informal ones in issue #7 (2022, Lace v1, 6 threads, CPU and compiler not stated): fib(41) 0.188 s for Lace against 2.663 s for Weave with eager heap-allocated futures, and N-Queens 15 at 23.01 s against Weave's 24365.96 printed under a 'Time(us)' label that the author read as 24.37 s; the Weave author's own 18-core i9-9980XE rerun reported '2x to 2.5x faster on nqueens but 2.5x to 10x slower on fibonacci' without naming the subject, and noted that Weave's lazy futures cut the fib overhead.",
+  "status_note": "Actively maintained (2.4.0 released 2026-06-07 with the scratch arena, 2.3.x in April 2026; CI on Linux, macOS, Windows and FreeBSD), Apache-2.0 and small (one .c and one generated-macro header per variant), so it is copyable; the performance claim stays directional, since the repo's harness has no baseline builds and the 2022 Weave comparison in issue #7 pitted Lace's slot-based tasks against Weave's heap-allocating eager-future mode on an unstated CPU.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/trolando/lace/master/README.md",
+    "https://raw.githubusercontent.com/trolando/lace/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/trolando/lace/master/docs/index.rst",
+    "https://raw.githubusercontent.com/trolando/lace/master/docs/benchmarks.rst",
+    "https://raw.githubusercontent.com/trolando/lace/master/docs/design.rst",
+    "https://raw.githubusercontent.com/trolando/lace/master/docs/variants.rst",
+    "https://raw.githubusercontent.com/trolando/lace/master/docs/tasks.rst",
+    "https://raw.githubusercontent.com/trolando/lace/master/docs/migrating.rst",
+    "https://raw.githubusercontent.com/trolando/lace/master/docs/getting-started.rst",
+    "https://raw.githubusercontent.com/trolando/lace/master/docs/building.rst",
+    "https://raw.githubusercontent.com/trolando/lace/master/src/lace.h",
+    "https://raw.githubusercontent.com/trolando/lace/master/src/lace.c",
+    "https://raw.githubusercontent.com/trolando/lace/master/benchmarks/CMakeLists.txt",
+    "https://raw.githubusercontent.com/trolando/lace/master/benchmarks/bench.py",
+    "https://raw.githubusercontent.com/trolando/lace/master/benchmarks/fib/fib-lace.c",
+    "https://raw.githubusercontent.com/trolando/lace/master/benchmarks/fib/fib-seq.c",
+    "https://github.com/trolando/lace/issues?q=is%3Aissue",
+    "https://github.com/trolando/lace/issues/7",
+    "https://github.com/trolando/lace/issues/9",
+    "https://github.com/trolando/lace/issues/16",
+    "https://github.com/trolando/lace/commits/master",
+    "https://essay.utwente.nl/82071/ (DNS blocked)",
+    "https://fmt.ewi.utwente.nl/media/89.pdf (DNS blocked)",
+    "https://www.tvandijk.nl/pdf/thesis.pdf (DNS blocked)"
+  ],
+  "confidence": 0.65
+}

@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/yiannisbourkelis/agensio",
+  "one_liner": "Pre-alpha C++ static-file, FastCGI and reverse-proxy web server on Asio; outpaces nginx on most HttpArena infrastructure rows.",
+  "what_it_does": "A standalone web server, not a library or framework: it serves static sites, PHP applications through FastCGI (with per-application presets for Laravel, WordPress, Drupal, Statamic and others) and anything else through a reverse proxy, over its own HTTP/1.1, HTTP/2 and HTTP/3 (QUIC) implementations. Configuration is one TOML file with nginx-like site and location blocks (server_name, listen, root, alias, try_files), plus built-in ACME certificates, zero-drop reloads and an MCP control server reached over SSH. It replaces nginx in front of a site, but nginx.conf files do not carry over.",
+  "how_it_is_fast": "One Asio io_context per worker thread, each with its own SO_REUSEPORT acceptor, so a connection never leaves its core and the request path takes no locks. Static files come from a two-level in-memory cache (a shared store touched under a mutex only on miss, insert or evict, plus a per-worker index that makes hits lock-free) holding prebuilt header blocks and pre-compressed .br/.gz twins, revalidated by stat() at most once per interval. The HTTP/2 layer batches a read's answers into one send (one sendmsg per ~57 answers in the author's profile) and uses an HPACK dynamic table so a small response's header block shrinks from 48 to 8 bytes; small HTTP/1 responses go out as one gathered write of prebuilt fragments with a once-per-second Date header.",
+  "when_to_use": [
+    "Serving static sites whose assets fit in the memory cache (default 4 MB per file, 256 MB total), especially over TLS and HTTP/2, where the HttpArena static-tls and static-h2 rows show 1.65x and 1.8x nginx's req/s.",
+    "Small VPS hosting where CPU and memory per request matter: the author's single-worker Ryzen 9 9900X runs show 1.9-2.0 us vs nginx 3.0 us of CPU per plain 1 KB request and 2.7-2.8 vs 4.3-4.4 us over HTTPS, and HttpArena records 297 MiB against nginx's 3.5 GiB on baseline-4096.",
+    "Many small HTTP/2 or HTTP/3 requests per connection, where agensio reached 4.3-5.9x nginx on the h2/h2c baseline rows at about a quarter of nginx's CPU.",
+    "PHP hosting (Laravel, WordPress, Statamic, Drupal) on a single Linux box, if you can accept pre-alpha software and want the bundled per-application hardening presets."
+  ],
+  "when_not_to_use": [
+    "Anything you cannot afford to have exposed or down: the project started 2026-09-19, has one star and a handful of users, and its README warns of undiscovered bugs, some possibly security bugs; alpha.56 and alpha.57 fixed an HTTP/2 timeout loop that could stall a worker and a TLS slow-client cut-off found by the author's own audit.",
+    "Deployments that need on-the-fly compression, directory listing, rate limiting, wildcard or DNS-01 certificates, OCSP stapling or HTTP/3 0-RTT; none are implemented.",
+    "Non-Linux production hosts: macOS builds and Windows compiles, but only Linux is tested release by release.",
+    "Large streamed files over TLS: the author's own tables show nginx level or ahead on 10 MB streams (no kTLS yet, so TLS uses the copy path).",
+    "HTTP/1.1 pipelining-heavy load: on HttpArena's pipelined profile agensio does 4.96M req/s against Drogon 7.8M and zix 58.8M."
+  ],
+  "integration": {
+    "form": "standalone server binary (CMake build)",
+    "dependencies": "standalone Asio 1.38+ (fetched if absent), vendored toml++ 3.4.0; optional OpenSSL 3 for TLS (3.5+ for HTTP/3), optional zlib (archive installs) and libxcrypt (password auth)",
+    "min_toolchain": "C++20 (CMakeLists sets CMAKE_CXX_STANDARD 20), GCC 12+, Clang 16+, Apple clang 15+ or MSVC 2022 per README, CMake 3.24+; the design notes target GCC 14+ and Clang 18+",
+    "platforms": "Linux (epoll, SO_REUSEPORT) supported; macOS (kqueue) builds and runs; Windows compiles but is untested",
+    "thread_safety": "Not applicable as a library; internally one worker per hardware thread with no cross-worker state on the request path",
+    "drop_in_for_baseline": "partial — covers nginx's static, FastCGI and reverse-proxy roles with its own TOML configuration; nginx.conf does not carry over and several nginx features (gzip on the fly, rate limiting, OCSP stapling) are missing"
+  },
+  "gotchas": [
+    "The baseline and JSON rows run a benchmark-only handler (src/handlers/httparena.cpp, compiled only with -DAGENSIO_HTTPARENA=ON and 'never in a release'), and its JSON path pre-serializes every item except the total at dataset load (load_httparena_dataset builds item.prefix; still the same code at HEAD), while nginx's module runs ngx_sprintf over every field per request; HttpArena's infrastructure rule for json-tls and json-h2c requires per-request serialization, so the 1.31x json-tls and 2.64x json-h2c leads over nginx partly measure skipped work. The PR #1511 review (merged 2026-10-06) raised no comment on this.",
+    "The h2 and h2c rows are load-generator bound: the author's own CLAUDE.md notes h2load at 1200 percent bounds the pinned row and that agensio, h2o and zix all land at 12-16M req/s; compare the CPU column (agensio 1.5-1.9k percent vs 3-4k for zix and h2o) rather than req/s there.",
+    "The static rows depend on serving the arena's pre-compressed .br twins: the author's first local run, before twins were served, had agensio at 0.36-0.42 of nginx's req/s because nginx sent 15 KB brotli bodies against 58-60 KB raw ones. The HttpArena nginx entry also runs without open_file_cache, which the infrastructure tier allows and which widens the static-tls gap.",
+    "Numbers come from the alpha.23 build while releases have reached alpha.72. The alpha.57 change that splits large cached bodies into 64 KB pieces touches the HTTP/1 static path, but only for bodies beyond the first write plus one 64 KB piece; the arena's brotli twins and binary files are all under about 60 KB, so the measured static-tls path is unaffected. agensio's hardening flags (stack protector, _FORTIFY_SOURCE=2, _GLIBCXX_ASSERTIONS, zero-init locals, PIE and RELRO) were on during the run."
+  ],
+  "pick_this_over_siblings_when": "Pick agensio over Drogon or cinatra when you want a configured server in front of static files, PHP or a proxied app rather than a C++ framework to write handlers in; over Lwan or Kore when you need HTTP/2, HTTP/3, ACME and FastCGI out of the box and can tolerate pre-alpha maturity. Pick Drogon if you write C++ request handlers or depend on pipelining throughput.",
+  "verified_claims_summary": "On HttpArena's public board (AMD Threadripper PRO 3995WX, Ubuntu 24.04, Docker; agensio v0.1.0-alpha.23 built with GCC from Debian trixie at CMake Release plus -march=native and its hardening defaults, nginx 1.31.4 at -O3 -march=native with a custom C handler module), agensio led nginx on static-tls (1.19M vs 0.72M req/s), the HTTP/2 and h2c baselines (14.2-14.8M vs 2.5-3.3M) and HTTP/3 rows, edged it on HTTP/1.1 baseline-4096 (1.08x), and trailed it by 2 percent on limited-conn; h2o stays ahead on baseline-4096 and baseline-h2, zix on json-h2c and pipelined, Drogon on pipelined.",
+  "status_note": "Very active pre-alpha (317 commits, releases almost daily, alpha.72 on 2026-10-12) and MIT-licensed, but one star and a few weeks of field use, so treat it as an experiment rather than an nginx replacement for production yet.",
+  "sources_read": [
+    "https://github.com/YiannisBourkelis/agensio",
+    "https://github.com/YiannisBourkelis/agensio/tree/main/bench",
+    "https://github.com/YiannisBourkelis/agensio/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/YiannisBourkelis/agensio/HEAD/README.md",
+    "https://raw.githubusercontent.com/YiannisBourkelis/agensio/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/YiannisBourkelis/agensio/HEAD/CLAUDE.md",
+    "https://raw.githubusercontent.com/YiannisBourkelis/agensio/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/YiannisBourkelis/agensio/HEAD/bench/nginx.conf",
+    "https://raw.githubusercontent.com/YiannisBourkelis/agensio/HEAD/src/handlers/httparena.cpp",
+    "https://raw.githubusercontent.com/YiannisBourkelis/agensio/v0.1.0-alpha.23/src/handlers/httparena.cpp",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/agensio/Dockerfile",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/agensio/agensio.toml",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/nginx/nginx.conf",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/data/dataset.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/content/docs/test-profiles/h1/json-tls/implementation.md",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/content/docs/test-profiles/h1/static-tls/implementation.md",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/content/docs/test-profiles/h2/json-h2c/implementation.md",
+    "https://github.com/MDA2AV/HttpArena/pull/1511"
+  ],
+  "confidence": 0.75
+}
