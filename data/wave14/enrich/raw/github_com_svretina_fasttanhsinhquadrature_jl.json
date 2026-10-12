@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/svretina/fasttanhsinhquadrature.jl",
+  "one_liner": "Julia tanh-sinh (double-exponential) quadrature for 1D-3D boxes; beats Cubature/Cuba C wrappers on endpoint-singular and low-order integrands.",
+  "what_it_does": "Numerical integration of user functions over intervals, rectangles and boxes (1D, 2D, 3D only) with tanh-sinh rules. The main entry point is quad(f, low, up; rtol, atol, max_levels, cache), which is adaptive; integrate1D/2D/3D and their _avx variants run a fixed precomputed rule (x, w, h) with no error estimate. quad_split handles a known interior singularity and quad_cmpl passes the endpoint distances b-x and x-a to the integrand. It works in Float32, Float64, Double64, MultiFloats and BigFloat. It is not a drop-in for Cubature.jl or Cuba.jl: the integrand takes scalar arguments f(x, y, z) rather than a vector, and the docs do not mention vector-valued integrands or dimensions above 3.",
+  "how_it_is_fast": "The double-exponential substitution x = tanh(pi/2 sinh t) clusters nodes at the endpoints, so integrands with algebraic or log endpoint singularities converge in a few dozen nodes per axis, where h-adaptive Genz-Malik cubature subdivides tens of thousands of times. The adaptive routine halves the step each level and evaluates only the new odd-index nodes, using the 2- and 4-way symmetry of the box. Node and weight tables (the tanh/sinh/cosh work) are memoized in global per-type caches, so later calls do no transcendental setup. The _avx variants run the same sums through LoopVectorization @turbo.",
+  "when_to_use": [
+    "1D integrals dominated by endpoint singularities (1/sqrt(1-x^2), log(1-x)): README run shows quad 528-592 ns against QuadGK 5.2-11.5 us and Cubature h 74-239 us at rtol 1e-6",
+    "2D or 3D box integrals with singularities on the faces, where h-adaptive cubature (Cubature h, HCubature) needs 28-52 ms and Cubature p and Cuba miss tolerance; FTS takes 2-4 us in 2D",
+    "Repeated integrals over the same box, where a prebuilt adaptive cache or a precomputed (x, w, h) rule can be reused across thousands of calls",
+    "Extended-precision quadrature (Double64, BigFloat, MultiFloats) with the same API as Float64"
+  ],
+  "when_not_to_use": [
+    "Oscillatory or locally peaked 1D integrands: sin^2(1000x) takes 254 us with quad against 11.4 us with QuadGK (README), and the maintainer measured 26x slower in issue #25; use QuadGK",
+    "Smooth 3D integrands such as exp(x+y+z): Cuba Cuhre (180 us) and Cubature h (317 us) beat adaptive FTS (1.07 ms) in the README run",
+    "More than three dimensions, vector-valued integrands, or interior singularities at unknown locations (quad_split needs the point)",
+    "Projects that cannot take a GPL-3.0 dependency",
+    "Code that must run its _avx paths on Julia 1.13 or later: the test suite marks AVX failures there as allowed (LoopVectorization compatibility), and Project.toml compat stops at 1.12"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "StaticArrays, LambertW, LoopVectorization 0.12",
+    "min_toolchain": "Julia 1.9 (compat 1.9-1.12)",
+    "platforms": "any Julia platform; _avx variants need a LoopVectorization-compatible Julia (AVX checks allowed to fail on 1.13+)",
+    "thread_safety": "Global node/weight caches are built under a ReentrantLock, so concurrent calls are safe; otherwise not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw (probable, not run here): benchmark/benchmarks.jl assigns f, low and up in each branch of an if/elseif/else, and Julia boxes captured variables that are assigned in more than one place (manual: Performance of captured variable). The per-evaluation wrappers given to Cubature, HCubature and Cuba (v -> f(v[1], v[2]) and cuba_f) then pay a runtime dispatch on every integrand call, while the FTS, QuadGK and FastGauss closures pay one dispatch per integral and then run specialised loops. The C-library rows may therefore include Julia callback overhead (Cuba Vegas, which misses tolerance and so presumably runs to the 200000-evaluation cap, works out to about 425 ns per evaluation). HCubature also gets Vector rather than SVector bounds.",
+    "Measurement noise exceeds several claimed ratios. The run uses samples=3 and evals=1, and the two runs checked in on 2026-04-04 disagree by up to 3.5x (QuadGK on 1/(1+25x^2): 1612 vs 458 ns; Cubature h on 2D x^2+y^2: 5980 vs 2720 ns). The quad wrapper is often timed faster than adaptive_integrate_*, the function it calls (1D x^6: 652 vs 1560 ns). Neither run includes the v2.1.0 hot-path and adaptive-AVX changes of 2026-04-05/06.",
+    "The 'FTS avx' rows are fixed rules at the N found by a prior adaptive run, with no error estimate. In 2D and 3D they also use the 1D truncation window (tanhsinh default D=1) where the adaptive caches use tmax(T, D). They show the speed of a precomputed rule, not of adaptive integration.",
+    "Nodes are clamped to prevfloat(1), so 1-x computed inside the integrand loses relative precision near the endpoints; use quad_cmpl for forms such as log(1-x) or 1/sqrt((1-x)(1+x)). Before PR #31 (2026-04-03) the stopping rule was unreliable (error 0.084 on sin^2(1000x), issue #25). The first call for a new (type, max_levels) pair builds the global cache and is slower."
+  ],
+  "pick_this_over_siblings_when": "No other quadrature library is catalogued yet; the closest siblings are Julia numerics packages beating C (Bessels.jl, FFTA.jl, TriangularSolve.jl), each for a different kernel. Pick this one when the job is integrating a callable with endpoint singularities over a 1D-3D box, the one case where its win over the C cubature libraries is large and algorithmic rather than overhead.",
+  "verified_claims_summary": "These are author-run @belapsed timings on an Intel Core Ultra 7 155U at rtol 1e-6 / atol 1e-8, with the Julia version unstated. They compare FTS against Cubature.jl (h and p) and Cuba.jl, Julia wrappers over prebuilt C JLL binaries whose build flags are unstated. The robust result is the endpoint-singular 2D case: FTS takes 1.9-3.7 us, Cubature h 28 ms, and every other C method misses tolerance. Smooth-case wins of 1.1-6.7x are within the harness's run-to-run noise or depend on the oracle-N avx rows, and Cuhre wins on 3D exp.",
+  "status_note": "Active: v2.1.0, last commit 2026-04-16, JOSS paper accepted and published 2026-04-16 (DOI 10.21105/joss.10076, review openjournals/joss-reviews#10076), all 15 issues closed. It is copyable under GPL-3.0, but the benchmark numbers predate the v2.1.0 kernels and benchmark/Manifest.toml is not in the repo.",
+  "sources_read": [
+    "https://github.com/svretina/FastTanhSinhQuadrature.jl",
+    "https://raw.githubusercontent.com/svretina/FastTanhSinhQuadrature.jl/master/README.md",
+    "https://raw.githubusercontent.com/svretina/FastTanhSinhQuadrature.jl/master/REPRODUCIBILITY.md",
+    "https://raw.githubusercontent.com/svretina/FastTanhSinhQuadrature.jl/master/Project.toml",
+    "https://raw.githubusercontent.com/svretina/FastTanhSinhQuadrature.jl/master/benchmark/Project.toml",
+    "https://raw.githubusercontent.com/svretina/FastTanhSinhQuadrature.jl/master/benchmark/benchmarks.jl",
+    "https://raw.githubusercontent.com/svretina/FastTanhSinhQuadrature.jl/master/benchmark/results/timings_full.md",
+    "https://raw.githubusercontent.com/svretina/FastTanhSinhQuadrature.jl/master/benchmark/results/timings.csv",
+    "https://raw.githubusercontent.com/svretina/FastTanhSinhQuadrature.jl/master/src/FastTanhSinhQuadrature.jl",
+    "https://raw.githubusercontent.com/svretina/FastTanhSinhQuadrature.jl/master/src/core.jl",
+    "https://raw.githubusercontent.com/svretina/FastTanhSinhQuadrature.jl/master/src/caches.jl",
+    "https://raw.githubusercontent.com/svretina/FastTanhSinhQuadrature.jl/master/src/integrate1D.jl",
+    "https://raw.githubusercontent.com/svretina/FastTanhSinhQuadrature.jl/master/src/integrate2D.jl",
+    "https://raw.githubusercontent.com/svretina/FastTanhSinhQuadrature.jl/master/src/integrate3D.jl",
+    "https://raw.githubusercontent.com/svretina/FastTanhSinhQuadrature.jl/master/src/adaptive.jl",
+    "https://raw.githubusercontent.com/svretina/FastTanhSinhQuadrature.jl/master/src/quad.jl",
+    "https://raw.githubusercontent.com/svretina/FastTanhSinhQuadrature.jl/master/.github/workflows/CI.yml",
+    "https://raw.githubusercontent.com/svretina/FastTanhSinhQuadrature.jl/master/test/runtests.jl",
+    "https://github.com/svretina/FastTanhSinhQuadrature.jl/issues?q=is%3Aissue",
+    "https://github.com/svretina/FastTanhSinhQuadrature.jl/issues/25",
+    "https://github.com/svretina/FastTanhSinhQuadrature.jl/commits/master",
+    "https://github.com/svretina/FastTanhSinhQuadrature.jl/commits/master/benchmark/results/timings_full.md",
+    "https://github.com/svretina/FastTanhSinhQuadrature.jl/commits/master/README.md",
+    "https://github.com/openjournals/joss-reviews/issues/10076",
+    "https://raw.githubusercontent.com/JuliaSIMD/LoopVectorization.jl/main/README.md",
+    "https://raw.githubusercontent.com/giordano/Cuba.jl/master/README.md",
+    "https://raw.githubusercontent.com/giordano/Cuba.jl/master/src/Cuba.jl",
+    "https://raw.githubusercontent.com/JuliaLang/julia/master/doc/src/manual/performance-tips.md"
+  ],
+  "confidence": 0.65
+}

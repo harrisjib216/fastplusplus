@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/tairov/llama2.mojo",
+  "one_liner": "Single-file Mojo port of karpathy's llama2.c fp32 CPU inference; 1.1-1.5x llama2.c tok/s in the author's same-session runs.",
+  "what_it_does": "Runs llama2-architecture checkpoints in llama2.c's .bin format (TinyStories 260K/15M/42M/110M, TinyLlama-1.1B-Chat) on the CPU in fp32 and prints generated text with a tok/s figure. It is a program, not a library: mojo llama2.mojo model.bin with -n steps, -t temperature, -i prompt, -z tokenizer and -j workers. It reads the same checkpoint and tokenizer files as llama2.c, so it is a swap for the run binary, not for a C API.",
+  "how_it_is_fast": "The matmul is explicit SIMD (vectorize at nelts = max(16, native float32 width)) with up to three weight matrices fused per pass over the activation vector (matmul_rows[n] for Q/K/V and w1/w3). The PR #102 build that was benchmarked used a persistent worker pool: each worker owns fixed row and head slices for the whole forward pass, stages are separated by a sense-reversing spin barrier (31 per token on stories15M), and RMSNorm is recomputed per worker to drop barriers. llama2.c instead runs an OpenMP parallel-for per matmul and per attention loop. Both techniques can be reproduced in C; the gain is design, not language.",
+  "when_to_use": [
+    "Experimenting with Mojo for CPU inference, or reading a compact (about 1100-line) reference transformer forward pass with explicit SIMD and manual thread partitioning",
+    "Tiny fp32 llama2 checkpoints (15M-110M parameters) on multi-core x86-64 with AVX-512 or Apple Silicon, where the author measured 1.12-1.31x llama2.c OpenMP at 4 threads and 1.35-1.47x single-threaded on a Skylake VM",
+    "As a template for replacing per-call OpenMP fork/join with a persistent worker pool and barriers in a memory-bandwidth-bound decode loop"
+  ],
+  "when_not_to_use": [
+    "Production or larger-model inference: the code is fp32-only, with no quantization, no GGUF and no 7B/13B support (TODO issues #52, #64 and #65 are closed; the README lists only the stories models and TinyLlama-1.1B); llama.cpp or llama2.c's int8 runq fit better",
+    "Anywhere you need the published numbers to hold for the code you install: the README targets Mojo 1.1.0, but its tables come from the Mojo 1.0.0 PR #102 build, and the Mojo 1.1 rewrite was not re-benchmarked",
+    "Projects that cannot follow Mojo toolchain churn: each release from 0.25 to 0.26 to 1.0 to 1.1 needed source changes (upgradelog.md), and MAX is now a hard dependency for parallelize",
+    "GPU inference (not supported) or batched or server workloads (one sequence, one process)"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Mojo 1.1.0 and MAX 26.6.0 (max.algorithm.parallelize) from PyPI; a host C compiler to link executables",
+    "min_toolchain": "Mojo 1.1.0 / MAX 26.6.0 (current master); the benchmarked build needed Mojo 1.0.0 (Modular 26.5)",
+    "platforms": "Linux x86-64 and macOS Apple Silicon per the README tables; others not documented",
+    "thread_safety": "Not documented; one Transformer owns one shared worker state and one KV cache, so it serves one generation stream at a time",
+    "drop_in_for_baseline": "partial: reads llama2.c's .bin checkpoints and tokenizer.bin and gives byte-identical greedy output, but it is a Mojo program with its own CLI (-j, -pc), not a C library"
+  },
+  "gotchas": [
+    "The benchmarked code is not the shipped code. The 2026-09-12 tables were measured on the PR #102 build, which started workers-1 persistent threads once via std.runtime.asyncrt.TaskGroup. The Mojo 1.1 commit (2026-09-19) replaced that with one max.algorithm.parallelize dispatch per token, and upgradelog.md itself measured about 200 us per parallelize dispatch on the same VM because MAX pool threads sleep and wake slowly. If that cost recurs once per token, it is roughly 6-8% of a 2.5-3 ms stories15M token, which would cut the 1.12x 4-thread margin over llama2.c (327 vs 292 tok/s) to about 1.05x, inside the stated noise.",
+    "The 4-thread margins sit inside the author's stated +-10% run-to-run noise: stories15M -j 4 is reported as both 327 and 400 tok/s for the same build against one llama2.c figure of 292. The llama2.c build (make target, compiler, flags, commit) and OMP_NUM_THREADS handling are not stated in the README, PR #102 or agents-optimization.md. The M1 Max table pairs a 2026 Mojo run with 2023 llama2.c and llama.cpp columns.",
+    "The current code runs spin barriers inside a parallelize dispatch, so it relies on MAX co-scheduling all -j workers at once. If the pool has fewer free threads than workers, waiting workers spin, with a sched_yield every 4096 iterations. -j is silently clamped to num_performance_cores().",
+    "The tok/s methodology matches llama2.c (the timer starts after the first token; the rate is (pos-1)/elapsed, prompt tokens included), except that llama2.c fflushes stdout after every token and llama2.mojo's print does not flush."
+  ],
+  "pick_this_over_siblings_when": "Pick it over llama2.zig (cgbur), whose claim is single-threaded against gcc -Ofast llama2.c, when you want a multi-threaded port with an explicit worker-pool design to study. Pick llm.mojo for training rather than inference, and fastGPT (Fortran) for GPT-2 rather than llama2. For actual deployment none of these beats llama.cpp.",
+  "verified_claims_summary": "The author measured, in the same session on a 4 vCPU Intel Xeon Skylake AVX-512 VM (Ubuntu 26.04, Mojo 1.0.0, PR #102 build, greedy decoding, 256 tokens, best of 3), 327/150/66/6.8 tok/s at -j 4 against llama2.c OpenMP at 4 threads 292/117/53/5.2 for stories15M/42M/110M/TinyLlama-1.1B (1.12-1.31x). Single-threaded it measured 154/54/22 against 105/40/16 (1.35-1.47x), with byte-identical greedy output and the llama2.c build flags unstated. The README's 30% and llama.cpp +20% headline and its M1 Max 1.8-2.1x table are cross-run comparisons, and a 2023 i7-8700 run showed parity.",
+  "status_note": "Active (last commit 2026-09-19, Mojo 1.1 port), MIT-licensed single file with 2.1k stars. All visible issues are closed; it tracks each Mojo release, and the current threading code is untimed.",
+  "sources_read": [
+    "https://github.com/tairov/llama2.mojo",
+    "https://raw.githubusercontent.com/tairov/llama2.mojo/master/README.md",
+    "https://raw.githubusercontent.com/tairov/llama2.mojo/master/llama2.mojo",
+    "https://raw.githubusercontent.com/tairov/llama2.mojo/master/agents-optimization.md",
+    "https://raw.githubusercontent.com/tairov/llama2.mojo/master/upgradelog.md",
+    "https://github.com/tairov/llama2.mojo/pull/102",
+    "https://github.com/tairov/llama2.mojo/issues?q=is%3Aissue",
+    "https://github.com/tairov/llama2.mojo/commits/master",
+    "https://raw.githubusercontent.com/karpathy/llama2.c/master/run.c",
+    "https://raw.githubusercontent.com/karpathy/llama2.c/master/Makefile"
+  ],
+  "confidence": 0.7
+}

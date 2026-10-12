@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/tidwall/evio",
+  "one_liner": "Go event-loop framework using raw epoll/kqueue; its toy Redis clone out-served Redis 4.0.2 on pipelined PING.",
+  "what_it_does": "evio is a libuv/libevent-style networking framework for Go. It drives sockets with direct epoll (Linux) or kqueue (BSD, macOS) syscalls instead of the net package. You fill an evio.Events struct with callbacks (Serving, Opened, Closed, Data, Tick, Detached) and call evio.Serve(events, \"tcp://...\", \"unix://...\"); Data receives a byte slice and returns the bytes to send plus an action (Close, Shutdown, Detach). It is not a drop-in replacement for net or net/http, as its README says, and the benchmarked 'Redis' is a 9-command example server (examples/redis-server) that parses with tidwall/redcon.",
+  "how_it_is_fast": "Each loop is one goroutine around a level-triggered epoll_wait (64 events, 100 ms timeout) with a shared 64 KiB read buffer, and callbacks run inline with no goroutine per connection, no net.Conn and no channels. The speedup over Redis comes mostly from the clone's thin command path: redcon.ReadNextCommand walks the whole pipelined batch and PING appends '+PONG' to one output slice, written once. Redis 4.0.2's inline path does more per command: it copies the line (sdsnewlen), re-splits it into new sds strings (sdssplitargs), allocates argv and a robj per argument, and memmoves the rest of the query buffer (sdsrange). It then runs processCommand (lookupCommand, maxmemory check) and call(), which times every command with two ustime() calls and updates stats, slowlog and latency monitoring. evio itself costs two epoll_ctl calls per response (ModReadWrite, then ModRead after the write), so the event loop is not where it wins.",
+  "when_to_use": [
+    "A custom line- or RESP-protocol TCP/unix-socket server in Go where handlers are short, non-blocking in-memory operations and clients pipeline requests.",
+    "Many mostly-idle connections where goroutine-per-connection stacks are the memory cost you want to avoid (the README claims low memory use but gives no figures).",
+    "Single-threaded or N-loop (NumLoops, SO_REUSEPORT, Random/RoundRobin/LeastConnections balancing) designs on Linux or BSD/macOS, including UDP and unix sockets on the same loop.",
+    "Prototyping a Redis-protocol front end for a handful of commands, together with redcon's parser."
+  ],
+  "when_not_to_use": [
+    "As a Redis replacement: the example clone has PING, ECHO, GET, SET, DEL, FLUSHDB, QUIT, SHUTDOWN and WAKE over a mutex-guarded Go map, with no persistence, expiry, replication or memory limits.",
+    "Handlers that block (database calls, disk I/O, slow computation) stall every connection on the loop, and there is no TLS (open issue #28).",
+    "Server-push designs built on Conn.Wake(): loopWake replaces pending output with c.out = append([]byte{}, out...) instead of appending (open issues #74 and #72, unfixed), and #46 and #40 report blocked writes and unreported write errors.",
+    "Unpipelined request/response traffic, where it only tied Redis (177,148 vs 176,991 req/s at depth 1) because the client was the bottleneck.",
+    "New long-lived projects: no code change since 2020-11-03 and 22 open issues; Tile38, which the README names as its target, now depends on redcon v1.6.2 and not on evio."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "github.com/kavu/go_reuseport v1.5.0 (the example Redis clone also needs github.com/tidwall/redcon)",
+    "min_toolchain": "Go 1.15 per go.mod; the Go version of the 2017 benchmark run is not recorded",
+    "platforms": "Linux (epoll) and darwin/freebsd/netbsd/openbsd/dragonfly (kqueue); other OSes, including Windows, fall back to emulation over the net package; open issue #81 (2026-07) reports an arm64 cross-build problem",
+    "thread_safety": "Callbacks for one loop run on that loop's goroutine; with NumLoops > 1 they run concurrently across loops and shared state needs your own locking (README); Conn.Wake() is the only Conn method meant for other goroutines and has open output-loss bugs",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw (like-for-like): the run compares a 9-command toy against full Redis 4.0.2 on PING_INLINE only. Redis plateaus at 878,735 and 879,508 req/s at depths 8 and 16 because of its per-command inline parse and call() bookkeeping (networking.c processInlineBuffer, server.c call()), not its event loop. Redcon, a Go net-package server with no evio, shows a similar 2.1-2.4x over Redis in its README (SET/GET, -P 512 -c 512), which suggests the gain comes from the thin command path rather than evio.",
+    "Measurement is thin: one run per cell, with the redis-benchmark client on the same 4-vCPU c4.xlarge. The depth-16 clone figure covers 1,000,000 requests at 2.12M/s, about 0.47 s of measurement with two progress samples. Redis came from PATH with unknown build flags (commit=00000000) on a host warning about THP and somaxconn 128.",
+    "Every read is copied into a fresh slice unless Options.ReuseInputBuffer is set (the clone does not set it); with reuse on, the Data input aliases a buffer shared by all connections on the loop and must not be retained.",
+    "Record corrections: maintenance 'active' reflects only two README edits (2026-05-12, 2026-05-19); the last code commits are 'Update dependencies' (2020-11-03) and 'Add a deadline for epollwait' (2020-01-15). 'Foundation of Tile38' is historical: Tile38's current go.mod has redcon and no evio."
+  ],
+  "pick_this_over_siblings_when": "Against Redcon (same author, net-package goroutine-per-connection, maintained, what Tile38 uses), pick evio only if you specifically want a callback event loop with explicit loop count, SO_REUSEPORT and connection balancing, and can avoid Wake(). For plain TCP echo-style services, the Go net and Tokio echo entries are maintained baselines with fewer sharp edges.",
+  "verified_claims_summary": "In the author's 2017 run on an EC2 c4.xlarge (both servers started with GOMAXPROCS=1, client on the same box over IPv4 localhost, redis-benchmark -t ping_inline -c 50 -n 1000000), the evio example Redis clone tied Redis 4.0.2 at pipeline depth 1 (177,147.92 vs 176,991.14 req/s) and beat it at depth 8 (1,285,347 vs 878,735, about 1.46x) and depth 16 (2,123,142 vs 879,508, about 2.41x). The Go version and Redis build flags are not recorded, and only the inline PING command was measured.",
+  "status_note": "Dormant rather than active: the last code change was 2020-11-03 and 22 issues are open, including unfixed Wake() output-loss bugs (#72, #74); it is MIT and small enough to vendor, but treat the Redis comparison as evidence about a thin command path, not as a faster Redis.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/tidwall/evio/HEAD/README.md",
+    "https://raw.githubusercontent.com/tidwall/evio/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/tidwall/evio/HEAD/go.mod",
+    "https://raw.githubusercontent.com/tidwall/evio/HEAD/evio.go",
+    "https://raw.githubusercontent.com/tidwall/evio/HEAD/evio_unix.go",
+    "https://raw.githubusercontent.com/tidwall/evio/HEAD/evio_std.go",
+    "https://raw.githubusercontent.com/tidwall/evio/HEAD/evio_other.go",
+    "https://raw.githubusercontent.com/tidwall/evio/HEAD/internal/internal_linux.go",
+    "https://raw.githubusercontent.com/tidwall/evio/HEAD/internal/internal_bsd.go",
+    "https://raw.githubusercontent.com/tidwall/evio/HEAD/benchmarks/bench-redis.sh",
+    "https://raw.githubusercontent.com/tidwall/evio/HEAD/benchmarks/bench.sh",
+    "https://raw.githubusercontent.com/tidwall/evio/HEAD/benchmarks/README.md",
+    "https://raw.githubusercontent.com/tidwall/evio/HEAD/benchmarks/out/redis1.txt",
+    "https://raw.githubusercontent.com/tidwall/evio/HEAD/benchmarks/out/redis8.txt",
+    "https://raw.githubusercontent.com/tidwall/evio/HEAD/benchmarks/out/redis16.txt",
+    "https://raw.githubusercontent.com/tidwall/evio/HEAD/examples/redis-server/main.go",
+    "https://github.com/tidwall/evio/issues",
+    "https://github.com/tidwall/evio/issues/72",
+    "https://github.com/tidwall/evio/issues/74",
+    "https://github.com/tidwall/evio/commits",
+    "https://raw.githubusercontent.com/redis/redis/4.0.2/src/networking.c",
+    "https://raw.githubusercontent.com/redis/redis/4.0.2/src/server.c",
+    "https://raw.githubusercontent.com/tidwall/redcon/HEAD/README.md",
+    "https://raw.githubusercontent.com/tidwall/tile38/HEAD/go.mod"
+  ],
+  "confidence": 0.7
+}

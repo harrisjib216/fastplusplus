@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/thruster-rs/thruster",
+  "one_liner": "Koa-style Rust web framework whose experimental thruster-grpc server, on hyper/h2, out-served gRPC C++ in grpc_bench unary echo.",
+  "what_it_does": "Thruster is a middleware-chain web framework (Express/Koa style: #[middleware_fn] async functions composed with m![...] on routes) that runs over hyper, actix or its own HTTP engine. gRPC comes from the separate thruster-grpc crate, which its own README calls experimental: you register each RPC by hand as a POST route ('/helloworld.Greeter/SayHello'), decode the request with prost via get_proto() and reply with proto(). There is no service-trait codegen, no client, and the API is unrelated to grpc::Server or tonic.",
+  "how_it_is_fast": "The measured path is hyper 0.14.28 with h2 0.3.26 on tokio (a current_thread runtime for the st build, a multi-thread runtime sized to GRPC_SERVER_CPUS for mt), jemalloc, and prost 0.11 encode and decode. thruster-grpc collects the body, skips the 5-byte gRPC prefix and decodes it, then writes one buffer with the prefix. It does not do the per-call work of the gRPC C++ async API: completion-queue tags, a call-object state machine, deadline and compression handling. Under a 1-CPU docker quota, one event loop with no cross-thread handoff also avoids gRPC core's extra poller threads (our inference from the setup; no source states a mechanism).",
+  "when_to_use": [
+    "You already run a Thruster app and want a few unary protobuf endpoints served from the same hyper process and middleware chain.",
+    "Small-message unary RPC on 1-2 cores, where the 2026 grpc_bench run puts it at about 1.5-1.8x gRPC C++ req/s with a 11-13 MiB footprint.",
+    "Internal services where you control both ends and the clients send uncompressed unary calls without deadlines."
+  ],
+  "when_not_to_use": [
+    "As a general gRPC server: thruster-grpc is unary-only and experimental. It has no streaming, ignores the compression flag and the length prefix, does not enforce grpc-timeout or deadlines, sends no grpc-message, and has no reflection, health or interceptors.",
+    "If you just want a fast Rust gRPC server: tonic (same hyper/h2 base, maintained, full protocol) matched or beat it in the same 2026 run (102,754 vs 98,464 req/s at 1 CPU, 136,638 vs 135,989 at 4 CPUs).",
+    "At 3 or more cores, where the 2022 run had gRPC C++ mt ahead (69,882 vs 56,740 at 2 CPUs) and the 2026 run had Java Vert.x, Scala Pekko and tonic ahead of it.",
+    "Long-lived production code: Thruster's last commit is 2024-10-16, thruster-grpc 0.2.3 dates from 2023-06-26 and is pinned to hyper 0.14/http 0.2, and the README says it has one maintainer and has not been hardened ('Why you shouldn't use Thruster')."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "thruster (feature hyper_server), thruster-grpc 0.2.3 (hyper 0.14, http 0.2, http-body 0.4, prost 0.11, tokio full, tokio-stream, serde, serde_json, lazy_static), prost-build at build time; jemallocator optional (used by the benchmark)",
+    "min_toolchain": "Stable Rust, edition 2018; no MSRV declared on crates.io. grpc_bench built it with Rust 1.59 (2022) and 1.94 (2026)",
+    "platforms": "Wherever tokio and hyper 0.14 run; not documented further",
+    "thread_safety": "The App is committed and shared through an Arc across tokio worker threads; each request gets its own ProtoContext (whose Clone impl panics by design). Nothing else is documented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness and like-for-like flaw: the Thruster server does less protocol work than gRPC C++. thruster-grpc's get_proto() decodes &body[5..] without checking the compression flag or the declared length, drops body read errors silently (while let Some(Ok(chunk))), and panics on a body shorter than 5 bytes. The benchmark handler also unwrap()s decode errors, so a bad request panics the stream task instead of returning INVALID_ARGUMENT. grpc_bench only counts [OK] replies, so the req/s figures are real, but it is not the same feature set.",
+    "The C++ baseline is weaker than it could be: one outstanding RequestSayHello per completion queue (gRPC's helloworld async example pattern), Debian's prebuilt libgrpc++ (1.51.1 per Debian's tracker; the -O3 -flto flags only reach main.cpp and the stubs), and docker --cpus quotas that also throttle gRPC core's internal threads. So the record's same_opt_level=true is wrong; the verifier's notes say false.",
+    "At 3-4 CPUs the 2026 ratios are capped by the client: the top row (java_vertx_grpc) peaks near 150k req/s and rust_thruster_mt uses only 208-218% of its 300-400% quota, while cpp_grpc_mt burns 306-405% for 81-85k req/s. The gap is partly CPU efficiency, not just peak throughput.",
+    "Responses repeat every response header (content-type, server, grpc-status and a nonstandard 'trailers: grpc-status' header) in the HTTP/2 trailers, and grpc-status is also sent in the initial headers. grpc-go (ghz) accepts it; stricter clients are untested. The benchmark also builds code generated by prost-build 0.14 against the prost 0.11 runtime."
+  ],
+  "pick_this_over_siblings_when": "Pick tonic over this for almost any new gRPC service: same hyper/h2 base, full protocol, maintained, and equal or faster in the same runs. Pick grpc-dotnet or grpc-go if you are on those stacks. Choose Thruster only when the gRPC endpoints must live inside an existing Thruster middleware app.",
+  "verified_claims_summary": "In LesnyRumcajs/grpc_bench (complex_proto unary echo, ghz with 50 connections, 1000 concurrency, 120 s after a 30 s warmup), the 2026-04 maintainer run on a Xeon Gold 6548N gave rust_thruster_st 98,464 req/s against cpp_grpc_st 57,140 at 1 server CPU (1.72x), and rust_thruster_mt 134,859-138,576 against cpp_grpc_mt 74,574-85,485 at 2-4 CPUs (1.59-1.81x). The C++ servers link Debian's prebuilt libgrpc++ under gcc 15.2 and the Rust side builds with Rust 1.94, LTO, codegen-units 1 and jemalloc. The 2022 run on a Xeon E5-1650 v3 showed a 1-CPU win only (41,334 vs 26,700) and gRPC C++ mt ahead at 2-3 CPUs.",
+  "status_note": "Stale: the framework's last commit was 2024-10-16 (two open issues, both from 2023) and thruster-grpc 0.2.3 was last released 2023-06-26 on hyper 0.14; it is MIT and small (thruster-grpc is about 560 lines of Rust), but its own README marks the gRPC layer experimental, so treat it as a curiosity rather than a gRPC C++ replacement.",
+  "sources_read": [
+    "https://github.com/LesnyRumcajs/grpc_bench/discussions/559",
+    "https://github.com/LesnyRumcajs/grpc_bench/wiki/2022-04-23-bench-results",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/README.md",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/bench.sh",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/analyze.sh",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/analyze/results_analyze.rb",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/setup_scenario.sh",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/collect_stats.sh",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/scenarios/complex_proto/helloworld.proto",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/scenarios/complex_proto/payload",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/rust_thruster_st_bench/Dockerfile",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/rust_thruster_st_bench/Cargo.toml",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/rust_thruster_st_bench/Cargo.lock",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/rust_thruster_st_bench/src/main.rs",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/rust_thruster_mt_bench/Dockerfile",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/rust_thruster_mt_bench/Cargo.toml",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/rust_thruster_mt_bench/Cargo.lock",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/rust_thruster_mt_bench/src/main.rs",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/rust_tonic_st_bench/Cargo.toml",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/rust_tonic_st_bench/src/main.rs",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/cpp_grpc_mt_bench/Dockerfile",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/cpp_grpc_mt_bench/main.cpp",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/cpp_grpc_st_bench/Dockerfile",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/cpp_grpc_st_bench/main.cpp",
+    "https://crates.io/api/v1/crates/thruster",
+    "https://crates.io/api/v1/crates/thruster-grpc",
+    "https://crates.io/api/v1/crates/thruster-grpc/0.2.3/download",
+    "https://raw.githubusercontent.com/thruster-rs/Thruster/HEAD/README.md",
+    "https://github.com/thruster-rs/Thruster/issues",
+    "https://github.com/thruster-rs/Thruster/commits"
+  ],
+  "confidence": 0.6
+}
