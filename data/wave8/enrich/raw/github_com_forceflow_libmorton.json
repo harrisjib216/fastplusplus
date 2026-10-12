@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/forceflow/libmorton",
+  "one_liner": "Header-only C++ 2D/3D Morton (Z-order) encode/decode; its BMI2 pdep/pext path beats its own lookup-table and magic-bits code.",
+  "what_it_does": "Interleaves 2D or 3D integer coordinates into 32-bit or 64-bit Morton codes and back. You include libmorton/morton.h and call free functions such as morton3D_64_encode(x, y, z) and morton3D_64_decode(m, x, y, z) in namespace libmorton; morton.h picks one implementation at compile time from the predefined ISA macros. All other methods (for loop, magic bits, LUT, shifted LUT, early-termination variants) stay callable from morton2D.h and morton3D.h for experimentation.",
+  "how_it_is_fast": "With __BMI2__ (or __AVX2__) defined, each coordinate is scattered into its bit lane with one PDEP and gathered back with one PEXT against fixed masks (0x9249... for 3D), so a 3D encode is three pdep plus two ORs. Without BMI2 the 3D default is a pre-shifted 256-entry lookup table per axis processed one byte at a time (encode) and a 512-entry table over 9-bit chunks (decode); 2D 32-bit uses magic-bits shift-and-mask. An experimental AVX-512 BITALG path uses _mm512_bitshuffle_epi64_mask.",
+  "when_to_use": [
+    "Building octrees, sparse voxel grids, BVH/LBVH sorts or Z-order point sorting where you need millions of 2D/3D Morton codes per second on Intel Haswell+ or AMD Zen 3+ compiled with -mbmi2 or -march=haswell.",
+    "You want a dependency-free header you can vendor (MIT, a handful of headers, vcpkg port available).",
+    "Coordinates fit 10 bits per axis (3D 32-bit codes) or 21 bits per axis (3D 64-bit codes), or 16/32 bits per axis in 2D.",
+    "Portable builds where you cannot assume BMI2: the shifted-LUT default is still a reasonable table-based baseline with a few KB of tables."
+  ],
+  "when_not_to_use": [
+    "AMD Zen 1, Zen+ and Zen 2: PDEP/PEXT are microcoded there with data-dependent latency far above Intel's 3 cycles, so the BMI2 path the README recommends via -march=znver2 is likely slower than the LUT default; benchmark before enabling it on those CPUs.",
+    "More than three dimensions, or field widths other than 16/32/64-bit codes: libmorton is 2D/3D only (morton-nd covers N dimensions with BMI2 and compile-time LUTs at parity in its own table).",
+    "WebAssembly, 32-bit targets or Clang on Windows: open issues #86 (fails on WASM and 32-bit builds) and #87 (Clang compilation fails on Windows); the test suite build on macOS is also an open issue (#49).",
+    "You need range-checked input or Morton arithmetic (neighbor, add, parent): there is no bounds checking and the Morton-operations item is still on the README TODO list.",
+    "Batch/SIMD encoding of arrays: the API is one code per call; there is no vectorized bulk interface outside the experimental AVX-512 path."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (standard headers; immintrin.h for the BMI2 and AVX-512 paths)",
+    "min_toolchain": "C++11; README suggests GCC 9+ for -march=haswell / -march=icelake-client; CMake 3.15+ for the optional CMake package",
+    "platforms": "any (portable LUT and magic-bits paths); x86-64 with BMI2 for the fast path (Intel Haswell+, AMD Zen 3+ for fast pdep/pext); experimental AVX-512 BITALG (Ice Lake+); known build failures on WASM, 32-bit and Clang-on-Windows",
+    "thread_safety": "not documented; the functions are stateless and only read static tables, so concurrent calls should be safe",
+    "drop_in_for_baseline": "partial — the baselines are hand-written loop or magic-bits interleaving; libmorton replaces them with function calls, but coordinate types are uint_fast16_t/uint_fast32_t and must be masked to the per-axis bit budget by the caller"
+  },
+  "gotchas": [
+    "The only published numbers (morton-nd README, i9-9980HK, GCC 11.1, macOS) come from the kevinhartman/libmorton fork harness, which calls every method through a function pointer and brackets every 8-code block (every single code in the random-decode test) with two clock_gettime(CLOCK_REALTIME) calls inside the accumulated timer. All random-decode rows sit at 3.1 to 4.5 s against 0.5 to 1.6 s linear, so that column is dominated by clock-read overhead (about 268 million clock reads for 134 million codes) and its 1.14x BMI2-vs-LUT ratio says little about decode cost; the linear rows share a floor near 516 to 540 ms that likely compresses ratios too.",
+    "morton.h tests __BMI2__ || __AVX2__ before __AVX512BITALG__, so a -march=icelake-client build (which defines all three) always gets the BMI2 path; the AVX-512 path is reachable only if BMI2 is not defined. Selecting the pdep path on __AVX2__ alone also means GCC/Clang builds with -mavx2 but without -mbmi2 hit the BMI2 intrinsics without the bmi2 target enabled.",
+    "Function types are uint_fast16_t/uint_fast32_t, which glibc on x86-64 makes 8 bytes wide (macOS and MSVC use 2 and 4). On Linux the '32-bit' calls therefore run 64-bit code: the shifted-LUT encode loops sizeof(coord) = 8 times instead of 2, the LUT decode loops 7 times instead of 4, and out-of-range coordinate bits can spill above bit 31 instead of being truncated, so the macOS benchmark numbers do not transfer to Linux.",
+    "No range checks: 3D codes hold 11/11/10 bits per axis in 32 bits and 22/21/21 in 64 bits under the BMI2 and LUT paths, while the 3D magic-bits helper masks to 10 or 21 bits first, so oversized inputs give method-dependent codes; mask coordinates yourself."
+  ],
+  "pick_this_over_siblings_when": "Pick libmorton when you need plain Z-order keys and want a vendorable header; choose rawrunprotected/hilbert_curves when you need Hilbert order's better locality (it is a 2D Hilbert index, not Morton), while the kd-tree and R-tree siblings (nanoflann, PH-tree, Bonxai) are whole spatial indexes rather than key encoders, so libmorton complements rather than replaces them.",
+  "verified_claims_summary": "Third-party numbers only: the morton-nd README (Intel Core i9-9980HK, GCC 11.1.0, macOS 11.1, -O3 -DNDEBUG plus -mbmi2 from the fork's test CMakeLists.txt, 512^3 codes, 5-run average) shows libmorton's BMI2 path ahead of its own shifted LUT, which is the actual non-BMI default in morton.h: 32-bit 3D encode 530 vs 630 ms (about 1.19x), 64-bit 3D encode 524 vs 829 ms (about 1.58x), 32-bit 3D decode 560 vs 871 ms (about 1.55x) and 64-bit 3D decode 560 vs 1300 ms (about 2.32x) on linear input (derived from page data); the plain-LUT ratios in the record (1.14x to 1.84x) are against a non-default method. No external incumbent, loop or magic-bits baseline is measured, morton-nd's own BMI2 and 1-chunk LUT rows tie libmorton, the harness timer overhead described under gotchas distorts the random columns, and PR #40's release-mode run on an i7-1065G7 shows the AVX-512 path about 10 to 20 percent slower than BMI2 (64-bit 1.060 vs 0.915 ms), not equal.",
+  "status_note": "The record's 'active' is generous: the last code change is 2023-08-26 (MSVC lean-and-mean headers) and the 2026-06-16 commits only touch the README and badge, with build issues #86 and #87 open; still MIT, header-only and small enough to vendor, so it remains copyable.",
+  "sources_read": [
+    "https://github.com/Forceflow/libmorton",
+    "https://raw.githubusercontent.com/Forceflow/libmorton/HEAD/README.md",
+    "https://raw.githubusercontent.com/Forceflow/libmorton/HEAD/include/libmorton/morton.h",
+    "https://raw.githubusercontent.com/Forceflow/libmorton/HEAD/include/libmorton/morton3D.h",
+    "https://raw.githubusercontent.com/Forceflow/libmorton/HEAD/include/libmorton/morton3D_LUTs.h",
+    "https://raw.githubusercontent.com/Forceflow/libmorton/HEAD/include/libmorton/morton_BMI.h",
+    "https://raw.githubusercontent.com/Forceflow/libmorton/HEAD/include/libmorton/morton_common.h",
+    "https://raw.githubusercontent.com/Forceflow/libmorton/HEAD/include/libmorton/morton_AVX512BITALG.h",
+    "https://raw.githubusercontent.com/Forceflow/libmorton/HEAD/test/libmorton_test.cpp",
+    "https://raw.githubusercontent.com/Forceflow/libmorton/HEAD/test/libmorton_test.h",
+    "https://raw.githubusercontent.com/Forceflow/libmorton/HEAD/test/test3D_performance.h",
+    "https://raw.githubusercontent.com/Forceflow/libmorton/HEAD/test/makefile",
+    "https://raw.githubusercontent.com/Forceflow/libmorton/HEAD/CMakeLists.txt",
+    "https://github.com/Forceflow/libmorton/issues?q=is%3Aissue",
+    "https://github.com/Forceflow/libmorton/issues?page=2&q=is%3Aissue",
+    "https://github.com/Forceflow/libmorton/issues/27",
+    "https://github.com/Forceflow/libmorton/issues/71",
+    "https://github.com/Forceflow/libmorton/pull/40",
+    "https://github.com/Forceflow/libmorton/commits",
+    "https://raw.githubusercontent.com/morton-nd/morton-nd/main/README.md",
+    "https://github.com/kevinhartman/libmorton",
+    "https://raw.githubusercontent.com/kevinhartman/libmorton/HEAD/test/libmorton_test.cpp",
+    "https://raw.githubusercontent.com/kevinhartman/libmorton/HEAD/test/libmorton_test_3D.h",
+    "https://raw.githubusercontent.com/kevinhartman/libmorton/HEAD/test/timer.h",
+    "https://raw.githubusercontent.com/kevinhartman/libmorton/HEAD/test/CMakeLists.txt",
+    "https://phoronix.com/news/LLVM-Improve-AMD-PDEP-PEXT (WebSearch snippet only: Zen 1/Zen+/Zen 2 PDEP/PEXT 'notoriously bad')",
+    "https://bugs.dolphin-emu.org/issues/12332 (WebSearch snippet only: AMD Family 19h guide quoted as 3-cycle latency, one per cycle)"
+  ],
+  "confidence": 0.72
+}

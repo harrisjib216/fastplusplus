@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/giotto-ai/giotto-ph",
+  "one_liner": "Multithreaded lock-free Vietoris-Rips persistent homology (Python API, C++ backend) that outruns single-threaded Ripser v1.2 when given several cores.",
+  "what_it_does": "Computes Vietoris-Rips persistence barcodes up to a chosen homology dimension from point clouds, dense or sparse distance matrices, or weighted graph adjacency matrices, with optional coefficients in a prime field, weighted (DTM) filtrations, flag persistence generators and GUDHI-style edge collapse. The interface is one Python function, gph.ripser_parallel(X, maxdim, thresh, coeff, metric, collapse_edges, n_threads, return_generators), with argument names close to ripser.py's; the C++ backend (gph/src/ripser.h) is only exposed through pybind11 modules, not as a documented C++ library.",
+  "how_it_is_fast": "It reimplements Morozov and Nigmetov's lock-free Ripser: worker threads from a thread pool reduce coboundary-matrix columns concurrently, columns live in a vector of std::atomic pointers with epoch-based memory reclamation, and the pivot table is a Junction leapfrog concurrent hash map updated by insert or compare-and-update instead of locks. Ripser v1.2's apparent (zero-persistence) pair shortcut is searched in parallel chunks, column lists are sorted with a parallel sort, and an optional edge collapse (reimplemented from GUDHI) shrinks the 1-skeleton before the flag complex is built. Dimension 0 (union-find) stays sequential.",
+  "when_to_use": [
+    "Large Vietoris-Rips problems with homology dimension 2 or higher on a many-core CPU, where the README figure shows 10x to 24x self-relative scaling at 48 threads (fractal 23.7x, o3_4096 14.2x, random16 12.9x, o3_1024 10.2x, torus4 10.1x).",
+    "Python topological data analysis pipelines, especially with giotto-tda or pyflagser, that today call ripser.py single-threaded.",
+    "You need flag persistence generators (vertices and edges creating or killing bars), weighted or DTM-reweighted Rips filtrations, or coefficients other than Z/2.",
+    "Pushing to higher homology dimensions on dense point clouds where edge collapse removes enough edges to make the computation fit."
+  ],
+  "when_not_to_use": [
+    "Small or shallow computations: the README figure shows sphere3 at 1.7x and dragon (dimension 1 only) at 1.06x even with 48 threads; dragon drops from 1.51x at 11 threads to 1.07x at 13 and never recovers (derived from the SVG), so more threads can hurt.",
+    "Closed-source or network-served products that cannot accept AGPL-3.0; a different licence is only available on request from L2F.",
+    "Any filtration other than Vietoris-Rips (cubical, alpha, witness complexes), or when you need a C++ API: the backend is a pybind11 extension and the header pulls in the preshing Junction and Turf submodules.",
+    "Python 3.13 or newer, Linux aarch64 or other platforms without wheels: PyPI 0.2.4 ships only CPython 3.8 to 3.12 wheels for manylinux2014 x86_64, macOS universal2 and win_amd64, and source-build issues #72 and #75 (Clang needs explicit atomic linking) are open.",
+    "Many points at high maxdim: simplex indices are capped at 2^55 - 1, so issue #74 (2,000 points, maxdim=5) fails with OverflowError, and point clouds without a threshold go through a dense O(n^2) pairwise distance matrix."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Python >= 3.7 with NumPy >= 1.19.1, SciPy >= 1.5.0, scikit-learn >= 0.23.1; source builds need CMake >= 3.9, a C++14 compiler, pybind11, preshing Junction and Turf (git submodules)",
+    "min_toolchain": "C++14 (CMakeLists.txt); prebuilt wheels for CPython 3.8 to 3.12",
+    "platforms": "x86-64 Linux (manylinux2014), macOS universal2 (x86-64 and Apple Silicon), Windows x86-64; other platforms only via source build",
+    "thread_safety": "Internally multithreaded via its own thread pool; concurrent calls of ripser_parallel from several Python threads are not documented",
+    "drop_in_for_baseline": "partial — replaces ripser.py-style calls with ripser_parallel and similar arguments, but it is not a C++ drop-in for Ripser, returns float32 barcodes, defaults to one thread, and cannot combine collapse_edges with return_generators"
+  },
+  "gotchas": [
+    "ripser_parallel defaults to n_threads=1, which per the paper performs about like Ripser v1.2; pass n_threads=-1 (all hardware threads) or an explicit count to get any speedup.",
+    "Issue #68 (open since 2022-08-17, help wanted) reports intermittent failures in the tests that compare multithreaded with single-threaded results, including assertion errors and not only deadline timeouts; the lock-free reduction code itself notes that its consistency check is weaker than the original lock-free paper's and carries a TODO to think through memory orders. Cross-check important barcodes with n_threads=1.",
+    "Filtration values are float32 inside the backend and in the returned diagrams (release 0.2.1), and the GCC/Clang release build compiles the edge collapser with -Ofast, which assumes finite, non-NaN values; precomputed matrices with inf entries fed through collapse_edges are outside what that flag guarantees.",
+    "No benchmark code, datasets, CPU model, compiler or flags are in the repository (reproducibility issue #20 is open), so the published scaling cannot be rerun from the repo alone."
+  ],
+  "pick_this_over_siblings_when": "The geometry-spatial siblings are spatial indexes, meshing and geometry kernels, none of which compute persistent homology; the closest catalogued project is Ripserer.jl (filed elsewhere), a Julia reimplementation that runs at or below single-threaded Ripser speed, so pick giotto-ph when you have many cores, a Python pipeline and a large or deep Vietoris-Rips computation, and stay with single-threaded Ripser for small or shallow problems or when AGPL terms are unacceptable.",
+  "verified_claims_summary": "The only numbers in the repository are the README figure, which is giotto-ph's own thread scaling (every curve is exactly 1.00 at one thread; the paper describes its scaling figure as giotto-ph with more worker threads), reaching 23.7x on fractal, 14.2x on o3_4096 and 10x to 13x on o3_1024, random16 and torus4 at 48 threads but only 1.7x on sphere3 and 1.06x on dragon (derived from the SVG path data), with no CPU, compiler or flags given. The comparison with Ripser v1.2 (parity on one thread, faster with more) and the claim of beating GPU Ripser++ with 5 to 10 CPU cores come from the arXiv 2107.05412 paper and the v0.1.0 notes, seen here only through search snippets.",
+  "status_note": "Stale: the last commit and the last PyPI releases (0.2.3 and 0.2.4) date from 2024-05-30, with no wheels beyond CPython 3.12 and 10 open issues including build failures and flaky multithreaded tests; AGPL-3.0, so it is copyable only on AGPL terms.",
+  "sources_read": [
+    "https://github.com/giotto-ai/giotto-ph",
+    "https://raw.githubusercontent.com/giotto-ai/giotto-ph/main/README.rst",
+    "https://github.com/giotto-ai/giotto-ph/tree/main/gph/src",
+    "https://raw.githubusercontent.com/giotto-ai/giotto-ph/main/gph/src/ripser.h",
+    "https://raw.githubusercontent.com/giotto-ai/giotto-ph/main/gph/python/ripser_interface.py",
+    "https://raw.githubusercontent.com/giotto-ai/giotto-ph/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/giotto-ai/giotto-ph/main/.gitmodules",
+    "https://raw.githubusercontent.com/giotto-ai/giotto-ph/main/setup.py",
+    "https://raw.githubusercontent.com/giotto-ai/giotto-ph/main/RELEASE.rst",
+    "https://raw.githubusercontent.com/giotto-ai/giotto-ph/main/docs/images/multithreading_speedup.svg",
+    "https://github.com/giotto-ai/giotto-ph/issues?q=is%3Aissue",
+    "https://github.com/giotto-ai/giotto-ph/issues/68",
+    "https://github.com/giotto-ai/giotto-ph/issues/74",
+    "https://pypi.org/pypi/giotto-ph/json",
+    "https://arxiv.org/pdf/2107.05412 (blocked: ENOTFOUND; content seen only through WebSearch snippets)",
+    "https://github.com/mtsch/ripserer.jl (catalogue record in data/wave14/verified.json, not the repo)"
+  ],
+  "confidence": 0.68
+}
