@@ -12504,6 +12504,71 @@
   {
     "domain": "other-languages-faster-than-c-cpp-asm",
     "category": "systems-and-safety",
+    "baseline_stdlib": [],
+    "compared_against_cpp_std_directly": false,
+    "is_fork_of": null,
+    "has_code": true,
+    "is_evidence_for_known": false,
+    "name": "allox (Rust general-purpose allocator)",
+    "repo_url": "https://github.com/Nciibi/allox",
+    "language": "Rust",
+    "baseline": "glibc malloc (the 'system' column of the Linux table), mimalloc and snmalloc, each driven through a Rust GlobalAlloc wrapper; Rust-native talc and dlmalloc are also compared",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "22 direct-call workloads in benches/alloc.rs driven through GlobalAlloc (small, mixed and large size classes at 1 and 8 threads, zeroed allocation, producer/consumer remote free, thread churn, a pthread calibration row, json-ish, request and ECS realloc-growth shapes); ops/s, higher is better. Each allocated block is written at one byte only, so the large and huge rows measure allocator bookkeeping and memory retention rather than memory traffic. A separate process-global String/Vec/HashMap application benchmark (examples/app_workload.rs, scripts/app_bench.sh) runs at 1 and 4 threads.",
+    "claimed_speedup": "Linux x86-64 (Ryzen 5 1600) direct-call table, ops/s: tight-small 1T 52.52 M/s vs glibc system 44.77, mimalloc 48.00, snmalloc 41.54 (1.09x vs best); mixed-small 8T 196.03 M/s vs system 37.17, mimalloc 40.42, snmalloc 57.87 (3.39x vs best); large-only 1T 7.36 M/s vs system 340 K/s, mimalloc 2.52 M/s (2.91x vs best); big-upper-tail 1T 6.28x vs best; zeroed-large 1T 86.63x vs best. README: '21/22 win-or-tie against the best comparator', but six of those wins are 1.02x-1.12x, inside the README's own ~10% noise floor, and one row (spawn-empty) is a pthread calibration row. Losses: zeroed-small 8T at 0.67x (allox 100.45 M/s vs snmalloc 148.91 M/s), and the process-global application benchmark (examples/app_workload.rs) at 4 threads, 250.8k vs mimalloc 268.1k and snmalloc 280.1k (0.94x and 0.90x); at 1 thread allox leads 1.06x. Windows table (no CPU named, talc/dlmalloc/system only, predates later work per README): 5/5 wins, 3.70x to 23.8x vs the system allocator.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://raw.githubusercontent.com/Nciibi/allox/HEAD/README.md",
+    "compiler_and_flags": "cargo bench; the bench profile inherits [profile.release] opt-level = 3, lto = true, codegen-units = 1 from Cargo.toml; rustc version and RUSTFLAGS not stated (MSRV 1.79). Comparators: mimalloc crate 0.1 and snmalloc-rs 0.7 (build_cc feature) compiled by their build scripts with unlogged C/C++ flags; 'system' is the distro glibc malloc (version unstated); talc 5 and dlmalloc 0.2 are Rust. Every allocator, allox included, is called through a &'static dyn GlobalAlloc, so allox gets no inlining advantage from LTO.",
+    "hardware": "Linux x86-64 AMD Ryzen 5 1600, taskset -c 0-7, 3 GiB cgroup, BENCH_FRESH=1 BENCH_SAFE_LIVE=1, one fresh process per allocator/workload/repetition, median of 3 x 2 s runs. The Windows x86-64 table names no CPU.",
+    "language_level_claim": false,
+    "same_algorithm": false,
+    "same_opt_level": null,
+    "why_faster": "README: every fast path is lock-free per thread with sharded class locks touched only by batched slow paths, while single-heap allocators (talc, dlmalloc) serialize on one mutex; no mechanism is given for the glibc/mimalloc/snmalloc gaps on the mixed-size and large rows.",
+    "license": "MIT OR Apache-2.0",
+    "usability": "copyable",
+    "last_commit": "2026-10-11",
+    "maintenance_status": "active",
+    "stars_or_usage": "1 star, 0 forks; 1,355 commits, but the latest batch (2026-10-10/11) are docs-only commits that append hidden '<!-- updated: ... -->' comments to README.md; not published on crates.io (API: crate `allox` does not exist) despite the README's `allox = \"0.1\"` snippet.",
+    "tradeoffs": "Rust crate with a GlobalAlloc type and allox::malloc/free functions; peak RSS is higher on several rows (93 MiB mixed-small 8T, 118 MiB mixed-all 8T, 300 MiB prodcons 8T). Loses to snmalloc and mimalloc on 8-thread zeroed small allocations.",
+    "caveats": "Very young single-author repo (1 star), not on crates.io; commit count is inflated by README-comment padding commits. Workloads are the author's own and rows carry a stated ~10% noise floor (median of 3 x 2 s), so the 1.02x-1.12x 'wins' are ties. Each block is touched at one byte: large/huge rows reward allox for keeping arena memory mapped while glibc (mmap threshold) and snmalloc return or decommit it (snmalloc reads 1 K/s on huge-only), and zeroed-large 1T's 86.63x comes from skipping the memset of 5-8 MiB blocks after a madvise discard while the benchmark never faults in more than one page. README size-range labels disagree with the code (big-tail labelled 64K-256K is 262145-524289 in code; big-upper-tail 256K-1M is 524289-1048577; large-only 8T 32K-1M is 32768-262144). mimalloc/snmalloc measured through Rust GlobalAlloc wrappers with unlogged build flags, glibc version unstated, no independent reproduction. The README documents its losses (zeroed-small 8T, 4-thread app workload) and a known telemetry-counter defect rather than hiding them.",
+    "found_via": [
+      "Hacker News (WebSearch restricted to news.ycombinator.com; the threads themselves are EGRESS_BLOCKED). The HN queries returned only general Rust/Zig-versus-C discussion threads and projects already catalogued, so this record was found through the GitHub topic page named below after those HN queries. Surfaced on github.com/topics/memory-allocator?l=rust (description 'Wins 21/22 workloads vs mimalloc/snmalloc/glibc'); HN query: 'Show HN faster than glibc memcpy OR strlen OR malloc written in Rust OR Zig'."
+    ],
+    "confidence": 0.5,
+    "assignment_ids": [
+      "w14-sys-hn"
+    ],
+    "id": "https://github.com/nciibi/allox",
+    "verification": {
+      "date": "2026-10-11",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "First-party README tables backed by public benchmark code (benches/alloc.rs, run via cargo bench with BENCH_FRESH=1 BENCH_SAFE_LIVE=1) and a named CPU (Ryzen 5 1600), but the rustc version, RUSTFLAGS, glibc version and the C/C++ flags used for the mimalloc/snmalloc comparators are not stated, so it falls short of A; no independent run exists.",
+      "notes": "Numbers match the README exactly; confirm at C. Shortcomings to record: wins mostly within the stated 10% noise floor except mixed-size, medium and large rows; large-row gaps reflect memory retention under a one-byte-touch benchmark (zeroed-large 86.63x skips memset with one page touched); losses at zeroed-small 8T (0.67x) and the 4-thread application benchmark (0.90x-0.94x); repo is 1 star, unpublished on crates.io, with padding commits. same_opt_level left null: comparators are built by cc/cmake build scripts under the bench profile (likely -O3) and glibc is the distro build, but no build log states the flags.",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/Nciibi/allox/HEAD/README.md",
+        "https://github.com/Nciibi/allox",
+        "https://github.com/Nciibi/allox/commits",
+        "https://raw.githubusercontent.com/Nciibi/allox/HEAD/Cargo.toml",
+        "https://raw.githubusercontent.com/Nciibi/allox/HEAD/CHANGELOG.md",
+        "https://raw.githubusercontent.com/Nciibi/allox/HEAD/benches/alloc.rs",
+        "https://crates.io/api/v1/crates/allox"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "claimed_speedup": "Linux x86-64 (Ryzen 5 1600) table, ops/s: tight-small 1T 52.52 M/s vs glibc system 44.77, mimalloc 48.00, snmalloc 41.54 (1.09x vs best); mixed-small 8T 196.03 M/s vs system 37.17, mimalloc 40.42, snmalloc 57.87 (3.39x vs best); large-only 1T (32 K-1 M) 7.36 M/s vs system 340 K/s, mimalloc 2.52 M/s (2.91x vs best); big-upper-tail 1T 6.28x vs best. README: '21/22 win-or-tie against the best comparator'; the one real loss is zeroed-small 8T at 0.67x (snmalloc about 149 M/s vs allox 100.45 M/s). Windows table: 5/5 wins, 3.70x to 23.8x vs the system allocator.",
+      "compiler_and_flags": "cargo bench (Rust, MSRV 1.79); rustc version and RUSTFLAGS not stated. Comparator crates mimalloc, snmalloc, talc and jemalloc are dev-dependencies built with their crate defaults.",
+      "workload": "22 allocator workloads run through GlobalAlloc: small, mixed and large size classes, 1 and 8 threads, zeroed allocation, producer/consumer remote free, thread churn, realloc growth; ops/s, higher is better.",
+      "stars_or_usage": "1 star; 1,355 commits",
+      "caveats": "Very young single-author repo (1 star). Workloads are the author's own; rows carry a stated ~10% noise floor; mimalloc/snmalloc are measured through Rust wrappers, not LD_PRELOAD in a C program; glibc and C compiler versions unstated; no independent reproduction. The README documents a failed explanation hunt for the one loss rather than hiding it."
+    }
+  },
+  {
+    "domain": "other-languages-faster-than-c-cpp-asm",
+    "category": "systems-and-safety",
     "is_fork_of": null,
     "has_code": true,
     "is_evidence_for_known": false,
@@ -12707,6 +12772,71 @@
   {
     "domain": "other-languages-faster-than-c-cpp-asm",
     "category": "systems-and-safety",
+    "baseline_stdlib": [],
+    "compared_against_cpp_std_directly": false,
+    "is_fork_of": null,
+    "has_code": true,
+    "is_evidence_for_known": false,
+    "name": "crabz (Rust pigz-style compressor on gzp, pure-Rust deflate backend)",
+    "repo_url": "https://github.com/sstadick/crabz",
+    "language": "Rust",
+    "baseline": "pigz v2.4 (C, Ubuntu 20 apt package)",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "Parallel gzip compression at levels 3, 6, 9 with 1 to 32 threads, and gzip decompression, of the bench-data text catted together 100 times, timed with hyperfine.",
+    "claimed_speedup": "README takeaways: crabz with the rust backend is roughly 5-10% faster than pigz (zlib backend identical, zlib-ng backend 30-50% faster). Rust-backend table (mean seconds): level 3, 1 thread 10.167 vs pigz 11.338 (1.11x, derived from page data); level 3, 32 threads 0.547 vs 0.755 (1.38x); level 9, 1 thread 44.907 vs 53.109 (1.18x); level 9, 32 threads 1.747 vs 2.086 (1.19x); level 6 is a tie (27.064 vs 27.034 at 1 thread, 1.192 vs 1.196 at 32). Decompression 1.599-1.615 s vs pigz 1.696-1.767 s (1.06-1.11x).",
+    "evidence_tier": "C",
+    "benchmark_url": "https://raw.githubusercontent.com/sstadick/crabz/HEAD/README.md",
+    "compiler_and_flags": "cargo build --release --no-default-features --features deflate_rust,libdeflate,snap_default (benchmark.sh; default release profile, no [profile.release] overrides); rustc version for the original run not stated (repo now pins 1.97.1 in rust-toolchain.toml). The README tables use 'crabz -p N -c L < data.txt' while the current benchmark.sh runs 'crabz -p N -l L -f gzip ./data.txt', so the tables came from an earlier script revision. Every build, the deflate_rust one included, installs mimalloc (C) as #[global_allocator] (src/main.rs; also present in the v0.7.0 and v0.10.0 Cargo.toml). pigz is the Ubuntu 20 apt binary with unstated flags. hyperfine --warmup 3 --runs 3. Decompression inputs are made by system gzip -3/-6/-9.",
+    "hardware": "Ubuntu 20, AMD Ryzen 9 3950X 16-core, 64 GB DDR4, 1 TB NVMe",
+    "language_level_claim": false,
+    "same_algorithm": false,
+    "same_opt_level": null,
+    "why_faster": null,
+    "license": "Unlicense OR MIT",
+    "usability": "copyable",
+    "last_commit": "2026-08-19",
+    "maintenance_status": "active",
+    "stars_or_usage": "375 stars",
+    "tradeoffs": "The zlib-ng and libdeflate backends are C libraries; only the deflate_rust backend (miniz_oxide) is pure Rust. Level numbers of miniz_oxide and zlib do not mean the same compression effort.",
+    "caveats": "Not a like-for-like deflate comparison: the deflate_rust backend is miniz_oxide, whose level table (NUM_PROBES = [0,1,6,32,16,32,128,256,512,768,1500], greedy parsing at levels <= 3) searches less than zlib at level 9 (1500 probes vs zlib's max_chain 4096); level 6 settings match and the level-6 result is a tie, so the 1.11x-1.38x level-3/9 wins likely buy speed with compression ratio, and the README reports no compressed sizes. crabz -p 2 at level 9 runs more than twice as fast as its own -p 1 (19.977 s vs 44.907 s), which suggests the two tools count threads differently. The 'all Rust' backend still links the C mimalloc allocator. Numbers are from the Ubuntu 20 era with pigz 2.4, three runs each; the README itself says 'none of this is groundbreaking'. Plain-gzip decompression is single-threaded flate2 MultiGzDecoder over miniz_oxide against pigz -d.",
+    "found_via": [
+      "Hacker News (WebSearch restricted to news.ycombinator.com; the threads themselves are EGRESS_BLOCKED). The HN queries returned only general Rust/Zig-versus-C discussion threads and projects already catalogued, so this record was found through the GitHub topic page named below after those HN queries. Candidate recalled while reading HN results for 'Show HN faster than OpenSSL OR libsodium OR zlib OR libjpeg-turbo written in Rust OR Zig OR Nim OR D' (pigz and pzip threads); README and benchmark.sh opened on github.com."
+    ],
+    "confidence": 0.55,
+    "assignment_ids": [
+      "w14-sys-hn"
+    ],
+    "id": "https://github.com/sstadick/crabz",
+    "verification": {
+      "date": "2026-10-11",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "First-party README hyperfine tables against pigz 2.4 with the CPU named (Ryzen 9 3950X) and a public benchmark.sh, but the rustc version of the run is not stated, pigz is an apt binary with unstated flags, and the README's command lines (-c level, stdin) come from an older revision of benchmark.sh than the one in the repo (-l level, file argument, extra mgzip rows), so it is not reproducible enough for A.",
+      "notes": "All claimed numbers match the 'Flate2 rust backend' tables (level 3 1T 10.167 vs 11.338 s, 32T 0.547 vs 0.755; level 9 1T 44.907 vs 53.109, 32T 1.747 vs 2.086; level 6 tie; decompression 1.599-1.615 vs 1.696-1.767 s). Shortcomings to record: no compressed sizes while miniz_oxide's level 9 preset does far less search than zlib's (win likely trades ratio), README tables from an older benchmark.sh revision, rustc and pigz build flags unstated, C mimalloc linked as global allocator in the 'pure Rust' build. Not a duplicate: gzp and miniz_oxide are not in the catalog; pigz is (wave 9).",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/sstadick/crabz/HEAD/README.md",
+        "https://raw.githubusercontent.com/sstadick/crabz/HEAD/benchmark.sh",
+        "https://raw.githubusercontent.com/sstadick/crabz/HEAD/Cargo.toml",
+        "https://raw.githubusercontent.com/sstadick/crabz/HEAD/rust-toolchain.toml",
+        "https://raw.githubusercontent.com/sstadick/crabz/HEAD/src/main.rs",
+        "https://raw.githubusercontent.com/sstadick/crabz/v0.10.0/Cargo.toml",
+        "https://raw.githubusercontent.com/sstadick/crabz/v0.7.0/Cargo.toml",
+        "https://github.com/sstadick/crabz",
+        "https://github.com/sstadick/crabz/commits",
+        "https://raw.githubusercontent.com/Frommi/miniz_oxide/master/miniz_oxide/src/deflate/core.rs"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "compiler_and_flags": "cargo build --release --no-default-features --features deflate_rust,libdeflate,snap_default (benchmark.sh); rustc version for the original run not stated (repo now pins 1.97.1); pigz is the distro binary with unstated flags. hyperfine --warmup 3 --runs 3.",
+      "caveats": "README does not report compressed sizes, so a faster deflate_rust run may simply produce larger output; the README itself says 'none of this is groundbreaking' because zlib-ng is known to beat zlib. Numbers are from the Ubuntu 20 era with pigz 2.4. benchmark.sh is public, so this is close to tier A except for the missing rustc version and distro-built baseline."
+    }
+  },
+  {
+    "domain": "other-languages-faster-than-c-cpp-asm",
+    "category": "systems-and-safety",
     "is_fork_of": null,
     "has_code": true,
     "is_evidence_for_known": false,
@@ -12851,6 +12981,69 @@
       "hardware": "Apple M1 Max (10 cores), macOS 26.3.1, arm64",
       "workload": "Rendering DjVu pages (colour IW44 page at 150 dpi, bilevel JB2 page at 300 dpi, cold open plus decode plus render) and encoding (IW44 colour scan vs c44, lossless JB2 text page vs cjb2) on checked-in corpus files.",
       "caveats": "First-party numbers on one Apple Silicon laptop; the baseline's compiler and flags are not stated. BENCHMARKS_RESULTS.md (encoder parity scorecard of 2026-07-13) contradicts the README claim of being faster on every encode case: goody two-shoes IW44 took 375.0 ms for djvu-rs vs 367.3 ms for c44, and in three rows djvu-rs output is much larger (cable JB2 4,720 B vs 2,248 B, Chinese cookbook 140 B vs 67 B, goody 440,864 B vs 327,798 B with PSNR 26.39 dB against 40.83 dB). The scorecard fastest rows (map atlas 29.6 ms vs 348.6 ms) differ from the README table rows, which are not in the scorecard. It appears the harness times the external c44 and cjb2 commands (process launch and file I/O included) against an in-process Rust encoder; this was not confirmed in the source. The benchmark dashboard on github.io is blocked here. The README table rows were not re-derived from the raw data. The full-workspace render numbers were rejected once as noisy and re-run, so the render rows come from targeted reruns."
+    }
+  },
+  {
+    "domain": "other-languages-faster-than-c-cpp-asm",
+    "category": "systems-and-safety",
+    "baseline_stdlib": [],
+    "compared_against_cpp_std_directly": false,
+    "is_fork_of": null,
+    "has_code": true,
+    "is_evidence_for_known": false,
+    "name": "dumac (Rust parallel du -sh for macOS)",
+    "repo_url": "https://github.com/healeycodes/dumac",
+    "language": "Rust",
+    "baseline": "macOS du -sh (BSD du, C); diskus is also compared",
+    "baseline_in_list": true,
+    "metric": "latency",
+    "workload": "Computing the total size of a synthetic tree built by setup_benchmark.py: 12 levels with branching factor two (4095 directories), 100 files of 70 bytes in every directory (409,500 files), warm disk cache. The README calls it '100 small files per level', but the script writes 100 files into each directory.",
+    "claimed_speedup": "README hyperfine output: dumac 563.1 ms +- 22.6 vs du -sh 3.186 s +- 0.198 (5.66 +- 0.42 times faster) vs diskus 1.834 s +- 0.157 (3.26 +- 0.31 times faster).",
+    "evidence_tier": "C",
+    "benchmark_url": "https://raw.githubusercontent.com/healeycodes/dumac/HEAD/README.md",
+    "compiler_and_flags": "cargo build --release; rustc version not stated; hyperfine --warmup 3 --min-runs 5; setup_benchmark.py builds the tree.",
+    "hardware": "Apple Silicon Mac, model not stated ('modern Apple hardware')",
+    "language_level_claim": false,
+    "same_algorithm": null,
+    "same_opt_level": null,
+    "why_faster": "README: parallel directory traversal using the macOS getattrlistbulk bulk-attribute syscall.",
+    "license": null,
+    "usability": "reference",
+    "last_commit": "2025-08-07",
+    "maintenance_status": "stale",
+    "stars_or_usage": "65 stars",
+    "tradeoffs": "macOS only. No license file or Cargo license field, so the code cannot be copied.",
+    "caveats": "Synthetic tree and warm cache only (author says he found no reliable way to clear the macOS disk cache). Mac model not named. No LICENSE file and no license field in Cargo.toml. Not a language win: dumac runs a rayon work-stealing traversal on up to available_parallelism threads and reads name, type, inode and allocated size for a batch of entries per getattrlistbulk call, while BSD du walks single-threaded with fts and one stat per entry; dumac spends more total CPU (user+system 2.27 s vs du 1.43 s) to cut wall time. dumac counts only regular files and symlinks (directories' own blocks are not added) and dedups every inode, and its tests do not compare its output with du's. The author's first blog post (healeycodes.com, blocked here; search snippet only) reported 6.4x vs du and 2.58x vs diskus for an earlier tokio-based version, while the README shows 5.66x and 3.26x.",
+    "found_via": [
+      "Hacker News (WebSearch restricted to news.ycombinator.com; the threads themselves are EGRESS_BLOCKED). The HN queries returned only general Rust/Zig-versus-C discussion threads and projects already catalogued, so this record was found through the GitHub topic page named below after those HN queries. Surfaced on github.com/topics/du?l=rust (description 'Very fast alternative to du -sh for macOS'); HN query: 'Show HN faster than GNU grep OR GNU sort OR GNU coreutils OR GCC OR LLVM rewrite in Rust OR Zig OR Odin OR D'."
+    ],
+    "confidence": 0.5,
+    "assignment_ids": [
+      "w14-sys-hn"
+    ],
+    "id": "https://github.com/healeycodes/dumac",
+    "verification": {
+      "date": "2026-10-11",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "First-party hyperfine output in the README against macOS du -sh and diskus, with public source and tree generator (setup_benchmark.py), but no Mac model or CPU, no rustc version and no independent run, so C.",
+      "notes": "Numbers match the README (563.1 ms vs du 3.186 s, 5.66x; vs diskus 1.834 s, 3.26x). Shortcomings to record: no license (reference only), Mac model unstated, warm cache only, win is parallelism plus getattrlistbulk rather than Rust, output equivalence with du not tested, earlier blog numbers differ (snippet only). Metadata checked: 65 stars, 19 commits, last commit 2025-08-07 (stale). diskus is already listed (wave 11); dumac is a separate project, not a duplicate.",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/healeycodes/dumac/HEAD/README.md",
+        "https://github.com/healeycodes/dumac",
+        "https://github.com/healeycodes/dumac/commits",
+        "https://raw.githubusercontent.com/healeycodes/dumac/HEAD/Cargo.toml",
+        "https://raw.githubusercontent.com/healeycodes/dumac/HEAD/setup_benchmark.py",
+        "https://raw.githubusercontent.com/healeycodes/dumac/HEAD/src/main.rs",
+        "https://github.com/healeycodes/dumac/tree/main/tests",
+        "https://raw.githubusercontent.com/healeycodes/dumac/HEAD/tests/integration_tests.rs"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "workload": "Computing the total size of a synthetic tree of 4095 directories and 409,500 small files (12 levels, 100 files per level, branching factor two), warm disk cache.",
+      "caveats": "Synthetic tree and warm cache only; the author argues warm correlates with cold on Apple hardware but reports no cold run. Both source and benchmark script are public but the Mac model is not named. Blog posts by the author were not opened."
     }
   },
   {
@@ -13428,6 +13621,140 @@
   {
     "domain": "other-languages-faster-than-c-cpp-asm",
     "category": "systems-and-safety",
+    "baseline_stdlib": [],
+    "compared_against_cpp_std_directly": false,
+    "is_fork_of": null,
+    "has_code": true,
+    "is_evidence_for_known": false,
+    "name": "mako (fg-labs, Rust SAM/BAM sorter built on the fgumi sort engine)",
+    "repo_url": "https://github.com/fg-labs/mako",
+    "language": "Rust",
+    "baseline": "samtools sort (C, htslib), template-coordinate order",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "Sorting a 30M-read whole-genome-sequencing BAM into template-coordinate order.",
+    "claimed_speedup": "README: 'On a 30M-read WGS BAM, the engine sorts roughly 1.9x faster than samtools sort for template-coordinate order'; detailed benchmarks are deferred to the fgumi documentation.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://raw.githubusercontent.com/fg-labs/mako/HEAD/README.md",
+    "compiler_and_flags": "Cargo [profile.release] lto = \"fat\", codegen-units = 1, mimalloc allocator (Cargo.toml); rustc version, samtools version, build and command line not stated.",
+    "hardware": null,
+    "language_level_claim": false,
+    "same_algorithm": null,
+    "same_opt_level": null,
+    "why_faster": null,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2026-08-25",
+    "maintenance_status": "active",
+    "stars_or_usage": "9 stars, 0 forks, 29 commits; published on crates.io as fg-mako and on Bioconda; sort engine comes from fulcrumgenomics/fgumi (57 stars)",
+    "tradeoffs": "Drop-in only for the common cases of samtools sort; some sort orders and options differ. Spills sorted runs to temp files (--max-temp-files auto).",
+    "caveats": "One first-party sentence with no hardware, thread count, memory limit, samtools version or command. The README defers 'detailed benchmarks' to the fgumi documentation, but fgumi's README, docs/src/guide/performance-tuning.md and best-practices.md (opened) carry no samtools timings; the only other occurrence is the bare '1.9x faster than samtools on template-coordinate sort' line in fgumi src/lib/commands/sort.rs. The two tools do not produce the same order: fgumi's best-practices.md says samtools sort --template-coordinate does not consult the tc tag when ordering secondary and supplementary reads and is not a substitute for fgumi sort, so the compared work differs. fgumi does BGZF (de)compression through libdeflate (C, via libdeflater) and uses mimalloc (C); whether the samtools build used libdeflate is unknown. mako is a thin packaging of fgumi's sort engine (all sort logic lives upstream); if fgumi is listed later, mako folds into it.",
+    "found_via": [
+      "Hacker News (WebSearch restricted to news.ycombinator.com; the threads themselves are EGRESS_BLOCKED). The HN queries returned only general Rust/Zig-versus-C discussion threads and projects already catalogued, so this record was found through the GitHub topic page named below after those HN queries. Surfaced on github.com/topics/sorting?l=rust (description 'Fast SAM/BAM sorter'); HN query: 'Show HN faster than GNU grep OR GNU sort OR GNU coreutils OR GCC OR LLVM rewrite in Rust OR Zig OR Odin OR D'."
+    ],
+    "confidence": 0.35,
+    "assignment_ids": [
+      "w14-sys-hn"
+    ],
+    "id": "https://github.com/fg-labs/mako",
+    "verification": {
+      "date": "2026-10-11",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "The only number is one first-party README sentence ('roughly 1.9x faster than samtools sort for template-coordinate order' on a 30M-read WGS BAM), repeated as '1.9x faster than samtools on template-coordinate sort' in fgumi's src/lib/commands/sort.rs help text; no benchmark code, hardware, thread count, memory limit or samtools version anywhere, so C.",
+      "notes": "Claim confirmed as a single unsupported first-party sentence; tier C stands. Shortcomings: no methodology at all (hardware, threads, memory, samtools version), compared outputs differ (samtools ignores the tc tag on secondary/supplementary reads), and mako is only a packaging of fulcrumgenomics/fgumi's engine (fgumi is not in the list; if it is added, record mako as duplicate). Metadata checked: MIT, last commit 2026-08-25, active.",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/fg-labs/mako/HEAD/README.md",
+        "https://raw.githubusercontent.com/fg-labs/mako/HEAD/Cargo.toml",
+        "https://raw.githubusercontent.com/fg-labs/mako/HEAD/LICENSE",
+        "https://github.com/fg-labs/mako",
+        "https://github.com/fg-labs/mako/commits",
+        "https://github.com/fulcrumgenomics/fgumi",
+        "https://github.com/fulcrumgenomics/fgumi/tree/main/docs/src",
+        "https://github.com/fulcrumgenomics/fgumi/tree/main/docs/src/guide",
+        "https://github.com/fulcrumgenomics/fgumi/tree/main/benches",
+        "https://raw.githubusercontent.com/fulcrumgenomics/fgumi/HEAD/docs/src/guide/performance-tuning.md",
+        "https://raw.githubusercontent.com/fulcrumgenomics/fgumi/HEAD/docs/src/guide/best-practices.md",
+        "https://raw.githubusercontent.com/fulcrumgenomics/fgumi/HEAD/docs/src/guide/migration-from-fgbio.md",
+        "https://raw.githubusercontent.com/fulcrumgenomics/fgumi/HEAD/README.md",
+        "https://raw.githubusercontent.com/fulcrumgenomics/fgumi/HEAD/src/lib/commands/sort.rs",
+        "https://raw.githubusercontent.com/fulcrumgenomics/fgumi/HEAD/Cargo.toml"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "stars_or_usage": "9 stars; engine inherited from fulcrumgenomics/fgumi",
+      "compiler_and_flags": "Cargo release profile with lto = \"fat\" (Cargo.toml); rustc version and samtools version/flags not stated.",
+      "caveats": "One sentence with no hardware, thread count, samtools version or command. The README points to fgumi documentation for 'detailed benchmarks', but docs/src/guide/performance-tuning.md in fgumi (opened) has no samtools numbers. Whether samtools was given the same thread count is unknown."
+    }
+  },
+  {
+    "domain": "other-languages-faster-than-c-cpp-asm",
+    "category": "systems-and-safety",
+    "baseline_stdlib": [],
+    "compared_against_cpp_std_directly": false,
+    "is_fork_of": null,
+    "has_code": true,
+    "is_evidence_for_known": false,
+    "name": "minifind (dkorunic, Rust parallel find(1) reimplementation)",
+    "repo_url": "https://github.com/dkorunic/minifind",
+    "language": "Rust",
+    "baseline": "GNU find (findutils, C)",
+    "baseline_in_list": true,
+    "metric": "latency",
+    "workload": "Walking a shallow clone of the mainline Linux kernel tree (100,871 entries in 6,201 directories, ~2.1 GB) with a warm page cache; both tools run as subprocesses with output discarded; 100 Criterion samples.",
+    "claimed_speedup": "README: minifind 26.634-26.779 ms (26.702 ms point) vs find 92.463-93.565 ms (93.0 ms), about 3.5x faster (3.8M vs 1.1M entries/s).",
+    "evidence_tier": "C",
+    "benchmark_url": "https://raw.githubusercontent.com/dkorunic/minifind/HEAD/README.md",
+    "compiler_and_flags": "cargo bench --bench walk (Criterion 0.8, 80 s warm-up, 400 s measurement); the bench profile inherits Cargo.toml [profile.release] opt-level = 3, lto = \"fat\", codegen-units = 1; mimalloc allocator. rustc version not stated (rust-version floor 1.85.1); GNU find is whatever 'find' is on PATH, version and build flags not stated.",
+    "hardware": "4-core / 8-thread Intel Xeon E5-1630 v3 @ 3.70 GHz, 48 GB RAM",
+    "language_level_claim": false,
+    "same_algorithm": false,
+    "same_opt_level": null,
+    "why_faster": "README: parallel work-stealing traversal (most of the gap on 8 threads), raw getdents64 via rustix, d_type instead of a per-entry stat, batched output thread with a 256 KB writer, mimalloc.",
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2026-10-10",
+    "maintenance_status": "active",
+    "stars_or_usage": "10 stars, 0 forks, 106 commits",
+    "tradeoffs": "Supports a subset of find(1) options. Uses mimalloc. README says the advantage scales with core count and shrinks toward parity on 1-2 core hosts and on a cold cache.",
+    "caveats": "Win is mostly parallelism: minifind uses all 8 hardware threads (one reserved for output) while GNU find is single-threaded, and the README itself says the gap 'shrinks toward parity on a 1-2 core host'. Process startup is included for both; both tools' stdout is captured into a pipe by Command::output() and dropped. The benchmark does not check that the two outputs match; minifind defaults to one filesystem and types d/f/l, plain 'find' lists every type and crosses mounts (equivalent on a kernel clone). GNU find version and build flags (distribution packages are usually -O2) and rustc version are unstated. Numbers come from the 2026-06-19 'full-clock rerun' commit, made the same day the 'fd-anchored parallel walker' landed; warm page cache only, the README says the gap narrows on a cold cache. Single machine, one first-party run. Repo contains AGENTS.md and CLAUDE.md (AI-assisted development).",
+    "found_via": [
+      "Hacker News (WebSearch restricted to news.ycombinator.com; the threads themselves are EGRESS_BLOCKED). The HN queries returned only general Rust/Zig-versus-C discussion threads and projects already catalogued, so this record was found through the GitHub topic page named below after those HN queries. Surfaced on github.com/topics/find?l=rust (description 'Parallel reimplementation of find(1) with a work-stealing directory walker'); HN query: 'Show HN faster than GNU grep OR GNU sort OR GNU coreutils OR GCC OR LLVM rewrite in Rust OR Zig OR Odin OR D'."
+    ],
+    "confidence": 0.55,
+    "assignment_ids": [
+      "w14-sys-hn"
+    ],
+    "id": "https://github.com/dkorunic/minifind",
+    "verification": {
+      "date": "2026-10-11",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "First-party Criterion run with public code (benches/walk.rs), CPU model (Xeon E5-1630 v3) and minifind's profile flags in Cargo.toml, but rustc version and GNU find's version and build flags are not stated, so it falls short of A for the baseline side; C.",
+      "notes": "Numbers match the README exactly (26.634/26.702/26.779 ms vs 92.463/92.998/93.565 ms, about 3.5x). Shortcomings: parallel vs single-threaded baseline (not a codegen win; same_algorithm false), no output-equality check, GNU find build unstated. Related to sharkdp/fd (already listed, wave 14 C) but not a fork or port of it.",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/dkorunic/minifind/HEAD/README.md",
+        "https://raw.githubusercontent.com/dkorunic/minifind/HEAD/Cargo.toml",
+        "https://raw.githubusercontent.com/dkorunic/minifind/HEAD/LICENSE",
+        "https://raw.githubusercontent.com/dkorunic/minifind/HEAD/benches/walk.rs",
+        "https://github.com/dkorunic/minifind",
+        "https://github.com/dkorunic/minifind/commits",
+        "https://github.com/dkorunic/minifind/commits/main"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "compiler_and_flags": "cargo bench --bench walk (Criterion, benches/walk.rs); rustc version, profile flags and GNU find version not stated.",
+      "stars_or_usage": "10 stars; 106 commits",
+      "caveats": "Win is mostly parallelism against single-threaded GNU find; process startup is included for both. Benchmark code is public but compiler/profile and GNU find version are not stated, so it falls just short of tier A. Repo contains AGENTS.md and CLAUDE.md files (AI-assisted development)."
+    }
+  },
+  {
+    "domain": "other-languages-faster-than-c-cpp-asm",
+    "category": "systems-and-safety",
     "is_fork_of": null,
     "has_code": true,
     "is_evidence_for_known": false,
@@ -13741,6 +14068,78 @@
     "corrected_fields": {
       "claimed_speedup": "README footnote: pd -f%p %c 2.8576 ms +- 0.0070 vs /bin/ps ax 5.0281 ms +- 0.0063 (README says roughly 2X; about 1.76x derived from page data); with process typology and highlights on, 3.9739 ms +- 0.0044, 1.27X faster than stock ps; pgrep and pkill are 5.025 +- 0.015X and 5.745 +- 0.016X slower than pf and pk on a 4-core and a 20-core CPU. bench.sh comments: pf -e1 init 1014.1 us vs pgrep -x init 7724 us (i7-6700K, 'up to 7.617 times faster') and 582.7 us vs 5539.6 us (i7-1370P, 9.507 times).",
       "caveats": "The gains come from doing less work (reading only /proc/PID/stat when the format needs nothing else, where procps opens and parses both stat and status), so it is a different, narrower program rather than the same algorithm. Author says there are configurations where ps can be faster. The README timing machine and flags are unstated; bench.sh needs the author's tim and tails tools. Millisecond-scale wins on a single-user tool."
+    }
+  },
+  {
+    "domain": "other-languages-faster-than-c-cpp-asm",
+    "category": "systems-and-safety",
+    "baseline_stdlib": [],
+    "compared_against_cpp_std_directly": false,
+    "is_fork_of": null,
+    "has_code": true,
+    "is_evidence_for_known": false,
+    "name": "qj (jq 1.8.1 ported to Rust, simdjson via FFI)",
+    "repo_url": "https://github.com/6/qj",
+    "language": "Rust",
+    "baseline": "jq 1.8.1 (C; prebuilt release binary installed by mise, build flags not stated); jaq 2.3.0 and gojq 0.12.18 also shown",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "jq filters over a 3.4 GB GitHub Archive NDJSON file (1.2M records) and a 49 MB single JSON file, file input unless noted.",
+    "claimed_speedup": "benches/results_ndjson_medium.md (2026-09-30, Apple M5 Max 128 GB, hyperfine median of 3 runs, 1 warm-up, qj 0.1.4 vs jq-1.8.1), 3.4 GB GH Archive NDJSON: .actor.login 143.5 ms parallel / 1.32 s 1 thread vs jq 18.04 s (125.7x / 13.6x); select(.type == \"PushEvent\") 162.8 ms / 1.68 s vs jq 32.17 s (197.6x / 19.2x); {type,repo,actor} 152.1 ms / 1.46 s vs jq 19.83 s (130.4x / 13.6x). benches/results_json.md, 49 MB large_twitter.json, single file: 4.7x to 28.2x over jq (README rounds to 5-28x), e.g. '.statuses|map({user, text})' 35.5 ms vs 645.6 ms (18.2x); geometric mean 8.7x. Extended (514 MB): stdin 15.5-29.4x, slurp 5.2-5.7x. On a 4.7 GB file on an M4 Pro (1 run): 96.4-156.9x parallel, 4.5-28.6x single-thread.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://raw.githubusercontent.com/6/qj/HEAD/README.md",
+    "compiler_and_flags": "qj: Cargo [profile.release] opt-level = 3, lto = \"thin\", rustc 1.93.1 (mise.toml); vendored simdjson (C++) compiled by build.rs with opt_level(3). jq-1.8.1, jaq 2.3.0, gojq 0.12.18 and hyperfine 1.20.0 installed by mise (prebuilt binaries; jq's compiler flags not stated).",
+    "hardware": "Apple M5 Max MacBook Pro",
+    "language_level_claim": false,
+    "same_algorithm": false,
+    "same_opt_level": null,
+    "why_faster": "README: SIMD parsing (simdjson), mmap, automatic parallelism across cores, and direct evaluation of simple filters on simdjson's tape; the single-thread row isolates most of the non-parallel part.",
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2026-10-02",
+    "maintenance_status": "active",
+    "stars_or_usage": "18 stars, 1 fork, 766 commits",
+    "tradeoffs": "Memory: ~80-410 MB sliding window on the 3.4 GB file vs jq's ~6 MB. Core is Rust but the parser is C++ simdjson through FFI, so it is not pure Rust. Gains shrink for stdin and slurp.",
+    "caveats": "Most of the gain is not Rust codegen: single-file JSON is parse-bound (jq needs about 300 ms for '.statuses|length' alone, qj 24 ms; peak parse 1.2 GB/s vs jq 50 MB/s), and parsing is done by vendored C++ simdjson through FFI, with simple filters evaluated directly on simdjson's tape; the 125-198x NDJSON rows add mmap and parallel workers on every M5 Max P-core (parallel vs 1-thread is about 9-10x). VM-bound filters (group_by, sort_by, reduce) gain only about 5x, still mostly parse. qj uses 80-410 MB vs jq's ~6 MB on the 3.4 GB file. Numbers were measured on qj 0.1.4 (current 0.2.1). bench_tools.rs checks qj vs jq output only on the JSON files and benchmarks anyway when they mismatch. No top-level LICENSE file: MIT is declared in Cargo.toml, LICENSE-jq covers the ported jq core (MIT, with CC BY 3.0 docs and ICU-licensed parts), simdjson is vendored. Also a parked cross-wave lead (wave 4 json) in QUEUE.md. Young repo with a large commit count and a CLAUDE.md (AI-assisted development).",
+    "found_via": [
+      "Hacker News (WebSearch restricted to news.ycombinator.com; the threads themselves are EGRESS_BLOCKED). The HN queries returned only general Rust/Zig-versus-C discussion threads and projects already catalogued, so this record was found through the GitHub topic page named below after those HN queries. Surfaced on github.com/topics/jq?l=rust (description '60-200x faster than jq on NDJSON/JSONL files'); HN query: 'Show HN faster than GNU grep OR GNU sort OR GNU coreutils OR GCC OR LLVM rewrite in Rust OR Zig OR Odin OR D'."
+    ],
+    "confidence": 0.5,
+    "assignment_ids": [
+      "w14-sys-hn"
+    ],
+    "id": "https://github.com/6/qj",
+    "verification": {
+      "date": "2026-10-11",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "First-party hyperfine runs with public driver code (benches/bench_tools.rs), CPU (Apple M5 Max, 128 GB), tool versions (jq-1.8.1 via mise, rustc 1.93.1) and qj's release flags, but jq's build flags are not stated (mise installs the prebuilt release binary), so A fails on the baseline side; C.",
+      "notes": "Numbers verified in benches/results_ndjson_medium.md and results_json.md (README matches); the record's 'jq version not stated' was wrong (jq-1.8.1). Under the wave 14 wrapped-library rule, the win comes largely from vendored C++ simdjson (already listed, wave0-seed tier A) plus parallelism, so the orchestrator should consider decision duplicate of https://github.com/simdjson/simdjson for this domain, or keep it with that shortcoming (it is a genuine jq replacement that fits wave 4 json). Metadata checked: last commit 2026-10-02, active.",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/6/qj/HEAD/README.md",
+        "https://raw.githubusercontent.com/6/qj/HEAD/Cargo.toml",
+        "https://raw.githubusercontent.com/6/qj/HEAD/LICENSE-jq",
+        "https://raw.githubusercontent.com/6/qj/HEAD/build.rs",
+        "https://raw.githubusercontent.com/6/qj/HEAD/mise.toml",
+        "https://raw.githubusercontent.com/6/qj/HEAD/benches/README.md",
+        "https://raw.githubusercontent.com/6/qj/HEAD/benches/results_ndjson_medium.md",
+        "https://raw.githubusercontent.com/6/qj/HEAD/benches/results_ndjson_large.md",
+        "https://raw.githubusercontent.com/6/qj/HEAD/benches/results_ndjson_extended_xsmall.md",
+        "https://raw.githubusercontent.com/6/qj/HEAD/benches/results_json.md",
+        "https://raw.githubusercontent.com/6/qj/HEAD/benches/bench_tools.rs",
+        "https://github.com/6/qj",
+        "https://github.com/6/qj/tree/main/benches",
+        "https://github.com/6/qj/commits/main"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "baseline": "jq (C; version not stated in the benchmark, qj is a port of jq 1.8.1)",
+      "claimed_speedup": "README, M5 Max MacBook Pro, hyperfine: NDJSON .actor.login 144 ms (parallel) / 1.32 s (1 thread) vs jq 18.0 s, jaq 6.7 s, gojq 17.2 s; select(.type == \"PushEvent\") 163 ms / 1.68 s vs jq 32.2 s (198x); {type,repo,actor} 152 ms / 1.46 s vs jq 19.8 s. 49 MB JSON '.statuses | map({user, text})' 35 ms vs jq 646 ms (18x); 5-28x on single files; stdin ~15-29x; slurp mode ~5-6x. Single-thread .actor.login is 13.6x over jq (derived from page data).",
+      "compiler_and_flags": "Cargo [profile.release] opt-level = 3, lto = \"thin\", edition 2024; jq build/version and rustc version not stated; simdjson (C++) is vendored and called via FFI.",
+      "stars_or_usage": "18 stars; 766 commits",
+      "caveats": "Most of the 198x is parallelism plus mmap plus the simple-filter shortcut on a large NDJSON file; single-file gains are 5-28x. Benchmark scripts live in benches/ (not opened); jq version and build unstated. Young repo with a large commit count. Also listed as a parked cross-wave lead in QUEUE.md."
     }
   },
   {

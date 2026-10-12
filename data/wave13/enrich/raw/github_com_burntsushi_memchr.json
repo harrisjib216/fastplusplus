@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/burntsushi/memchr",
+  "one_liner": "Rust crate of SIMD byte and substring search (memchr, memchr2/3, memrchr, memmem); about 4-6x faster than str::find, 2x faster than glibc memmem.",
+  "what_it_does": "Searches &[u8] haystacks for one, two or three bytes (memchr, memchr2, memchr3, their reverse memrchr* forms and iterators) and for a substring (memmem::find, rfind, find_iter, rfind_iter). For repeated searches with one needle, memmem::Finder and FinderRev build the searcher once and reuse it across haystacks, which the standard library has no API for. Inputs are bytes with no encoding requirement, so &str data costs nothing to pass and non-UTF-8 data needs no validation. It is a Rust API only; C or C++ callers need an FFI wrapper.",
+  "how_it_is_fast": "Single-byte search uses vector compare-and-movemask loops (SSE2 and AVX2 on x86_64 picked by runtime CPU detection, NEON on aarch64, simd128 on wasm32, SWAR elsewhere). Substring search chooses per call: Rabin-Karp for very small haystacks, a 'Generic SIMD' packed-pair search for short needles that picks the two rarest needle bytes from a background byte-frequency table instead of the first and last bytes, and Two-Way otherwise with that SIMD routine as a candidate prefilter that switches itself off when it stops paying. Rust's std substring search lives in core, cannot use runtime feature detection, and so is limited to SSE2, and str::find has no reusable searcher; both gaps are where the measured ratios come from.",
+  "when_to_use": [
+    "Rust code that searches byte or text buffers for a fixed substring (log scanning, protocol parsing, grep-like tools): rebar on x86_64 shows 3.9-4.6x over str::find/matches across 53 benchmarks (5.0-6.3x when the 12 timer-quantized 28-42 byte haystacks are left out, derived from page data).",
+    "One needle searched across many haystacks (per-line search, per-record filters): build a memmem::Finder once; std must rebuild its searcher on every call.",
+    "Finding the first or last of 1-3 delimiter bytes (memchr2/memchr3, memrchr) or substrings from the end (FinderRev): std has no SIMD equivalents for these.",
+    "Binary or not-necessarily-UTF-8 data, where str::find would first need UTF-8 validation.",
+    "Portable Rust builds on x86_64, aarch64 and wasm32 (with simd128 enabled), where AVX2 is picked up at runtime without target-cpu flags."
+  ],
+  "when_not_to_use": [
+    "C or C++ projects: there is no C API, and StringZilla 5.0.5 (catalogued in wave 1, with a C/C++ API) beats memchr's memmem on 39 of 54 benchmarks in memchr's own 2026-07-30 record (memchr takes about 1.6x StringZilla's time, geometric mean; up to 69x on pathological/defeat-simple-vector-repeated-alphabet).",
+    "Plain single-byte search where libc is already available: against glibc memchr it is roughly at parity on x86_64 (memchr 1.10x faster in the 2026 record, glibc 1.06x faster in the 2023 record, glibc ahead by 1.23-1.26x on the never/rare huge1 rows).",
+    "Many short one-off searches with fresh needles: issue #161 (open since 2024-09-11) reports Finder construction and memmem::find on short haystacks about 3.3x slower in 2.6.0 and later than in 2.5.0, and the maintainer called it a likely 'regression we have to eat'.",
+    "Highly periodic or adversarial inputs: std is up to 1.97x faster on the pathological/defeat-simple-vector-* rows and glibc memmem about 3.1x faster on pathological/rare-repeated-*-match in the 2026 record.",
+    "Multi-pattern search or AVX-512: the crate searches a single needle, and AVX-512 is only being prepared (2026-08-03 commit 'refactor SIMD abstraction layer to prepare for AVX-512')."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "none by default (optional log with the 'logging' feature)",
+    "min_toolchain": "Rust 1.61 (rust-version in Cargo.toml; may rise in minor releases), edition 2021",
+    "platforms": "any Rust target; vector paths on x86_64 (SSE2 always, AVX2 by runtime detection when the std feature is on), aarch64 (NEON) and wasm32 (simd128 enabled at compile time); SWAR fallback elsewhere; no_std supported",
+    "thread_safety": "not documented as such; the routines are pure functions over slices and Finder::find takes &self with per-search prefilter state created inside the call",
+    "drop_in_for_baseline": "partial: memmem::find(h.as_bytes(), n.as_bytes()) replaces str::find(n) for string needles and returns the same byte offset, but there are no char, char-set or closure patterns, and it is not a C/C++ library"
+  },
+  "gotchas": [
+    "Harness labelling flaw: the README's figures come from the 2023-08-26 record, which labels the memchr engine '2.5.0'; engine versions are hand-copied from each engine's Cargo.toml version field, the pinned memchr =2.5.0 engine (memchrold) in the same record is 1.36x slower (geometric mean, prebuilt, derived from page data), and 2.6.0 shipped on 2023-08-28, so the measured code was the unreleased 2.6 rewrite, not 2.5.0 (sliceslice is also mislabelled 2.5.0 there).",
+    "The 12 teeny benchmarks (28-42 byte haystacks) have medians quantized to 10 ns ticks with zero MAD, so their ratios (1.0x, 1.5x, 2.5x) are single timer ticks; they pull the headline geometric means toward parity rather than inflating them.",
+    "In the newest x86_64 record memchr 2.8.3 is no faster than the pinned 2.5.0 engine: geometric mean 1.00 on memmem prebuilt (slower on 21 of 57) and 0.92 on oneshot (slower on 31 of 54), derived from page data; the earlier 2.5.0-to-2.6 x86 regression (#139) was declared 'largely fixed' in 2.7.0, and the construction-cost regression (#161) is still open.",
+    "No CPU model, OS or libc version is recorded for the x86_64 or aarch64 records (libc engine version 'unknown'), and the author wrote both the crate and the rebar harness; the harness does check every engine's match count."
+  ],
+  "pick_this_over_siblings_when": "Pick memchr over libhat when you need exact byte or substring search from Rust rather than masked signature scanning in C++, and over vectorized_find, which is AVX2 std::find experiments rather than a maintained library; from C or C++, StringZilla (wave 1) is the faster and directly callable choice.",
+  "verified_claims_summary": "rebar runs on the author's unnamed x86_64 machine, all engines built with plain cargo build --release (so memchr dispatches to AVX2 at runtime while Rust std's core search stays on SSE2): the README's 2023-08-26 rank output (memchr labelled 2.5.0 but actually the pre-release 2.6 code, vs std 1.73.0-nightly) gives geometric-mean speed ratios 1.03 vs 6.50 prebuilt and 1.04 vs 5.26 oneshot over 53 benchmarks, and the 2026-07-30 record (memchr 2.8.3 vs std 1.99.0-nightly) gives 4.64x prebuilt, 3.93x oneshot, 2.02x over libc memmem and 1.10x over libc memchr (pairwise, derived from page data). An aarch64 record from 2023-12-29 (memchr 2.7.1, host and libc unstated) shows 9.9x prebuilt and 8.2x oneshot over std, 7.8x over libc memmem and 1.86x over libc memchr (derived from page data).",
+  "status_note": "Actively maintained (2.8.3 released 2026-07-08, commits through 2026-08-10, new rebar records for five more targets merged 2026-07-10), MIT OR Unlicense, about 1.54 billion crates.io downloads and 2,168 reverse dependencies; mature, fuzzed and property-tested, with pervasive internal unsafe.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/BurntSushi/memchr/HEAD/README.md",
+    "https://raw.githubusercontent.com/BurntSushi/memchr/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/BurntSushi/memchr/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/BurntSushi/memchr/HEAD/src/memmem/mod.rs",
+    "https://raw.githubusercontent.com/BurntSushi/memchr/HEAD/benchmarks/engines.toml",
+    "https://raw.githubusercontent.com/BurntSushi/memchr/HEAD/benchmarks/record/x86_64/2023-08-26.csv",
+    "https://raw.githubusercontent.com/BurntSushi/memchr/HEAD/benchmarks/record/x86_64/2026-07-30.csv",
+    "https://raw.githubusercontent.com/BurntSushi/memchr/HEAD/benchmarks/record/aarch64/2023-12-29.csv",
+    "https://raw.githubusercontent.com/BurntSushi/memchr/HEAD/benchmarks/record/x86_64-pc-windows-msvc/2026-07-10.txt",
+    "https://raw.githubusercontent.com/BurntSushi/memchr/HEAD/benchmarks/engines/rust-memchr/Cargo.toml",
+    "https://raw.githubusercontent.com/BurntSushi/memchr/HEAD/benchmarks/engines/rust-memchrold/Cargo.toml",
+    "https://raw.githubusercontent.com/BurntSushi/memchr/HEAD/benchmarks/engines/libc/main.rs",
+    "https://raw.githubusercontent.com/BurntSushi/memchr/HEAD/benchmarks/engines/libc/Cargo.toml",
+    "https://raw.githubusercontent.com/BurntSushi/memchr/HEAD/benchmarks/engines/stringzilla/Cargo.toml",
+    "https://raw.githubusercontent.com/BurntSushi/memchr/HEAD/benchmarks/engines/stringzilla/main.rs",
+    "https://raw.githubusercontent.com/BurntSushi/memchr/HEAD/benchmarks/engines/rust-std/main.rs",
+    "https://github.com/BurntSushi/memchr/commits/master",
+    "https://github.com/BurntSushi/memchr/tree/master/src/arch",
+    "https://github.com/BurntSushi/memchr/tree/master/benchmarks/record",
+    "https://github.com/BurntSushi/memchr/tree/master/benchmarks/record/aarch64",
+    "https://github.com/BurntSushi/memchr/tree/master/benchmarks/record/x86_64-pc-windows-msvc",
+    "https://github.com/BurntSushi/memchr/issues?q=is%3Aissue+performance",
+    "https://github.com/BurntSushi/memchr/issues/161",
+    "https://github.com/BurntSushi/memchr/issues/139",
+    "https://github.com/BurntSushi/memchr/issues/107",
+    "https://github.com/BurntSushi/memchr/pull/229",
+    "https://crates.io/api/v1/crates/memchr",
+    "https://crates.io/api/v1/crates/memchr/versions?per_page=100",
+    "https://crates.io/api/v1/crates/memchr/reverse_dependencies?per_page=1"
+  ],
+  "confidence": 0.8
+}
