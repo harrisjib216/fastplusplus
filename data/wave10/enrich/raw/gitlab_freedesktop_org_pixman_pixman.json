@@ -1,0 +1,64 @@
+{
+  "id": "https://gitlab.freedesktop.org/pixman/pixman",
+  "one_liner": "Pixman's hand-written SIMD bilinear fetchers (SSE2, NEON, RISC-V RVV) beat its own scalar C paths by 1.5x to 11x.",
+  "what_it_does": "Pixman is the C library for low-level pixel compositing and trapezoid rasterization that sits under Cairo's image backend. You describe a source image (format, transform, filter, repeat mode) and call pixman_image_composite(); pixman picks the fastest registered fast path or source iterator for that exact combination at run time. This entry covers its bilinear-filtered transformed-image paths, which need no API change: the same call gets faster when a SIMD path matches.",
+  "how_it_is_fast": "Pixman stacks implementations at run time (general C, then format-specialised C, then each CPU's SIMD layer). Each layer registers fast paths and iterators keyed on format, operator and image flags, such as SCALE versus AFFINE transform and FAST_PATH_SAMPLES_COVER_CLIP_BILINEAR. For pure scaling, SSE2 and NEON use bilinear scanline functions, and SSSE3 and RVV use a two-row cache that interpolates each source row horizontally once and reuses it for the vertical blend. The 2026 RVV affine fetch handles rotation and shear. It computes each lane's 16.16 fixed-point coordinate as x + i*ux and loads the four taps with indexed gathers (vluxei32, falling back to 64-bit offsets above 4 GiB). It then blends two channels at a time in 16-bit lanes with widening multiply-accumulates on 7-bit weights, which reproduces the C fetcher's integer formula. Because the cover flag guarantees in-bounds taps, it also skips the C fetcher's per-tap repeat() wrap.",
+  "when_to_use": [
+    "Your stack already composites through pixman or Cairo image surfaces on RISC-V with RVV 1.0 and draws rotated or sheared bilinear a8r8g8b8/x8r8g8b8 images. Current master measured 1.5x to 1.7x on a SpacemiT K3.",
+    "Scaled (not rotated) bilinear SRC or OVER blits of 8888 or 0565 images on x86-64 (SSE2/SSSE3) or ARM NEON, where hand-written scale paths exist (2.35x SSE2 on a Core i7 and 6.6x to 10.9x NEON on a Cortex-A8 against the 2011 C path).",
+    "You need identical output whichever path runs: the RVV paths reuse the C integer weight formula, and the RVV commits report the full pixman test suite passing (35 tests).",
+    "You want to A/B test SIMD against C in one binary: PIXMAN_DISABLE='rvv', 'sse2 ssse3 mmx' or 'fast' switches implementations off at startup."
+  ],
+  "when_not_to_use": [
+    "Rotated or sheared bilinear sources on x86-64 or ARM: SSE2, SSSE3 and NEON register scale-only bilinear paths, so these transforms run the scalar C affine fetcher in pixman-fast-path.c. Blend2D is the faster choice there.",
+    "Distro or tagged pixman builds that need the RVV affine speedup: the fetchers landed in master in September 2026. The mirror's newest tag is pixman-0.46.4 (2025-07-20), and meson.build at HEAD reads 0.46.5.",
+    "Short rows on RVV: a forced-C build beats the RVV gather fetch below about 52-54 pixels (none-repeat 0.75x scale sweep), so the library keeps C through 53 pixels for positive horizontal scales.",
+    "Format, operator or repeat combinations with no registered fast path or iterator drop to the general path and gain nothing.",
+    "Full vector-graphics rendering (paths, gradients, text): pixman is a compositing back end, and sibling renderers such as Blend2D cover the whole pipeline."
+  ],
+  "integration": {
+    "form": "shared lib (Meson library 'pixman-1'; static with default_library=static)",
+    "dependencies": "libm and threads (pthreads); libpng, GTK 3/GLib and OpenMP are optional and only for tests and demos",
+    "min_toolchain": "C99 (c_std gnu99,c99), Meson >= 1.3.0; the RVV layer needs RISC-V vector intrinsics from GCC 14 or Clang 18 and is built with -march=rv64gcv1p0",
+    "platforms": "Any C99 target. SIMD layers exist for x86 MMX/SSE2/SSSE3, ARMv6 SIMD, ARM NEON, AArch64 NEON, MIPS DSPr2, POWER VMX/POWER8/POWER9, Loongson MMI and RISC-V RVV 1.0. RVV builds only for riscv64, is detected at run time on Linux (hwprobe or getauxval) and FreeBSD (elf_aux_info), and is disabled elsewhere.",
+    "thread_safety": "not documented in the files read (the build has a 'tls' option for compiler thread-local storage)",
+    "drop_in_for_baseline": true
+  },
+  "gotchas": [
+    "Baseline correction for the tier-A RVV rows: 'previous tree' means pixman-fast-path.c's scalar C fetcher bits_image_fetch_bilinear_affine_normal_a8r8g8b8, which is format- and repeat-specialised by MAKE_BILINEAR_FETCHER. It is not the general compositing path. That fetcher wraps every tap through repeat() and tests the mask per pixel even when samples cover the clip, so the 1.5x to 1.7x gain mixes vectorisation with a cover-only fetcher that drops that work.",
+    "Do not compare absolute MPix/s across the RVV commits. The pure-scale src_8888_8888 'M' row reads 75.39 MPix/s in e1f49d9 but 116.91 in the caa79f2 baseline measured by 95853c3. That later run pinned the userspace governor at 2.2 GHz; e1f49d9 states no frequency or governor. Each commit's ratios come from interleaved medians and remain usable.",
+    "Path selection depends on flags and table order. COVER needs every tap, zero-weight ones included, inside the image (caa79f2 forced the none-repeat path by shortening the source one row). rvv_iters[] comments warn that reordering entries silently routes scale sources onto the gather path.",
+    "The RVV width thresholds (53 pixels for the affine gather, 11 pixels for the vectorised vertical pass) and the gather design were tuned on one core, the SpacemiT K3 X100. A vectorised horizontal gather was 6.9-8.3% slower there and was dropped."
+  ],
+  "pick_this_over_siblings_when": "Pick pixman when you are already on Cairo's image backend or the X server and only need faster image compositing, or when you target RISC-V RVV, where it now has vector bilinear affine fetches. For a standalone 2D renderer, Blend2D (JIT pipelines; the clear winner in the ETH thesis) or Vello CPU is faster across whole scenes.",
+  "verified_claims_summary": "On a SpacemiT K3 (RVV 1.0) pinned to one core, built with GCC 15.2.0 in Meson release mode, test/affine-bench at 1920x1080 SRC a8r8g8b8 bilinear rose from 29.15 to 44.74 MPix/s for a 30-degree rotation (1.53x) and from 36.46 to 60.75 for a 0.25 shear (1.67x). The baseline was the previous tree's scalar C affine fetcher, the figures are medians of five interleaved runs (e1f49d9), and pure scaling did not change. caa79f2 extended the fetch to none-repeat and x8r8g8b8 sources (+46% to +62%). The 2011 Siamashka commits report SSE2 bilinear scaling at 70.48 to 165.38 MPix/s on an unnamed Core i7 and NEON gains of 6.6x to 10.9x on a Cortex-A8, with no compiler or flags given.",
+  "status_note": "Actively maintained: the GitHub mirror's last commit is 2026-10-02, and RVV work by ISCAS contributors landed through September 2026 (committed by mattst88). MIT-licensed, but the RVV affine fetchers are not in any tag yet (newest 0.46.4, 2025-07-20). The upstream gitlab.freedesktop.org was unreachable, so everything was read from the X11Libre read-only mirror. The record's baseline wording ('general compositing path') is wrong for the tier-A RVV rows: their baseline is the format-specialised C fetcher in pixman-fast-path.c.",
+  "sources_read": [
+    "https://github.com/X11Libre/mirror.fdo.pixman",
+    "https://github.com/X11Libre/mirror.fdo.pixman/commit/e1f49d9e6665ce354b90a189bf7bb5bbde9a1f20",
+    "https://github.com/X11Libre/mirror.fdo.pixman/commit/e1f49d9e6665ce354b90a189bf7bb5bbde9a1f20.patch",
+    "https://github.com/X11Libre/mirror.fdo.pixman/commit/caa79f2",
+    "https://github.com/X11Libre/mirror.fdo.pixman/commit/95853c31d507ddc6c20bf933324d478ab09714d9",
+    "https://github.com/X11Libre/mirror.fdo.pixman/commit/350029396d911941591149cc82b5e68a78ad6747",
+    "https://github.com/X11Libre/mirror.fdo.pixman/commit/fda93e625df86d4b82faa4d7307b5ec943908f36",
+    "https://github.com/X11Libre/mirror.fdo.pixman/commits/master",
+    "https://github.com/X11Libre/mirror.fdo.pixman/tags",
+    "https://raw.githubusercontent.com/X11Libre/mirror.fdo.pixman/HEAD/README.md",
+    "https://raw.githubusercontent.com/X11Libre/mirror.fdo.pixman/HEAD/meson.build",
+    "https://raw.githubusercontent.com/X11Libre/mirror.fdo.pixman/HEAD/meson.options",
+    "https://raw.githubusercontent.com/X11Libre/mirror.fdo.pixman/HEAD/NEWS",
+    "https://raw.githubusercontent.com/X11Libre/mirror.fdo.pixman/HEAD/pixman/meson.build",
+    "https://raw.githubusercontent.com/X11Libre/mirror.fdo.pixman/HEAD/pixman/pixman-rvv.c",
+    "https://raw.githubusercontent.com/X11Libre/mirror.fdo.pixman/HEAD/pixman/pixman-riscv.c",
+    "https://raw.githubusercontent.com/X11Libre/mirror.fdo.pixman/HEAD/pixman/pixman-fast-path.c",
+    "https://raw.githubusercontent.com/X11Libre/mirror.fdo.pixman/HEAD/pixman/pixman-inlines.h",
+    "https://raw.githubusercontent.com/X11Libre/mirror.fdo.pixman/HEAD/pixman/pixman-private.h",
+    "https://raw.githubusercontent.com/X11Libre/mirror.fdo.pixman/HEAD/pixman/pixman-implementation.c",
+    "https://raw.githubusercontent.com/X11Libre/mirror.fdo.pixman/HEAD/pixman/pixman-bits-image.c",
+    "https://raw.githubusercontent.com/X11Libre/mirror.fdo.pixman/HEAD/pixman/pixman-ssse3.c",
+    "https://raw.githubusercontent.com/X11Libre/mirror.fdo.pixman/HEAD/pixman/pixman-sse2.c",
+    "https://raw.githubusercontent.com/X11Libre/mirror.fdo.pixman/HEAD/pixman/pixman-arm-neon.c",
+    "https://raw.githubusercontent.com/X11Libre/mirror.fdo.pixman/HEAD/test/affine-bench.c"
+  ],
+  "confidence": 0.78
+}
