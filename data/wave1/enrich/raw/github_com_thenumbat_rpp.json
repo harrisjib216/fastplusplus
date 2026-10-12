@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/thenumbat/rpp",
+  "one_liner": "Rust-style C++20 base library (Vec, Map, String, allocators, threads, async) that avoids STL headers to cut compile time.",
+  "what_it_does": "rpp replaces the STL for a whole codebase rather than one container: one umbrella header (rpp/base.h) brings in Vec, Map, String, Opt, Box, Rc, Slice, Queue, Heap, Variant, Function, formatting, logging, reflection and allocation profiling, with threads, async coroutines, SIMD and vector math in separate headers. The API is its own, Rust-flavoured and explicit: copy constructors are deleted in favour of clone(), lookups return Opt<Ref<V>> or die() on a missing key, and every container takes a static allocator type parameter (Mallocator<\"Name\">, Mpool, Mregion<R>). It is not a drop-in for std::vector or std::unordered_map.",
+  "how_it_is_fast": "The compile-time claim rests on not including STL or most system headers: rpp re-implements the few std pieces the language needs (std/initializer_list.h, std/coroutine.h) and keeps the library at about 10k lines, built as one static library from unity-build .cpp files. Runtime choices are conventional: Vec grows by doubling from 8 and memcpy-relocates trivially movable types; Map is an open-addressing Robin Hood table with power-of-two capacity, 75% max load, a 64-bit 'squirrel5' integer-mix hash, top-bit indexing and backward-shift deletion, storing the full hash in every slot. No runtime benchmark against the STL exists in the repo.",
+  "when_to_use": [
+    "A new MSVC or Clang 17+ codebase (game, renderer, tool) that wants short per-translation-unit compile times and is willing to adopt a non-STL vocabulary everywhere.",
+    "Projects that want per-allocator leak checking and allocation statistics out of the box (named Mallocator<\"Name\"> types, Profile::finalize()).",
+    "Code that benefits from scoped region (arena) allocation and fixed-size pools selected by a template parameter rather than by runtime allocator objects.",
+    "As a readable reference for a compact Robin Hood map, Rust-style Opt/Box/Rc and static-allocator containers in C++20."
+  ],
+  "when_not_to_use": [
+    "When you need a measured runtime speedup over std::vector or std::unordered_map: no benchmark exists, and the only numbers are an anecdotal compile-time comparison of two different codebases.",
+    "GCC builds (rejected with #error in base.h and a FATAL_ERROR in CMake), MSVC before 19.39, Clang before 17, 32-bit targets (static_assert sizeof(void*) == 8) or any OS other than Windows, Linux and macOS.",
+    "Code that relies on exceptions, RTTI or STL interop: the library builds with -fno-exceptions/-fno-rtti (MSVC /EHa- /GR-, _HAS_EXCEPTIONS=0), and passing rpp containers to STL-based APIs needs conversion.",
+    "Long-lived production dependencies: last commit 2024-12-25, one maintainer, no releases, 218 stars.",
+    "Maps updated by repeated insert() of existing keys (see gotchas: length() overcounts and the table keeps growing)."
+  ],
+  "integration": {
+    "form": "static lib (headers plus unity-build rpp/impl/unify.cpp and a platform unify.cpp; CMake add_subdirectory or git submodule)",
+    "dependencies": "none beyond the C runtime and OS (pthread on Linux and macOS; ws2_32 and Synchronization on Windows); base.h still includes <new> (Clang) or vcruntime_new.h (MSVC)",
+    "min_toolchain": "C++20; MSVC 19.39+ or Clang 17+; CMake 3.17+",
+    "platforms": "Windows x64 (MSVC), Linux x64 and aarch64 (Clang), macOS x64 and aarch64 (Clang); other Linux architectures untested",
+    "thread_safety": "Containers are not synchronized; Mpool and the allocation profiler take a global mutex per call; Thread, Async::Pool and Arc are provided for concurrency",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Map::insert and Map::emplace add 1 to length_ even when insert_slot finds the key already present and only overwrites it (map.h, insert(K&&, V&&) and the duplicate branch of insert_slot). length() then overcounts, and because full() compares length_ with 75% of capacity, a map whose existing keys are re-inserted keeps doubling its table; get_or_insert() checks first and is safe. Found by code reading; the test suite has no duplicate-insert case.",
+    "Map::reserve(n) uses n as the capacity without rounding to a power of two, while clone() rebuilds at next_pow2(capacity) with a different shift and copies slots by position, so cloning a map reserved to a non-power-of-two size yields a table whose lookups can miss entries (code reading, not executed). try_erase also does not stop at an empty slot and scans on to the next occupied one.",
+    "assert() is defined by rpp and stays active in Release: Vec and Slice indexing is bounds-checked, allocation failure asserts, and a failed check logs and calls exit(1).",
+    "The default allocator (Mdefault) records every allocation and free in a global mutex-protected map unless RPP_RELEASE_BUILD is defined; the CMake file defines it only for Release and MinSizeRel, so RelWithDebInfo builds and builds without CMake pay that cost on every allocation. Mpool blocks are aligned to at most 16 bytes."
+  ],
+  "pick_this_over_siblings_when": "Pick rpp only if you want a complete STL-free base library with compile time as the main goal; for a measured runtime win on vector-like containers with an STL-shaped API, EASTL's eastl::vector, ankerl::svector (small vectors) or sfl-library are better-documented choices.",
+  "verified_claims_summary": "Nothing measured could be seen this session: the blog post at thenumb.at is unreachable and the repo has no compile-time or runtime benchmark. The only figures, from a search-agent snippet, are an author anecdote comparing two separate codebases (slowest translation unit about 10 s with an earlier STL-based project versus 1.4 s for a roughly 100k-line rpp project, MSVC 19.38 on an AMD 5950X, Windows 11), which the author says is not a proper benchmark.",
+  "status_note": "Stale since 2024-12-25 (one open issue, no releases) but MIT-licensed and about 10k lines, so vendoring is feasible for MSVC 19.39+/Clang 17+ projects; review the Map insert-count and reserve/clone issues before relying on Map.",
+  "sources_read": [
+    "https://github.com/TheNumbat/rpp",
+    "https://raw.githubusercontent.com/TheNumbat/rpp/HEAD/README.md",
+    "https://raw.githubusercontent.com/TheNumbat/rpp/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/TheNumbat/rpp/HEAD/rpp/CMakeLists.txt",
+    "https://github.com/TheNumbat/rpp/tree/main/rpp",
+    "https://raw.githubusercontent.com/TheNumbat/rpp/HEAD/rpp/base.h",
+    "https://raw.githubusercontent.com/TheNumbat/rpp/HEAD/rpp/vec.h",
+    "https://raw.githubusercontent.com/TheNumbat/rpp/HEAD/rpp/map.h",
+    "https://raw.githubusercontent.com/TheNumbat/rpp/HEAD/rpp/hash.h",
+    "https://raw.githubusercontent.com/TheNumbat/rpp/HEAD/rpp/alloc0.h",
+    "https://raw.githubusercontent.com/TheNumbat/rpp/HEAD/rpp/alloc1.h",
+    "https://raw.githubusercontent.com/TheNumbat/rpp/HEAD/rpp/math.h",
+    "https://raw.githubusercontent.com/TheNumbat/rpp/HEAD/rpp/profile.h",
+    "https://raw.githubusercontent.com/TheNumbat/rpp/HEAD/rpp/log.h",
+    "https://raw.githubusercontent.com/TheNumbat/rpp/HEAD/rpp/std/initializer_list.h",
+    "https://raw.githubusercontent.com/TheNumbat/rpp/HEAD/rpp/impl/unify.cpp",
+    "https://raw.githubusercontent.com/TheNumbat/rpp/HEAD/rpp/impl/profile.cpp",
+    "https://raw.githubusercontent.com/TheNumbat/rpp/HEAD/rpp/impl/alloc.cpp",
+    "https://raw.githubusercontent.com/TheNumbat/rpp/HEAD/test/map.cpp",
+    "https://github.com/TheNumbat/rpp/commits",
+    "https://github.com/TheNumbat/rpp/issues?q=is%3Aissue",
+    "https://thenumb.at/rpp/ (getaddrinfo ENOTFOUND)"
+  ],
+  "confidence": 0.55
+}

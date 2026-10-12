@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/ethancornell/ultrasimd",
+  "one_liner": "Small x86 AVX2/AVX-512 header of dot, L2, cosine, Hamming, Jaccard and SAXPY kernels; beats non-vectorized scalar loops, barely beats auto-vectorized ones.",
+  "what_it_does": "A personal C++17 header (include/simd_v3.hpp, plus older simd.hpp and simd_v2.hpp) with free functions on raw pointers: simd::dot<float>, dot_f16, dot_i8, dot_bf16, l2_squared_distance, cosine_distance, saxpy, binary::hamming_distance and binary::jaccard_distance, plus a naive knn_l2 and batch_cosine_similarity. Each call checks a cached CPUID feature struct and picks an AVX-512, AVX2 or plain C++ loop. The matmul, conv2d, parallel:: and SIMD_FORCE_SCALAR API the README documents exists only in the older simd.hpp/simd_v2.hpp, where conv2d is scalar only; the benchmarked v3 header has none of it.",
+  "how_it_is_fast": "Straight intrinsics loops: one 512-bit FMA accumulator with masked loads for the tail (AVX-512) or 8-wide FMA with a scalar tail (AVX2); F16C _mm256_cvtph_ps conversion for half-precision dot products; sign-extend to 16 bits plus madd_epi16 for int8; XOR plus a nibble-lookup (pshufb) or bit-loop popcount and sad_epu8 for Hamming and Jaccard. Cosine distance replaces sqrt and divide with a magic-constant approximate reciprocal square root (0x5F1FFFF9 plus one refinement step). There is no unrolling into multiple accumulators, no VNNI (dot_i8_vnni_fixed just calls the AVX-512 version) and no blocking.",
+  "when_to_use": [
+    "Half-precision (F16) dot products on x86 with F16C, where the repo's numbers show about 7.8x to 10x over a per-element conversion loop for 64 to 8192 elements in all three result files; that reference ran at about 2 Gop/s even in the auto-vectorized file, so the compiler did not vectorize it.",
+    "Int8 dot products or byte-wise Jaccard on AVX-512 machines for vectors of 256 elements or more, where the auto-vectorized comparison still shows 1.3x to 2.9x (I8) and 5.3x to 7.5x (Jaccard).",
+    "As a short, MIT-licensed reference for masked AVX-512 tail handling to copy into your own code rather than as a dependency."
+  ],
+  "when_not_to_use": [
+    "If your compiler already auto-vectorizes the plain loop (-O3 -march=native -ffast-math): in the repo's own auto-vectorized comparison, F32 dot is 0.18x to 1.8x, I8 dot 0.36x to 2.9x, SAXPY 0.44x to 1.7x and BF16 about 1.0x, losing below about 64 elements.",
+    "Projects with more than one translation unit: non-template functions (dot_f16, dot_i8, dot_bf16, hamming_distance, jaccard_distance and the avx2:: and avx512:: kernels) are defined in the header without inline, so including it twice causes multiple-definition link errors.",
+    "Portable binaries: every SIMD path is compiled only under #ifdef __AVX2__ / __AVX512F__, so you must build the whole translation unit with -mavx2 or -mavx512f (the CMake uses -march=native), after which the binary needs that CPU regardless of the runtime check; CPU detection does not check OS support via XGETBV.",
+    "Code that needs an exact cosine distance (approximate rsqrt, about 1e-5 to 5e-5 relative error in the repo's CSVs) or BF16 inputs whose length is not a multiple of 32 (see gotchas).",
+    "Anything needing maintenance or ARM support: two commits on 2025-06-28, 2 stars, no issues, no NEON path; for a maintained library see EVE or VCL."
+  ],
+  "integration": {
+    "form": "header-only (single file include/simd_v3.hpp, but see the multiple-definition gotcha)",
+    "dependencies": "none (OpenMP optional for batch_cosine_similarity)",
+    "min_toolchain": "C++17 (if constexpr); README says GCC 7+, Clang 6+, MSVC 2019+; the AVX-512 BF16 path needs a compiler with _mm512_dpbf16_ps and -mavx512bf16",
+    "platforms": "x86-64 only; AVX2+FMA (F16C for dot_f16) or AVX-512F/BW/VL selected at compile time and again at run time; scalar fallback otherwise",
+    "thread_safety": "Not documented; kernels are stateless apart from a function-local static CPUID struct (thread-safe initialisation under C++11), so concurrent calls look safe.",
+    "drop_in_for_baseline": "partial — replaces hand-written scalar loops with one call per kernel on raw pointers, but there is no std:: equivalent API, cosine returns an approximation, and the header cannot be included from two .cpp files without edits"
+  },
+  "gotchas": [
+    "Harness flaw behind the 18.7x headline, confirmed from the CSVs: the library's own throughput is the same in all three result files (F32 dot about 33-37 Gop/s at 4096-8192 elements), and only the scalar reference changes. In simd_v3_benchmark_results.csv the reference ran at 20-32 Gop/s (auto-vectorized by the compiler) and F32 dot is 0.18x to 1.80x; in the _1751127313 and _fixed files the reference (volatile locals, noinline, optnone under Clang, -fno-tree-vectorize) ran at about 1.9-2.7 Gop/s, which turns the same SIMD numbers into 15x to 18.7x. The headline measures vectorized against non-vectorized code, not the library against what a compiler gives you.",
+    "The BF16 rows (2.0x to 11.4x in the later files) did not exercise any BF16 hardware: the CPUFeatures column lists AVX512F, FMA, F16C and VNNI but not BF16 (the harness would print it), so simd::dot_bf16 ran its plain C++ fallback; that path matches the auto-vectorized reference in the first file (0.76x to 1.02x).",
+    "Correctness bug in the untested AVX-512 BF16 path: for a remainder under 32 elements, the tail loop adds each product with _mm512_set1_ps, i.e. into all 16 lanes, and the final _mm512_reduce_add_ps then counts every tail product 16 times; any n not divisible by 32 returns a wrong result on BF16-capable CPUs. The benchmark CPU lacked BF16, so the CSVs never ran it.",
+    "32 of the 175 CSV rows (EdgeCase_Dot, KNN_Search, BatchCosineSim, MemoryBW) carry a fixed speedup of 1.00 with no scalar comparison; the L2 'scalar' loop ran at about 10 billion elements per second, so they were vectorized or hoisted out of the timing loop despite the no-vectorize flags. The unit test (test/test_main.cpp) covers only the old simd.hpp with assert(), which Release builds compile out."
+  ],
+  "pick_this_over_siblings_when": "Rarely: marcelcases/simd and libalgebra make the same kind of comparison against -fno-tree-vectorize scalar code but say so; Vectis compares its AVX2 dot product against scalar, 4-accumulator scalar and -ffast-math builds, which is the fairer reference; EVE or the Vector Class Library are the maintained choices for general x86 SIMD. UltraSIMD is only worth taking as a small MIT snippet for F16C-based half-precision dot products.",
+  "verified_claims_summary": "First-party CSVs from benchmark/benchmark_main_v3.cpp on an unnamed AVX-512 CPU (AVX512F, FMA, F16C, VNNI; compiler and version not stated; -O3 -march=native -ffast-math): against de-vectorized scalar loops the AVX-512 paths reach 15x to 18.7x for F32 dot, but against the compiler's own auto-vectorized loop (the repo's first CSV) F32 dot is 0.18x to 1.8x, I8 dot 0.36x to 2.9x, L2 1.5x to 2.0x and cosine 1.4x to 1.9x; the large gain that holds in every file is F16 dot (about 8x to 10x at 64 elements and up).",
+  "status_note": "Stale personal project (two commits on 2025-06-28, 2 stars, no issues), MIT-licensed and small enough to copy from, but not usable as a header-only dependency in multi-file builds without adding inline; the README's 'production-quality' label, AMD enterprise support line and Catch2 test suite are not backed by the repo.",
+  "sources_read": [
+    "https://github.com/EthanCornell/UltraSIMD",
+    "https://github.com/EthanCornell/UltraSIMD/commits/main",
+    "https://github.com/EthanCornell/UltraSIMD/issues",
+    "https://github.com/EthanCornell/UltraSIMD/tree/main/include",
+    "https://github.com/EthanCornell/UltraSIMD/tree/main/test",
+    "https://raw.githubusercontent.com/EthanCornell/UltraSIMD/HEAD/README.md",
+    "https://raw.githubusercontent.com/EthanCornell/UltraSIMD/HEAD/COMPLETE_GUIDE.md",
+    "https://raw.githubusercontent.com/EthanCornell/UltraSIMD/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/EthanCornell/UltraSIMD/HEAD/build.sh",
+    "https://raw.githubusercontent.com/EthanCornell/UltraSIMD/HEAD/include/simd.hpp",
+    "https://raw.githubusercontent.com/EthanCornell/UltraSIMD/HEAD/include/simd_v2.hpp",
+    "https://raw.githubusercontent.com/EthanCornell/UltraSIMD/HEAD/include/simd_v3.hpp",
+    "https://raw.githubusercontent.com/EthanCornell/UltraSIMD/HEAD/benchmark/benchmark_main_v3.cpp",
+    "https://raw.githubusercontent.com/EthanCornell/UltraSIMD/HEAD/test/test_main.cpp",
+    "https://raw.githubusercontent.com/EthanCornell/UltraSIMD/HEAD/simd_v3_benchmark_results.csv",
+    "https://raw.githubusercontent.com/EthanCornell/UltraSIMD/HEAD/simd_v3_benchmark_results_1751127313.csv",
+    "https://raw.githubusercontent.com/EthanCornell/UltraSIMD/HEAD/simd_v3_benchmark_results_fixed.csv"
+  ],
+  "confidence": 0.8
+}

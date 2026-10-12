@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/geolm/math_intrinsics",
+  "one_liner": "Single C header of branchless AVX2 (8-lane) and NEON (4-lane) float32 sin, cos, exp, log, pow and more; libm comparison is not like-for-like.",
+  "what_it_does": "Provides the transcendental functions that AVX2 and NEON intrinsics lack: mm256_{sin,cos,sincos,acos,asin,atan,atan2,log,log2,exp,exp2,cbrt,pow}_ps on __m256 and the matching v*q_f32 functions on float32x4_t. It is an stb-style single header: define __MATH__INTRINSICS__IMPLEMENTATION__ in one translation unit and include it everywhere else. It is not a drop-in for libm calls; you must already have your data in SIMD registers (or vectorize the loop yourself), and it is float32 only.",
+  "how_it_is_fast": "Every call evaluates 8 (AVX2) or 4 (NEON) lanes with no branches: domain errors, infinities and zero are handled with compare masks and blends instead of if statements. The kernels are Cephes single-precision polynomials evaluated with FMA (Horner form), with Julien Pommier's sse_mathfun code for log/exp/sincos (three-constant Cody-Waite reduction by pi/4), integer exponent/mantissa bit manipulation for log, exp2 and cbrt (plus one Newton step for cbrt), and pow computed as exp(y*log(x)). The __MATH_INTRINSINCS_FAST__ mode swaps in shorter lolremez polynomials, a single-step 2*pi reduction from hlslpp, and NVIDIA Cg's asin approximation.",
+  "when_to_use": [
+    "Game, graphics, audio or DSP code that already works on __m256 or float32x4_t and needs sin/cos/exp/log on moderate arguments (unit tests cover sin and cos on [-10, 10], exp on [-87, 87]) at about 1e-7 absolute or relative error.",
+    "x86-64 builds compiled with -mavx2 (-mfma optional) where adding a large dependency such as SLEEF is not wanted; one MIT header with no dependencies.",
+    "Code that needs sine and cosine together: mm256_sincos_ps returns both for the cost of one evaluation.",
+    "Apple Silicon (macOS/iOS) NEON builds that want the same API shape as the AVX2 version.",
+    "Visual or audio work that can accept the fast mode's larger errors (up to 6.5e-5 for asin/acos, 8.9e-6 for pow) for a self-reported 1.4-1.9x more speed."
+  ],
+  "when_not_to_use": [
+    "Linux or Windows on ARM64: the header picks the NEON branch only when both __ARM_NEON and __ARM_NEON__ are defined. clang 18 defines __ARM_NEON__ for arm64-apple-macos but not for aarch64-linux-gnu or aarch64-pc-windows-msvc, so those targets fall into the AVX branch and stop at immintrin.h's '#error ... only meant to be used on x86' (checked with clang -fsyntax-only in this session).",
+    "Large or arbitrary arguments: sin/cos use float Cody-Waite reduction with an int32 conversion (the fast mode uses x - round(x/2pi)*2pi), with no Payne-Hanek path and tests only on [-10, 10]; log/log2 clamp denormal inputs to FLT_MIN before taking the logarithm.",
+    "pow on general inputs: it is exp(y*log(x)), so a negative base with an integer exponent returns NaN (log of a negative number) and a zero base with a negative exponent returns 0 instead of +inf. The README says pow and atan2 are not special-case compliant, and the tests use only exponents y = sin(x) in [-1, 1].",
+    "Double precision, AVX-512, SSE-only or runtime CPU dispatch: none exist; the whole translation unit must be compiled with -mavx2.",
+    "If you need a measured speedup over libm: the only published numbers come from the flawed harness described in gotchas, and the author says 'Performance is not the focus.'"
+  ],
+  "integration": {
+    "form": "header-only (stb-style; implementation enabled by a macro in one translation unit)",
+    "dependencies": "none (immintrin.h or arm_neon.h)",
+    "min_toolchain": "C99 compiler with AVX2 intrinsics (-mavx2, optionally -mfma) or Apple clang for NEON; the implementation part does not compile as C++ under g++ (6 'taking address of temporary array' errors from (float[]){...} compound literals; clang++ accepts them with a -Wc99-extensions warning), so define the implementation macro in a .c file; declarations are wrapped in extern \"C\"",
+    "platforms": "x86-64 with AVX2 (FMA used when __FMA__ is defined); AArch64 NEON only where __ARM_NEON__ is also defined (Apple clang); not Linux or Windows ARM64 as written",
+    "thread_safety": "not documented; pure functions with no global state",
+    "drop_in_for_baseline": "partial: the same function set as the libm float calls, but on 8-wide (AVX2) or 4-wide (NEON) vectors, so the calling loop must be vectorized by hand"
+  },
+  "gotchas": [
+    "Benchmark harness flaw (tests/benchmark.c, README run at commit a9e8fe5): the SIMD side measures throughput on independent lanes, while libm runs a serial latency chain total += f(total) seeded with the SIMD time in ms. In that chain acosf/asinf get |x| > 1 and return NaN from then on, expf/exp2f overflow to +inf after one call, and sinf/cosf run on arguments near 880. On top of that, the SIMD inputs start in [0, 0.875] and step by FLT_EPSILON, and round-to-even stalls them at exactly 2.0 after 16,777,216 of the 125,000,000 vector iterations (float32 simulation in this session). So the SIMD side mostly evaluates one constant vector, which is out of domain (NaN) for acos and asin. The 2.06x-18.14x ratios are not a measure of speed against libm.",
+    "The fast-mode macro is spelled __MATH_INTRINSINCS_FAST__ (note INTRINSINCS); a correctly spelled name silently does nothing.",
+    "Gaps in the unit tests behind the README's max-error figures: relative error is |approx - ref| / ref with a signed ref, so negative results (cbrt on [-1000, 0), log/log2 below 1) always pass. The log/log2 grid runs from FLT_EPSILON to 1e20 in 32768 steps of about 3e15, so ordinary arguments between 1e-7 and 3e15 are never sampled. Only 1024 points are used for sin, cos, acos, asin and atan.",
+    "The README says NEON is tested only by hand on an M1 Pro. tests/CMakeLists.txt builds universal arm64;x86_64 binaries on macOS and passes -mavx2 -mfma to both slices; whether the macOS CI job actually runs the NEON slice was not checked."
+  ],
+  "pick_this_over_siblings_when": "Pick it over corvus when you want a dependency-free MIT C header that offers the same float32 function set for both AVX2 and Apple NEON and you will measure speed yourself. corvus publishes per-element measurements against vendor libm (about 5.5x for cos/sin on Zen 4), while this library has no valid libm comparison. LitMath is the .NET option and recip_rsqrt_benchmark only covers reciprocal and rsqrt.",
+  "verified_claims_summary": "The README's 2.06x (exp2) to 18.14x (sin) speedups are real output of tests/benchmark.c at commit a9e8fe5 (1e9 elements, -O3 -mavx2 -mfma, 'old Intel Core i7 from 2018', compiler and libm unstated). They compare 8-lane AVX2 throughput on inputs stuck at 2.0 with a serial libm chain that runs on NaN, infinity or arguments near 880, so they show only that the code is SIMD and branchless, not how much faster it is than libm (tier D).",
+  "status_note": "No code changes since 2024-02-05 (later commits touch only the README and LICENSE), no issues filed, 38 stars, 0 forks; MIT and a single header, so easy to vendor for x86 AVX2 and Apple NEON float32 work after checking the ranges you need.",
+  "sources_read": [
+    "https://github.com/Geolm/math_intrinsics",
+    "https://github.com/Geolm/math_intrinsics/commits/main",
+    "https://github.com/Geolm/math_intrinsics/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/Geolm/math_intrinsics/HEAD/README.md",
+    "https://raw.githubusercontent.com/Geolm/math_intrinsics/HEAD/math_intrinsics.h",
+    "https://raw.githubusercontent.com/Geolm/math_intrinsics/HEAD/tests/benchmark.c",
+    "https://raw.githubusercontent.com/Geolm/math_intrinsics/a9e8fe5bd50656021bd52beb83b85c2f7cc95100/tests/benchmark.c",
+    "https://raw.githubusercontent.com/Geolm/math_intrinsics/HEAD/tests/test.c",
+    "https://raw.githubusercontent.com/Geolm/math_intrinsics/HEAD/tests/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Geolm/math_intrinsics/HEAD/.github/workflows/cmake-multi-platform.yml",
+    "https://raw.githubusercontent.com/Geolm/math_intrinsics/HEAD/LICENSE"
+  ],
+  "confidence": 0.8
+}

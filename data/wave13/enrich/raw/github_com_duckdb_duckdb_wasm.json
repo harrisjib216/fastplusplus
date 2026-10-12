@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/duckdb/duckdb-wasm",
+  "one_liner": "DuckDB's columnar SQL engine compiled to WebAssembly. Analytical queries in the browser run several times to tens of times faster than Arquero or SQLite WASM.",
+  "what_it_does": "DuckDB-Wasm is the DuckDB C++ OLAP engine (currently DuckDB v1.5.6) compiled with Emscripten and wrapped in a TypeScript API (@duckdb/duckdb-wasm). In the browser you create an AsyncDuckDB backed by a Web Worker. You register Parquet, CSV or JSON data as buffers, URLs, file handles or OPFS files, then run SQL through a connection. Results come back as Apache Arrow tables. A synchronous binding exists for Node. It is a SQL engine, not a drop-in for Arquero's dataframe verbs or for SQLite's synchronous row API.",
+  "how_it_is_fast": "DuckDB executes queries in vectorised, columnar pipelines, so aggregations, hash group-bys and window functions process batches of column values rather than one row at a time as SQLite's bytecode VM does. Parquet scans push down projections and filters and can fetch byte ranges over HTTP. Results cross into JavaScript as Arrow columnar buffers instead of per-row JS objects. Separate bundles target plain Wasm (mvp), Wasm exception handling (eh) and an experimental pthreads build (coi).",
+  "when_to_use": [
+    "Dashboards or notebooks running ad-hoc GROUP BY, window-function and aggregate SQL over roughly 10^5 to 10^7 rows in the browser. On a 1M-row table it ran these in 0.014-0.163 s, against 0.067-4.847 s for Arquero on Chrome.",
+    "Data already in Parquet or Arrow, or remote Parquet you want to query with HTTP range reads instead of downloading and parsing in JS.",
+    "Apps that want query work kept off the main thread: the browser API runs every query in a Web Worker.",
+    "Teams that prefer SQL to a dataframe API and want the same dialect as native DuckDB (database files are readable by both)."
+  ],
+  "when_not_to_use": [
+    "Transactional workloads with many small queries. In the same benchmark, 1000 indexed point selects took 1.048 s against 0.054 s for in-memory SQLite WASM, and 1000 inserts 1.397 s against 0.041 s. That is about 1 ms per query (derived from page data), mostly async worker round-trips.",
+    "Pages where startup dominates: loading the 1M-row Parquet took 4.309 s against 0.893 s for SQLite deserialising a database file and 2.866 s for Arquero. The Wasm bundle plus lazily fetched extensions (Parquet, JSON, ICU) are a large download.",
+    "Data larger than the Wasm heap: builds cap memory at 4 GB, spilling to OPFS is an open request (#2061), and multithreading is experimental and off by default.",
+    "Remote data behind servers without CORS or HTTPS: DuckDB-Wasm upgrades requests to HTTPS and needs cross-origin access, and its HTTP stack differs from native DuckDB's."
+  ],
+  "integration": {
+    "form": "module (npm @duckdb/duckdb-wasm: .wasm bundles plus worker scripts and TypeScript API)",
+    "dependencies": "apache-arrow (JS) for results; extensions fetched at runtime from extensions.duckdb.org; building from source needs Emscripten (version not documented in the README)",
+    "min_toolchain": "Browser with WebAssembly (mvp bundle), Wasm exception handling for the eh bundle, cross-origin isolation (SharedArrayBuffer) for the experimental coi threads bundle; Node.js for the sync binding",
+    "platforms": "Chrome, Firefox, Safari and Node.js (README); any CPU the JS engine runs Wasm on",
+    "thread_safety": "Browser API is asynchronous and serialises work inside one Web Worker; default build single-threaded; pthreads build experimental",
+    "drop_in_for_baseline": "partial: replaces Arquero or SQLite WASM for read-mostly analytical SQL, but the API is async, returns Arrow, and differs from Arquero's verbs and SQLite's synchronous oo1 API"
+  },
+  "gotchas": [
+    "Harness flaw in the independent benchmark (timlrx/browser-data-processing-benchmarks): SQLite runs each SELECT with db.exec({sql}) and no callback, resultRows or rowMode. In sqlite-wasm 3.43.0's oo1 API (ext/wasm/api/sqlite3-api-oo1.js), such a call steps each statement only once, so every SQLite SELECT time measures the first result row only. That makes the indexed-SQLite wins over DuckDB (Test 2 0.005 s and Test 4 0.002 s vs 0.163 s and 0.032 s) artefacts: an expression index on DATE(utc_date,'unixepoch') lets SQLite return its first group without finishing the GROUP BY. It also makes DuckDB's Test 4 win over unindexed SQLite conservative, since that scan stops at the first match. DuckDB's c.query() materialises the full Arrow result.",
+    "Timings are one run per browser, taken with Date.now() around a Comlink call. DuckDB's AsyncDuckDB adds a second nested worker hop per query, which explains much of its per-query cost in the 1000-query tests. Browser variance is large: Arquero Test 3 takes 4.847 s on Chrome and 0.852 s on Firefox, and issue #2183 reports a DuckDB-Wasm query 6x slower on Chrome than on Firefox (20 s vs 3.4 s).",
+    "Open issue #2258: once the Wasm heap passes 2 GiB, the EM_ASM blocks in lib/src/http_wasm.cc read signed pointers. HTTP request headers (Range, Authorization) are then dropped and POST/PUT bodies are silently zeroed. The report comes from a fork and is a code review of upstream; there is no maintainer response yet.",
+    "The project's own TPC-H harness (packages/benchmarks) runs in Node with the synchronous binding. It skips Arquero Q9 and Q21 at SF >= 0.1 and sql.js Q17, Q20 and Q22 at SF >= 0.25, so 'beats on TPC-H' covers subsets of the 22 queries for those baselines."
+  ],
+  "pick_this_over_siblings_when": "Pick DuckDB-Wasm over absurd-sql (SQLite persisted to IndexedDB) when the workload is read-mostly aggregation over large columnar data rather than durable row-level updates. Among the other wasm library entries (hash-wasm, libxml2-wasm and the like) it is the only general analytical query engine.",
+  "verified_claims_summary": "One independent, single-run browser benchmark (1M-row, 24-column Bandcamp sales table; i7-1165G7 with Chrome 116 and M2 MacBook Air with Firefox 117; @duckdb/duckdb-wasm ^1.27.0, arquero ^5.2.0 and @sqlite.org/sqlite-wasm ^3.43.0, 2023) reports these results. DuckDB-Wasm ran the four analytical SELECTs 4.8-42x faster than Arquero on Chrome (3.8-6.5x for Tests 2-3 on Firefox) and faster than in-memory SQLite WASM. It loaded slower and lost every point-lookup and DML test. The SQLite SELECT times in that harness are time to first row. The VLDB 2022 TPC-H comparison was seen only as an abstract snippet, because vldb.org does not resolve here.",
+  "status_note": "Actively maintained by the DuckDB team (last commit 2026-09-29, 'Bump to 1.5.6'; 2.1k stars, MIT, no GitHub releases, published on npm). It is production-usable for browser analytics, with experimental multithreading and the open 2 GiB-heap HTTP bug.",
+  "sources_read": [
+    "https://github.com/duckdb/duckdb-wasm",
+    "https://github.com/duckdb/duckdb-wasm/commits/main",
+    "https://github.com/duckdb/duckdb-wasm/issues?q=is%3Aissue+performance+OR+slow+OR+memory",
+    "https://github.com/duckdb/duckdb-wasm/issues/2183",
+    "https://github.com/duckdb/duckdb-wasm/issues/2258",
+    "https://github.com/duckdb/duckdb-wasm/tree/main/packages/benchmarks/src",
+    "https://raw.githubusercontent.com/duckdb/duckdb-wasm/HEAD/README.md",
+    "https://raw.githubusercontent.com/duckdb/duckdb-wasm/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/duckdb/duckdb-wasm/HEAD/packages/duckdb-wasm/README.md",
+    "https://raw.githubusercontent.com/duckdb/duckdb-wasm/HEAD/packages/benchmarks/package.json",
+    "https://raw.githubusercontent.com/duckdb/duckdb-wasm/HEAD/packages/benchmarks/src/suite_system_tpch_duckdb.ts",
+    "https://raw.githubusercontent.com/duckdb/duckdb-wasm/HEAD/packages/benchmarks/src/suite_system_tpch_sqljs.ts",
+    "https://raw.githubusercontent.com/duckdb/duckdb-wasm/HEAD/packages/benchmarks/src/suite_system_tpch_arquero.ts",
+    "https://github.com/timlrx/browser-data-processing-benchmarks/tree/main/benchmarks",
+    "https://raw.githubusercontent.com/timlrx/browser-data-processing-benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/timlrx/browser-data-processing-benchmarks/HEAD/index.js",
+    "https://raw.githubusercontent.com/timlrx/browser-data-processing-benchmarks/HEAD/package.json",
+    "https://raw.githubusercontent.com/timlrx/browser-data-processing-benchmarks/HEAD/benchmarks/duckdb.js",
+    "https://raw.githubusercontent.com/timlrx/browser-data-processing-benchmarks/HEAD/benchmarks/arquero.js",
+    "https://raw.githubusercontent.com/timlrx/browser-data-processing-benchmarks/HEAD/benchmarks/sqlite.js",
+    "https://raw.githubusercontent.com/timlrx/browser-data-processing-benchmarks/HEAD/benchmarks/sqlite-indexed.js",
+    "https://raw.githubusercontent.com/timlrx/browser-data-processing-benchmarks/HEAD/benchmarks/danfo.js",
+    "https://raw.githubusercontent.com/timlrx/browser-data-processing-benchmarks/HEAD/workers/duckdb-worker.js",
+    "https://raw.githubusercontent.com/timlrx/browser-data-processing-benchmarks/HEAD/workers/arquero-worker.js",
+    "https://raw.githubusercontent.com/timlrx/browser-data-processing-benchmarks/HEAD/workers/sqlite-worker.js",
+    "https://raw.githubusercontent.com/sqlite/sqlite/version-3.43.0/ext/wasm/api/sqlite3-api-oo1.js",
+    "https://raw.githubusercontent.com/sqlite/sqlite/master/ext/wasm/api/sqlite3-api-oo1.c-pp.js",
+    "https://www.vldb.org/pvldb/vol15/p3574-kohn.pdf (ENOTFOUND, not readable)",
+    "WebSearch: DuckDB-Wasm VLDB 2022 Kohn TPC-H sql.js Arquero Lovefield (snippets only)"
+  ],
+  "confidence": 0.8
+}

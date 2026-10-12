@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/espressif/esp-nn",
+  "one_liner": "Espressif's int8 NN kernels in Xtensa/RISC-V PIE SIMD assembly for TFLite Micro, 1.4x to 20x over its ANSI C reference kernels.",
+  "what_it_does": "ESP-IDF component with int8 (s8) kernels for TensorFlow Lite Micro: conv 2D, depthwise conv, fully connected (per-tensor and per-channel), avg/max pool, softmax, relu6, hard_swish, mean, elementwise add/mul, logistic. The public esp_nn_* names are macros that resolve per chip to ESP32-S3 assembly, ESP32-P4/S31 PIE code, generic C for ESP32/ESP32-C3, or the *_ansi reference kernels when 'ANSI C' is chosen in menuconfig. Signatures match the reference kernels, so esp-tflite-micro calls it from its own operator wrappers; conv, depthwise conv, softmax, mean and hard_swish need a caller-provided scratch buffer sized with the matching get_*_scratch_size call.",
+  "how_it_is_fast": "On ESP32-S3 the hot loops are hand-written .S files using the LX7 PIE 128-bit vector extension (ee.vld/ee.vmax.s8/ee.vmin.s8 for pooling, 8- and 16-bit multiply-accumulate into the QACC/ACCX accumulators for conv and FC), with requantization (multiply_by_quantized_mult) also in assembly. ESP32-P4 and ESP32-S31 use C with inline PIE/QACC instructions (esp.vld.128 and friends). Convolutions go through im2col-style staging into 16-bit scratch panels, 1x1 and 3x3 specialisations, and filter panels sized to the configured data cache; an opt-in esp_nn_dual_core_enable() splits heavy kernels by output rows or channels across the second core.",
+  "when_to_use": [
+    "Running int8-quantized TFLite Micro models (person detection, MobileNet, YOLO-class) on ESP32-S3, ESP32-P4 or ESP32-S31, where the README shows 19x to 105x end-to-end invoke() speedups over plain TFLM kernels.",
+    "Hand-calling int8 conv, depthwise, pooling or FC kernels from your own inference code or an AOT compiler on Espressif chips (issue #38 reports calling it directly without the TFLM interpreter).",
+    "Layers with channel counts that are multiples of 8 or 16 and 16-byte-aligned tensors, which hit the vector fast paths.",
+    "Dual-core S3/P4 designs that can spare the second core: esp_nn_dual_core_enable() cut MobileNetV3 Small on P4 from 388 ms to 253 ms in the README."
+  ],
+  "when_not_to_use": [
+    "Any non-Espressif target: the speedups are tied to the S3 and P4/S31 PIE instruction sets; ESP32 and ESP32-C3 only get generic C optimisations.",
+    "Float or int16 models: the library covers int8 (s8) operators only; u8 tests are commented out of the test app.",
+    "When you need bit-exact TFLite reference output and plan to enable CONFIG_NN_SKIP_NUDGE, which trades +/-1 LSB requantization differences for speed.",
+    "Max pool on ESP32-S3 with channel counts that are not multiples of 4: esp_nn_max_pool_s8 maps straight to the assembly kernel, which the source and tests mark as unsupported for that case.",
+    "Safety-critical deployments that cannot absorb recent correctness churn: several layout-dependent kernel bugs were fixed between August and October 2026 and two related issues (#34, #40) are still open."
+  ],
+  "integration": {
+    "form": "static lib (ESP-IDF component, idf.py / component manager, version 1.4.1)",
+    "dependencies": "ESP-IDF (FreeRTOS for the optional dual-core worker); used with esp-tflite-micro for TFLite Micro models",
+    "min_toolchain": "ESP-IDF 5.1+ (idf_component.yml) with the ESP-IDF GCC toolchain; component built at -O2 (S3 adds -mlongcalls -fno-unroll-loops)",
+    "platforms": "ESP32-S3 (Xtensa LX7 PIE assembly), ESP32-P4 and ESP32-S31 (RISC-V PIE; on S31 the PIE unit is on core 1 only), ESP32 and ESP32-C3 (generic C)",
+    "thread_safety": "Not documented; scratch buffers are file-static pointers set by esp_nn_set_*_scratch_buf, so concurrent calls of the same kernel from different tasks are not safe; the dual-core mode uses a single worker task and falls back to single core when called from the worker's core.",
+    "drop_in_for_baseline": "partial — same signatures as the *_ansi reference kernels and selected by menuconfig, but callers must size and set scratch buffers, and the S3 max pool needs channels that are a multiple of 4"
+  },
+  "gotchas": [
+    "Harness flaw behind the README kernel tables: tests/src/*_test.c time one call of the ANSI kernel and then one call of the optimized kernel on the same freshly written buffers (single sample, no warm-up, warm data cache for both), so the 'External' (PSRAM) rows mostly measure cache-resident data; issue #20 (open since March 2025, unanswered) reports a fully connected layer running 5x slower inside esp-tflite-micro than in test_app on ESP32-S3 and suspects exactly this caching difference.",
+    "Reproducing today gives different conditions from the tables: since 58ca1a4 (17 Sep 2026) test_app calls esp_nn_dual_core_enable() on S3 and P4, so split kernels (conv, depthwise, add, mul) run the optimized side on two cores against a single-core ANSI reference; pooling, relu6 and similar tests now print only per-suite sums rather than per-shape cycles; the S3 sdkconfig uses octal 80 MHz PSRAM while the README table says QPI 80 MHz. The kernel tables (April 2026, S31 and FC August 2026) predate the dual-core change, so they are single-core numbers.",
+    "Recent correctness fixes in the measured kernels: S3 max pool dropped the activation_min clamp when channels % 8 == 4 (fixed e102c97, 7 Oct 2026); P4/S31 max pool wrote each pixel over the previous one when channels were not a multiple of 16 because unaligned 128-bit stores were disabled (fixed 8303c3b, 8 Oct 2026); P4 conv 1x1 raised an illegal-instruction fault on a misaligned filter pointer when the per-core PIE unaligned bits were unset (issue #40, fix 538d722, issue still open). The README shapes (16 channels, full -128..127 activation range, aligned buffers) do not hit these bugs, so the table ratios stand, but production layouts could.",
+    "Issue #34 (open): ESP32-S3 per-channel fully connected gave memory-layout-dependent wrong logits in 1.1.x to 1.2.5; the maintainer traced it to input alignment and shipped a fix in 1.2.6, which the reporter has not confirmed. The PIE CFG register is per core and not saved per task, so other code on the core can clear the unaligned-access bits."
+  ],
+  "pick_this_over_siblings_when": "Pick it over ESP-DSP (same vendor, same chips) when the workload is int8 quantized neural-network layers rather than float or int16 signal processing; unlike pqm4 or Qfplib it targets Espressif's PIE vector units rather than Cortex-M, so on an ESP32-S3/P4 running TFLite Micro it is the default choice rather than an alternative.",
+  "verified_claims_summary": "Espressif's README reports single-call CPU-cycle counts of each int8 kernel against the library's own ANSI C reference kernel on the same chip and build (-O2, ESP-IDF GCC, version not stated): on a 240 MHz ESP32-S3, 1x1 conv 64->64 on a 10x10 map 4,712,500 vs 331,008 ticks (14.2x), relu6 11.5x, max pool 7.8x, fully connected 5.5x, softmax 1.4x; on a 360 MHz ESP32-P4, max pool 19.9x, conv 7.0x, hard_swish 1.4x. Outputs are checked bit-exact against the reference, but each number is one warm-cache call, and the model-level tables (Person Detection 2300 ms to 54 ms on S3) compare TFLite Micro with and without ESP-NN rather than the same C kernels.",
+  "status_note": "Actively maintained by Espressif (219 commits, version 1.4.1, last commit 8 Oct 2026, 273 stars), Apache-2.0 and easy to vendor as an ESP-IDF component, but kernel tables predate the September 2026 S3 conv/FC/softmax tuning and the October 2026 max-pool and PIE alignment fixes, and issues #34 and #40 on layout-dependent faults are still open.",
+  "sources_read": [
+    "https://github.com/espressif/esp-nn",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/README.md",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/Kconfig.projbuild",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/idf_component.yml",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/include/esp_nn.h",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/include/esp_nn_defs.h",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/include/esp_nn_esp32s3.h",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/include/esp_nn_multicore.h",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/src/common/esp_nn_multicore.c",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/src/convolution/esp_nn_conv_esp32s3.c",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/src/pooling/esp_nn_max_pool_s8_esp32s3.S",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/tests/CMakeLists.txt",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/tests/include/test_utils.h",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/tests/src/test_utils.c",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/tests/src/pooling_test.c",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/tests/src/convolution_test.c",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/test_app/main/main.c",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/test_app/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/test_app/sdkconfig.defaults",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/test_app/sdkconfig.defaults.esp32s3",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/test_app/sdkconfig.defaults.esp32p4",
+    "https://raw.githubusercontent.com/espressif/esp-nn/HEAD/CONTRIBUTING.md",
+    "https://github.com/espressif/esp-nn/tree/master/test_app/main",
+    "https://github.com/espressif/esp-nn/commits/master",
+    "https://github.com/espressif/esp-nn/commits/master/README.md",
+    "https://github.com/espressif/esp-nn/commits/master/test_app/main/main.c",
+    "https://github.com/espressif/esp-nn/commit/e102c97",
+    "https://github.com/espressif/esp-nn/commit/8303c3b",
+    "https://github.com/espressif/esp-nn/issues",
+    "https://github.com/espressif/esp-nn/issues/20",
+    "https://github.com/espressif/esp-nn/issues/34",
+    "https://github.com/espressif/esp-nn/issues/40"
+  ],
+  "confidence": 0.8
+}

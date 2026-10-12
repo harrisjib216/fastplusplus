@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/etlcpp/etl#small-buffer-and-strings",
+  "one_liner": "Heap-free fixed-capacity strings (etl::string<N>) and STL-style algorithms for embedded C++03+; no speed claim versus std::string or std::sort.",
+  "what_it_does": "etl::string<N> (plus wstring, u8/u16/u32string and *_ext variants over a caller-supplied buffer) stores up to N characters inside the object and never allocates; overlong input is truncated and a truncated() flag is set. etl::istring is a size-erased base for passing strings of different capacities. etl/algorithm.h re-implements the <algorithm> set (plus extras such as shell_sort, heap_sort, selection_sort, copy_s, multimin) so code can build without the STL; it is a separate type and namespace, not a drop-in for std::string.",
+  "how_it_is_fast": "No speed technique: the only performance property is that construction, copy and append never call malloc, so long strings cost no allocator call and latency is bounded by N. Bulk copies of pointer ranges use memmove and C-string length uses ::strlen, but compare() is a character loop and find() of a substring is the naive O(n*m) etl::search (no memchr/memcmp). With the STL enabled, etl::sort and etl::stable_sort simply call std::sort and std::stable_sort; with ETL_NO_STL they fall back to etl::shell_sort and etl::insertion_sort.",
+  "when_to_use": [
+    "Firmware or RTOS code that bans heap allocation but wants a std::string-like API (append, find, replace, compare) with a hard length bound.",
+    "Fixed-format text such as protocol fields, log lines or display buffers whose maximum length is known and where silent or flagged truncation is acceptable.",
+    "Strings that must live in static storage, shared memory or a memcpy'd struct (repair() fixes the internal pointer after a raw copy; *_ext strings wrap an existing char buffer).",
+    "C++03 toolchains without <algorithm>, where etl::heap_sort, etl::lower_bound and friends stand in for the missing STL."
+  ],
+  "when_not_to_use": [
+    "Throughput-oriented string processing: substring find is a naive nested loop and compare is char-by-char, so expect no win and possibly a loss against std::string's library-optimised search and comparison.",
+    "Strings with no sensible upper bound, or many mostly-short strings with a large N: every etl::string<N> occupies N+1 chars plus a buffer pointer, size, capacity and a flag byte regardless of content.",
+    "Code that relies on cheap moves: etl::string has no move constructor, so moving or returning one without copy elision copies size() characters, unlike std::string's pointer steal for heap strings.",
+    "Sorting more than a few thousand elements with ETL_NO_STL defined: etl::sort becomes etl::shell_sort, whose inner loop never exits early, so it does about n^2 comparisons for every input (98,176,009 for n=10,000, counted from the loop bounds), even on already sorted data."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (uses the STL if present unless ETL_NO_STL is defined; ::strlen/::wcslen from the C library)",
+    "min_toolchain": "C++03 (C++98 badge); CI on GCC and Clang for C++11 through C++26 and MSVC; README says tested with VS2022, GCC 12, Clang 14",
+    "platforms": "any (bare metal, RTOS, desktop); Arduino, Zephyr, PlatformIO and Conan packages exist",
+    "thread_safety": "not documented; no internal synchronisation in the string code read",
+    "drop_in_for_baseline": "partial: member functions mirror std::basic_string, but etl::string<N> is a different type with a capacity template parameter and truncates instead of growing"
+  },
+  "gotchas": [
+    "Truncation is silent by default: text past capacity is dropped and only the truncated() flag records it; an error is raised only if ETL_STRING_TRUNCATION_IS_ERROR (or ETL_ENABLE_ERROR_ON_STRING_TRUNCATION) is defined, and a string assigned from a truncated string inherits the flag even when it fits.",
+    "etl::shell_sort (used by etl::sort under ETL_NO_STL, the configuration the README and setup page profiles show) uses Shell's n/2 gap sequence with no early break in the inner loop, so it is Theta(n^2) on every input; use etl::heap_sort (since 16.2.0) for larger ranges. etl::stable_sort under ETL_NO_STL is upper_bound+rotate insertion sort, O(n^2) element moves.",
+    "etl::find and etl::search are always ETL's own loops, even when the STL is available; only sort and stable_sort forward to std.",
+    "The secure-clear feature is compiled in by default (ETL_DISABLE_STRING_CLEAR_AFTER_USE removes it): once set_secure() marks a string, it zeroes all unused capacity after every modification, an O(N) cost per edit."
+  ],
+  "pick_this_over_siblings_when": "Pick etl::string over EASTL fixed_string or Coost fastring when you need a strictly heap-free string with a truncation flag on a C++03 or no-STL embedded toolchain; pick EASTL's string (published std::string ratios), FastString or MengRao/str when the goal is measured speed over std::string, and to_static_string when you only need allocation-free number formatting.",
+  "verified_claims_summary": "Nothing was measured: no numbers for etl::string versus std::string or etl::sort versus std::sort exist in the README, docs (strings, utilities/algorithms, blog), test tree or issue tracker; the only ETL timing (GitHub issue #13, Dec 2016, VS2015 /O2) covers unordered_map, not strings or algorithms. Code reading shows no speed technique beyond avoiding the heap, and the no-STL sort path is quadratic.",
+  "status_note": "Actively maintained (v20.49.0, last commit 2026-10-04, 3.1k stars) MIT header-only library, copyable; useful for heap-free determinism, not for speed, and this record stays a tier D placeholder with a documented quadratic etl::shell_sort under ETL_NO_STL.",
+  "sources_read": [
+    "https://github.com/ETLCPP/etl",
+    "https://raw.githubusercontent.com/ETLCPP/etl/HEAD/README.md",
+    "https://raw.githubusercontent.com/ETLCPP/etl/HEAD/include/etl/basic_string.h",
+    "https://raw.githubusercontent.com/ETLCPP/etl/HEAD/include/etl/string.h",
+    "https://raw.githubusercontent.com/ETLCPP/etl/HEAD/include/etl/algorithm.h",
+    "https://raw.githubusercontent.com/ETLCPP/etl/HEAD/include/etl/platform.h",
+    "https://raw.githubusercontent.com/ETLCPP/etl/HEAD/include/etl/error_handler.h",
+    "https://raw.githubusercontent.com/ETLCPP/etl/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ETLCPP/etl/HEAD/version.txt",
+    "https://raw.githubusercontent.com/ETLCPP/etl/HEAD/library.json",
+    "https://github.com/ETLCPP/etl/tree/master/docs",
+    "https://github.com/ETLCPP/etl/tree/master/docs/strings",
+    "https://github.com/ETLCPP/etl/tree/master/docs/getting-started",
+    "https://raw.githubusercontent.com/ETLCPP/etl/HEAD/docs/strings/string.md",
+    "https://raw.githubusercontent.com/ETLCPP/etl/HEAD/docs/strings/_index.md",
+    "https://raw.githubusercontent.com/ETLCPP/etl/HEAD/docs/utilities/algorithms.md",
+    "https://raw.githubusercontent.com/ETLCPP/etl/HEAD/docs/getting-started/macros.md",
+    "https://raw.githubusercontent.com/ETLCPP/etl/HEAD/docs/getting-started/setup.md",
+    "https://raw.githubusercontent.com/ETLCPP/etl/HEAD/docs/getting-started/no-stl.md",
+    "https://raw.githubusercontent.com/ETLCPP/etl/HEAD/docs/getting-started/compilers.md",
+    "https://github.com/ETLCPP/etl/issues?q=is%3Aissue+sort",
+    "https://github.com/ETLCPP/etl/issues?q=is%3Aissue+performance",
+    "https://github.com/ETLCPP/etl/issues/13"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,65 @@
+{
+  "id": "paper:eastl-hash-map-hash-set",
+  "one_liner": "EA's chained hash table (eastl::hash_map/hash_set), about 1.3x faster than libstdc++ std::unordered_map in Ankerl's 2019 suite.",
+  "what_it_does": "eastl::hash_map and eastl::hash_set are EASTL's unordered containers, built on internal/hashtable.h with the C++11 unordered-container interface (insert, emplace, find, operator[], erase, bucket and load-factor calls). Additions over std: find_as for lookup by another key type (char* against string keys), transparent find, find_by_hash and insert with a caller-supplied hash code, named debug allocations, aligned value types and builds without exceptions. The interface is std-like, but the namespace, allocator model and types differ, so it cannot be passed where a std::unordered_map is expected.",
+  "how_it_is_fast": "It uses separate chaining with one singly linked list per bucket: a node is the value plus a next pointer, with no cached hash unless bCacheHashCode is set. Bucket counts come from a static prime table (index = hash % prime), with max load factor 1.0 and 2x growth. A new empty table points at a shared two-entry bucket array, so it allocates nothing, and a trailing non-null sentinel bucket keeps iteration's end check cheap. Its edge over libstdc++ is a constant factor within the same node-based design, not a different algorithm. In Ankerl's data it used less memory at 500k entries (11.3 vs 19.9 MB) and 24-bit insert/erase (312 vs 510 MB), but more at 100M ints (4153 vs 3986 MB).",
+  "when_to_use": [
+    "Codebases already on EASTL, or built without exceptions, that want a std::unordered_map-shaped table with stable node addresses and EASTL's allocator model.",
+    "Lookup-heavy maps of integers or short strings when the alternative is libstdc++ std::unordered_map: Ankerl's 2019 data show 1.2-1.7x faster random find at 200 to 500,000 entries with the same hash.",
+    "Insert/erase churn on small-to-medium tables (Ankerl random insert/erase 1.26-1.77x faster than std at 4-24 bits).",
+    "String-keyed maps queried by const char* or by a precomputed hash (find_as, find_by_hash), which avoids building temporary keys."
+  ],
+  "when_not_to_use": [
+    "When an open-addressing map is acceptable. In the same 2019 data absl::flat_hash_map is about 2.4x faster and robin_hood::unordered_flat_map about 2.9x faster (geomean), and EASTL wins none of 63 rows against either (derived from page data).",
+    "When you need pointer stability and speed together. Node-stable maps also beat it there: absl::node_hash_map about 1.85x (EASTL wins 4 of 63 rows), robin_hood::unordered_node_map about 2.2x (wins 0) and folly::F14NodeMap about 1.3x (wins 16 of 64), all derived from page data.",
+    "Teardown-heavy or iterate-and-erase workloads: clear of 100M ints ran at 0.53x of std, the destructor at 0.39x, iterate-while-removing at 0.84x and distinct counting at 0.80-0.85x. DoFreeNodes walks every bucket.",
+    "Projects that would adopt EABase, EASTL's build and its operator new[] allocator hooks just for one container."
+  ],
+  "integration": {
+    "form": "static lib (headers plus source/hashtable.cpp, which defines the shared empty bucket array and the prime table)",
+    "dependencies": "EABase (CMake FetchContent); with the default allocator the application must define EASTL's two operator new[] overloads",
+    "min_toolchain": "C++14 (target_compile_features cxx_std_14); hashtable.h did not compile under -std=c++14 until the October 2025 fixes (issue #585, commits #586/#588)",
+    "platforms": "any (portable C++, no SIMD or platform-specific code in hashtable.h)",
+    "thread_safety": "No internal locking, so concurrent mutation needs external synchronization; hashtable.h avoids writing the global shared empty-bucket array so that empty tables in different threads do not race",
+    "drop_in_for_baseline": "partial: same member-function shape and node/reference stability as std::unordered_map, but a different namespace, allocator model and type, so APIs taking std::unordered_map need changes"
+  },
+  "gotchas": [
+    "reserve(n) always rehashes: it allocates a new bucket array, relinks every node and frees the old one, even when the bucket count would not change. With n below size() it shrinks the bucket count, so the load factor rises until the next insert triggers growth (hashtable.h reserve, rehash and DoRehash; issue #521 has been open since 2023 with no maintainer reply).",
+    "begin() and iterator increment scan empty buckets, and clear() keeps the bucket array (clear(true) frees it). begin() on a large, mostly empty table is O(bucket_count), so erase(begin()) loops can turn quadratic.",
+    "EASTL's own benchmark tables mislead on two rows. The find_as/char* rows compare EASTL's find_as with the baseline's find(c_str()), which builds a temporary std::string per lookup, so most of the 3.70x (VC++ 7.1), 2.73x (STLport Release) and 12.49x (STLport Debug) gain is that conversion; STLport Release find is 1.04x. The uint32_t maps in benchmark/source/BenchmarkHash.cpp also use each library's default hash (std::hash vs eastl::hash) instead of a shared functor.",
+    "With bCacheHashCode=true the hash code is stored and used as uint32_t, so the high 32 bits of a 64-bit hash are dropped; the default (false) uses the full size_t hash modulo a prime. The rehash policy works in uint32_t, and the largest bucket count is 4294967291."
+  ],
+  "pick_this_over_siblings_when": "Pick it only when you are already on EASTL or need its no-exceptions and allocator model. On speed, absl::flat_hash_map, robin_hood, tsl::robin_map and ska::flat_hash_map beat it in nearly every row of the same 2019 data, and node-stable alternatives (absl::node_hash_map, F14NodeMap) win most rows. It does beat boost::unordered_map 1.65 (about 1.15x geomean, derived from page data).",
+  "verified_claims_summary": "In Martin Ankerl's 2019 map_benchmark, eastl::hash_map beat libstdc++ std::unordered_map using the same hash functor in 56 of 63 workloads: geomean 1.31x with robin_hood::hash and 1.31-1.42x across five hashes, random find 1.21-1.72x, insert/erase 1.05-1.77x (derived from page data). It lost on clear (0.53x), destruction (0.39x) and 5% and 100% distinct counting, and its result checksums matched std's in every row. The build per the repo at the time (tools/build.sh and CMakeLists.txt at commit 512810d) was g++-8 Release, -O3 -march=native, C++14, pinned with taskset to an isolated core pair of a 6-core/12-thread CPU with 4.6 GHz max; the blog names it an i7-8700 (snippet only). EASTL's first-party 0.96 tables (VC++ 7.1, against the pre-standard stdext::hash_map) show 1.2-3.8x, but near parity against STLport.",
+  "status_note": "Actively maintained: last commit 2025-10-29 with C++14 build fixes, 9.4k stars, BSD-3-Clause. It is usable today, but the measured advantage is over std::unordered_map only, its own tables are about 20 years old, and the 2022 rerun of Ankerl's suite dropped it.",
+  "sources_read": [
+    "https://github.com/electronicarts/EASTL",
+    "https://github.com/electronicarts/EASTL/commits",
+    "https://raw.githubusercontent.com/electronicarts/EASTL/HEAD/include/EASTL/internal/hashtable.h",
+    "https://raw.githubusercontent.com/electronicarts/EASTL/HEAD/include/EASTL/hash_map.h",
+    "https://raw.githubusercontent.com/electronicarts/EASTL/HEAD/include/EASTL/hash_set.h",
+    "https://raw.githubusercontent.com/electronicarts/EASTL/HEAD/source/hashtable.cpp",
+    "https://raw.githubusercontent.com/electronicarts/EASTL/HEAD/benchmark/source/BenchmarkHash.cpp",
+    "https://raw.githubusercontent.com/electronicarts/EASTL/HEAD/doc/Benchmarks.md",
+    "https://raw.githubusercontent.com/electronicarts/EASTL/HEAD/CMakeLists.txt",
+    "https://github.com/electronicarts/EASTL/issues?q=is%3Aissue+hash_map",
+    "https://github.com/electronicarts/EASTL/issues?q=is%3Aissue+hashtable",
+    "https://github.com/electronicarts/EASTL/issues/521",
+    "https://raw.githubusercontent.com/martinus/map_benchmark/HEAD/data/all.txt",
+    "https://github.com/martinus/map_benchmark/commits/master/data/all.txt",
+    "https://github.com/martinus/map_benchmark/tree/master/src/maps",
+    "https://github.com/martinus/map_benchmark/commits/master/src/maps/eastl_hash_map",
+    "https://github.com/martinus/map_benchmark/tree/2f094ef38c690f0c05b8f01b56cfa68672a9d963/src/maps/eastl_hash_map",
+    "https://raw.githubusercontent.com/martinus/map_benchmark/2f094ef38c690f0c05b8f01b56cfa68672a9d963/src/maps/eastl_hash_map/Map.h",
+    "https://raw.githubusercontent.com/martinus/map_benchmark/2f094ef38c690f0c05b8f01b56cfa68672a9d963/src/maps/eastl_hash_map/Map.cpp",
+    "https://raw.githubusercontent.com/martinus/map_benchmark/2f094ef38c690f0c05b8f01b56cfa68672a9d963/src/maps/std_unordered_map/Map.h",
+    "https://raw.githubusercontent.com/martinus/map_benchmark/2f094ef38c690f0c05b8f01b56cfa68672a9d963/CMakeLists.txt",
+    "https://raw.githubusercontent.com/martinus/map_benchmark/2f094ef38c690f0c05b8f01b56cfa68672a9d963/README.md",
+    "https://raw.githubusercontent.com/martinus/map_benchmark/512810d7bfc568067a653581847b02bb1c683ea9/CMakeLists.txt",
+    "https://raw.githubusercontent.com/martinus/map_benchmark/512810d7bfc568067a653581847b02bb1c683ea9/README.md",
+    "https://raw.githubusercontent.com/martinus/map_benchmark/512810d7bfc568067a653581847b02bb1c683ea9/.gitmodules",
+    "https://raw.githubusercontent.com/martinus/map_benchmark/512810d7bfc568067a653581847b02bb1c683ea9/tools/build.sh",
+    "https://raw.githubusercontent.com/martinus/map_benchmark/512810d7bfc568067a653581847b02bb1c683ea9/tools/bench.rb"
+  ],
+  "confidence": 0.75
+}

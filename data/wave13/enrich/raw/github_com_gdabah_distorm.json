@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/gdabah/distorm",
+  "one_liner": "Small table-driven x86/AMD64 decoder in C; decode+format runs 2.6-4.2x faster than Zydis, bddisasm, XED and Capstone in disas-bench.",
+  "what_it_does": "diStorm3 turns a buffer of x86 machine code (16-, 32- or 64-bit mode) into an array of _DInst structs: opcode id, up to four typed operands, displacement, immediate, prefixes, flow-control class and optionally EFLAGS effects. distorm_decompose64 is the core call; distorm_format64 turns one _DInst into mnemonic/operand/hex text, and distorm_decode64 does both in the old text-only interface. It is a disassembler library, not an assembler, and it has its own API, so it does not replace Capstone or Zydis calls without porting.",
+  "how_it_is_fast": "Opcode lookup walks a trie of statically generated tables ('gates', 256-entry for opcode bytes, 8 or 72 for ModR/M reg fields) built by the disOps generator, so most instructions resolve in about three array lookups. The decoder allocates nothing, works on a stack copy of _CodeInfo, writes compact fixed-size structs into a caller-provided batch array, and formatting is a separate pass that callers can skip. Its instruction tables stop at AVX/FMA/AES/CLMUL (no AVX2, AVX-512, BMI1/2 or CET), which also keeps them small.",
+  "when_to_use": [
+    "Bulk linear sweeps over legacy or baseline x86-64 code (SSE/AVX1-era compilers, Windows binaries, 32-bit and 16-bit code) where decode or decode+format throughput matters and the C decoders you have are Capstone, Zydis, XED or bddisasm.",
+    "Flow-control scanning: DF_RETURN_FC_ONLY and the DF_STOP_ON_CALL/RET/BRANCH flags filter or stop inside the decoder, which suits call-graph or hook-site discovery (the author's distormx hooking library is built on it).",
+    "Embedding a tiny (~45 KB), dependency-free, BSD-licensed decoder into a C or C++ tool where a larger multi-architecture framework is unwanted.",
+    "Python scripting that needs a C-speed x86 decoder (distorm3 package), provided the instruction-set gaps below do not matter."
+  ],
+  "when_not_to_use": [
+    "Code built for x86-64-v3/v4 or with hand-written SIMD: AVX2 (issue #77, open since 2015; the maintainer wrote in 2022 'It's too hard to implement for outsiders'), AVX-512/ZMM (#186), BMI1/BMI2, ADX, SHA and ENDBR64 (#188) are not decoded; mnemonics.h has no VPERMD, VPBROADCASTD, VPGATHER*, ANDN, PDEP, PEXT, MULX, KMOV or ENDBR64.",
+    "When you need the fastest decoder regardless of language: iced and yaxpeax-x86 decode 2-3x faster in every disas-bench run, and bddisasm's mini decoder ties diStorm on decode-only in the 2025 runs.",
+    "When you need encoding/assembly (it has no assembler) or other architectures (x86 only; use Capstone).",
+    "Projects that need fixes or new instructions: last commit 2021-12-18 (v3.5.3), PyPI still at 3.5.2 (2021-03-19) with only a win32 cp37 wheel, 10 open issues and 6 open PRs."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (make/linux, make/mac, make/win32 cdistorm.vcxproj); src/*.c can also be source-dropped; Python extension via setup.py",
+    "dependencies": "none (C standard library only)",
+    "min_toolchain": "C99 (Makefile uses -std=c99); MSVC project provided; header has fallbacks for MSVC without stdint.h and for TinyCC",
+    "platforms": "Host: any (big-endian handled by BE_SYSTEM macros; Linux, macOS, Windows build files). Decodes x86 16/32/64-bit only.",
+    "thread_safety": "not documented; by inspection decode_internal works on a local copy of _CodeInfo, allocates no heap memory and the only static table seen (Nibble2ChrTable) is read-only, so concurrent calls on separate buffers look safe",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Unsupported or invalid bytes come back as 1-byte entries with flags == FLAG_NOT_DECODABLE and decoding resumes at the next byte, so AVX2/AVX-512/BMI/ENDBR64 instructions are silently split into junk instructions; check the flag. In benchmarks this also means diStorm walks different instruction boundaries than full-ISA decoders in those regions: the icedland/disas-bench driver formats these entries and never counts them, and the later athre0z driver counts valid vs bad instructions but the README does not publish the counts, so the share of xul.dll diStorm could not decode is unknown.",
+    "SUPPORT_64BIT_OFFSET must be defined the same way in the library build and in your code, or you get an unresolved-symbol link error (distorm.h comment); distorm_decode needs maxInstructions >= 15.",
+    "DECRES_MEMORYERR is the normal 'output array full' return, not a failure: advance code by the last instruction's addr+size and call again, as the benchmark driver does.",
+    "Known decode bugs left open: pushf and pushfw (9c / 66 9c) both decode as pushf in 64-bit mode (#181); the text formatter has no syntax option (one fixed Intel-style format)."
+  ],
+  "pick_this_over_siblings_when": "Pick diStorm over Capstone, Zydis, Intel XED, bddisasm or udis86 when you want a small C decoder with roughly 2.6-4.9x their decode+format throughput (udis86 is only 1.14x slower on decode-only) on pre-AVX2 code and can live with no AVX2/AVX-512 support; pick iced or yaxpeax-x86 when Rust is acceptable and you want 2-3x more speed with full ISA coverage, and Zydis, XED or bddisasm when correctness on modern instruction sets matters more than speed.",
+  "verified_claims_summary": "In icedland/disas-bench (June 2021, i5-6600K, Kubuntu 21.04, gcc 10.3.0 with -flto -O3 drivers, one run per library over the .text of Firefox 86 xul.dll) diStorm decoded at 92.17 MB/s and decoded+formatted at 58.85 MB/s, against Zydis 34.19/22.24, XED 55.39/15.67, bddisasm 35.48/16.00 and Capstone 14.02 (decode+format; it has no decode-only mode), while iced (256.69/149.21) and yaxpeax (182.08 decode) were faster. The October 2025 athre0z/disas-bench charts (Ryzen 9 9950X with GCC 13.3, i9-13900K with GCC 14.2; bar lengths read against axis ticks, approximate) keep the order: diStorm about 99 and 93 MB/s decode+format vs Capstone about 27 and 26, Zydis full about 33 and 35, XED about 21 and 19, bddisasm about 47 and 35; decode-only about 169 and 153 vs Zydis full about 50 and 56, XED about 67 and 73, bddisasm mini about 179 and 179, iced about 362 and 390 MB/s (derived from page data).",
+  "status_note": "Abandoned since 2021-12-18 (v3.5.3; the maintainer declined AVX2 work in 2016 and 2022), but BSD-3-Clause, dependency-free C99 and small enough to vendor for pre-AVX2 x86 code.",
+  "sources_read": [
+    "https://github.com/gdabah/distorm",
+    "https://github.com/gdabah/distorm/commits/master",
+    "https://github.com/gdabah/distorm/issues",
+    "https://github.com/gdabah/distorm/issues?q=is%3Aissue+avx",
+    "https://github.com/gdabah/distorm/issues/77",
+    "https://raw.githubusercontent.com/gdabah/distorm/HEAD/README.md",
+    "https://raw.githubusercontent.com/gdabah/distorm/HEAD/COPYING",
+    "https://raw.githubusercontent.com/gdabah/distorm/HEAD/include/distorm.h",
+    "https://raw.githubusercontent.com/gdabah/distorm/HEAD/include/mnemonics.h",
+    "https://raw.githubusercontent.com/gdabah/distorm/HEAD/make/linux/Makefile",
+    "https://raw.githubusercontent.com/gdabah/distorm/HEAD/setup.py",
+    "https://raw.githubusercontent.com/gdabah/distorm/HEAD/src/config.h",
+    "https://raw.githubusercontent.com/gdabah/distorm/HEAD/src/decoder.c",
+    "https://raw.githubusercontent.com/gdabah/distorm/HEAD/src/textdefs.c",
+    "https://raw.githubusercontent.com/gdabah/distorm/HEAD/src/instructions.c",
+    "https://pypi.org/pypi/distorm3/json",
+    "https://raw.githubusercontent.com/icedland/disas-bench/HEAD/README.md",
+    "https://raw.githubusercontent.com/icedland/disas-bench/HEAD/bench.py",
+    "https://raw.githubusercontent.com/icedland/disas-bench/HEAD/make-all.sh",
+    "https://raw.githubusercontent.com/icedland/disas-bench/HEAD/bench/distorm/main.c",
+    "https://raw.githubusercontent.com/icedland/disas-bench/HEAD/bench/distorm/Makefile",
+    "https://raw.githubusercontent.com/icedland/disas-bench/HEAD/bench/load_bin.inc",
+    "https://raw.githubusercontent.com/icedland/disas-bench/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/icedland/disas-bench/HEAD/bench/zydis/main.c",
+    "https://raw.githubusercontent.com/icedland/disas-bench/HEAD/bench/xed/main.c",
+    "https://raw.githubusercontent.com/iximeow/disas-bench/HEAD/README.md",
+    "https://raw.githubusercontent.com/athre0z/disas-bench/HEAD/README.md",
+    "https://raw.githubusercontent.com/athre0z/disas-bench/HEAD/bench-amd.png",
+    "https://raw.githubusercontent.com/athre0z/disas-bench/HEAD/bench-intel.png",
+    "https://raw.githubusercontent.com/athre0z/disas-bench/HEAD/bench.py",
+    "https://raw.githubusercontent.com/athre0z/disas-bench/HEAD/make-all.sh",
+    "https://raw.githubusercontent.com/athre0z/disas-bench/HEAD/bench/distorm/main.c",
+    "https://raw.githubusercontent.com/athre0z/disas-bench/HEAD/bench/distorm/Makefile",
+    "https://github.com/athre0z/disas-bench/commits/master"
+  ],
+  "confidence": 0.8
+}
