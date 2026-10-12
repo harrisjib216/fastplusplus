@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/rust-lang/regex",
+  "one_liner": "Rust's linear-time finite-automata regex engine; faster than PCRE2 JIT and RE2 on most search benchmarks, slower to compile.",
+  "what_it_does": "General-purpose regex search for Rust (find, find_iter, captures, replace_all, split, RegexSet for many patterns in one scan) over &str, or over arbitrary bytes through regex::bytes. The syntax is Perl-like with leftmost-first semantics but has no backreferences or look-around, which buys an O(m*n) worst-case bound per search. C and C++ callers can use the rure C API in regex-capi, which has no replace or split. It is not a drop-in for PCRE2 or RE2: the API and the supported syntax both differ.",
+  "how_it_is_fast": "The crate is a thin wrapper over regex-automata's meta::Regex, which picks an engine per pattern and per call: a lazy (hybrid) DFA built on demand, a one-pass DFA and a bounded backtracker for capture groups, and a PikeVM as the fallback. Literal extraction feeds SIMD prefilters from memchr and aho-corasick (Teddy) that skip to candidate positions, including prefix, reverse-suffix and reverse-inner literal optimizations. No backtracking means no catastrophic cases, and the DFA runs at near memory speed on literal-heavy patterns.",
+  "when_to_use": [
+    "Scanning large haystacks (logs, source trees, documents) with literal-anchored patterns: LangArena's 13 log-grep patterns ran 1.6x faster than C with PCRE2 JIT and 3.3x faster than C++ with RE2.",
+    "Untrusted haystacks or user-supplied patterns where ReDoS matters: the per-search O(m*n) bound plus RegexBuilder::size_limit cap both time and memory.",
+    "Matching many patterns at once with RegexSet, or Unicode-aware classes (\\w, \\d, \\p{Greek}, case folding) without extra flags.",
+    "Any Rust project as the default regex choice (1.25 billion crates.io downloads; the engine behind ripgrep); from C or C++ only if you can build a Rust static library."
+  ],
+  "when_not_to_use": [
+    "Patterns that need backreferences, look-around or recursion: use PCRE2.",
+    "Capture-heavy replacement of many small matches: LangArena Template::Regex (replace_all on {{(.*?)}} with a captures closure) ran 3.2x slower than C with PCRE2 JIT (3.699 s vs 1.155 s).",
+    "Workloads dominated by compiling many patterns at run time: rebar's compile-time geometric mean is 11.85 for regex vs 1.41 for the PCRE2 interpreter and 6.20 for PCRE2 JIT; one dictionary pattern takes 1.29 ms to compile vs 120 us for PCRE2.",
+    "Maximum throughput on x86 multi-literal scans: Hyperscan beats regex on 16 of the 28 shared rebar benchmarks, about 1.45x overall.",
+    "Pure C/C++ builds that cannot add a Rust toolchain; the rure C API also lacks replace and split."
+  ],
+  "integration": {
+    "form": "crate (regex on crates.io); C API via regex-capi (librure), built from the repo with cargo",
+    "dependencies": "regex-automata and regex-syntax; memchr and aho-corasick through the default perf-literal feature (can be disabled)",
+    "min_toolchain": "Rust 1.65 (MSRV may rise in minor releases); edition 2021",
+    "platforms": "any Rust target; LangArena also ran it as wasm32-wasip1 (1.16 to 1.24 s on LogParser vs 0.30 s native)",
+    "thread_safety": "Regex is safe to share across threads; each search borrows mutable scratch space from an internal pool, which can contend on short haystacks; the docs advise cloning the Regex per thread (the compiled part is reference counted).",
+    "drop_in_for_baseline": "partial: the syntax subset is close to PCRE/RE2 minus backreferences and look-around, but the API is Rust (or the rure C API), not pcre2_* or RE2::"
+  },
+  "gotchas": [
+    "regex 1.13.1 (2026-07-15, PR #1364 for issue #1354) fixed reverse-suffix and reverse-inner optimizations that could report a wrong leftmost-first match span. The fix cost speed: the PR's own rebar diff shows curated/06-cloud-flare-redos 1.80x and 1.97x slower and non-curated benchmarks up to 61x slower (bounded-strings-ending-z, reallyhard0-32k, word-ending-nn). rebar's curated numbers (regex 1.12.2, 2025-12-19) predate the fix; adjusting the two curated rows gives about 2.05x vs PCRE2 JIT (was 2.13x) and 26 of 31 wins vs RE2 at about 4.1x (was 27 at 4.3x), derived from page data.",
+    "find_iter and captures_iter are worst case O(m*n^2), not O(m*n): each match restarts a search (crate docs example `.*[^A-Z]|[A-Z]`). Use regex-automata's earliest mode if both pattern and haystack are untrusted.",
+    "Compiling is expensive (microseconds to milliseconds); compiling inside a loop is the common performance bug. Use the regex! macro (new in 1.13.0) or a LazyLock static.",
+    "Unicode is on by default: \\w, \\d and \\s are Unicode classes, and . matches a UTF-8 code point. Large Unicode classes with counted repetition can be slow or hit the size limit; use (?-u) or regex::bytes for byte-oriented matching."
+  ],
+  "pick_this_over_siblings_when": "Pick regex when you need a general-purpose embeddable engine with a linear-time guarantee. Ferroni (Rust port of Oniguruma) fits when you need Oniguruma syntax such as look-around or backreferences; YARA-X is a malware-rule scanner and fastgrep a grep CLI, not general regex libraries.",
+  "verified_claims_summary": "rebar (by the crate's author, regex 1.12.2 vs PCRE2 10.47 and RE2 2025-11-05 built from source by the cc crate, CPU not stated) shows regex faster than PCRE2 JIT on 21 of 34 shared search benchmarks (2.13x geometric mean) and faster than RE2 on 27 of 31 (4.3x), but slower than Hyperscan. LangArena (independent, regex 1.13.1 per its Cargo.lock, rustc 1.99.0 on an AMD Ryzen 7 3800X) counts 13 log-grep patterns in 0.302 s vs 0.485 to 0.501 s for every C build using Ubuntu 26.04's libpcre2 with JIT and 0.99 s for C++ with libre2.",
+  "status_note": "Actively maintained by Andrew Gallant under rust-lang (1.13.1 released 2026-07-15, last commit 2026-08-10, 2 open bug issues, one published advisory, GHSA-m5pq-gvj9-9vr8 of March 2022, high severity, slow parsing of large repetitions of empty sub-expressions); MIT OR Apache-2.0 and copyable. LangArena harness checked: no flaw inflates Rust's result (fixed checksum 2439432 across languages; all 17 C builds land at 0.485 to 0.501 s because the time is spent inside the distro libpcre2, so the C compiler flags do not matter; the C side runs PCRE2 in UTF mode without UCP while Rust uses Unicode classes, a small handicap to Rust on ASCII logs if anything).",
+  "sources_read": [
+    "https://raw.githubusercontent.com/rust-lang/regex/HEAD/README.md",
+    "https://raw.githubusercontent.com/rust-lang/regex/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/rust-lang/regex/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/rust-lang/regex/HEAD/UNICODE.md",
+    "https://raw.githubusercontent.com/rust-lang/regex/HEAD/regex-capi/README.md",
+    "https://raw.githubusercontent.com/rust-lang/regex/HEAD/src/lib.rs",
+    "https://github.com/rust-lang/regex/pull/1364",
+    "https://github.com/rust-lang/regex/security",
+    "https://github.com/rust-lang/regex/issues?q=is%3Aissue+is%3Aopen+label%3Abug",
+    "https://github.com/rust-lang/regex/issues?q=is%3Aissue+is%3Aopen+label%3Aperformance",
+    "https://crates.io/api/v1/crates/regex",
+    "https://raw.githubusercontent.com/BurntSushi/rebar/HEAD/README.md",
+    "https://github.com/BurntSushi/rebar/tree/master/record/curated",
+    "https://raw.githubusercontent.com/BurntSushi/rebar/HEAD/record/curated/2025-12-19/rust-regex.csv",
+    "https://raw.githubusercontent.com/BurntSushi/rebar/HEAD/record/curated/2025-12-19/pcre2-jit.csv",
+    "https://raw.githubusercontent.com/BurntSushi/rebar/HEAD/record/curated/2025-12-19/pcre2.csv",
+    "https://raw.githubusercontent.com/BurntSushi/rebar/HEAD/record/curated/2025-12-19/re2.csv",
+    "https://raw.githubusercontent.com/BurntSushi/rebar/HEAD/record/curated/2025-12-19/hyperscan.csv",
+    "https://github.com/kostya/LangArena",
+    "https://github.com/kostya/LangArena/tree/master/rust/src/benchmarks",
+    "https://github.com/kostya/LangArena/commits/master/rust/Cargo.lock",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/rust/Cargo.lock",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/rust/Cargo.toml",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/rust/src/benchmarks/log_parser.rs",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/rust/src/benchmarks/template.rs",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/log_parser.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/log_parser.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/run.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/test.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/docker-compose.yaml",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/docker/base",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js"
+  ],
+  "confidence": 0.85
+}

@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/riquito/tuc",
+  "one_liner": "Rust cut alternative with reordering, negative indices and multi-character or regex delimiters; about 5x faster than the system cut on comma-split field extraction.",
+  "what_it_does": "A command-line tool that splits each line on a delimiter and keeps selected fields, bytes, characters or lines. Unlike cut it accepts multi-character and regex delimiters, negative and reordered field indices, ranges with per-field fallbacks, '{1} {2}' output templates, JSON output and line slicing (-l 2:-2). It has its own CLI rather than cut's: by default the selected fields are concatenated with no separator unless you pass -j or -r.",
+  "how_it_is_fast": "For a single-byte delimiter with plain field selection it takes a 'fast lane' (src/fast_lane.rs): bstr's for_byte_line finds line ends, memchr::memchr_iter (SIMD byte search) records each field's start offset in a reused Vec<usize>, and the scan stops at the last requested field, so the tail of the line is never examined for delimiters. Fields are written as slices straight into a 64 KiB BufWriter with no per-field allocation. When given a file path it memory-maps the input on non-macOS targets (memmap2), which its own table shows is about 1.14x faster than buffered reads; multi-character delimiters go through a precomputed memchr::memmem plan. The release profile uses LTO, codegen-units = 1 and panic = 'abort'.",
+  "when_to_use": [
+    "Pulling a few leading columns out of large single-byte-delimited files (CSV without quoting, TSV, logs) passed as a file path on Linux, where the mmap fast lane applies.",
+    "Splitting on a literal multi-character delimiter such as three spaces or '<sep>': 1.464 s versus 5.310 s for the 'tr -s | cut' pipeline in the README.",
+    "Shell work that needs field reordering, negative indices (-f -1), ranges with fallbacks, templated output or JSON arrays, which cut cannot do.",
+    "Keeping or dropping the first and last lines of a stream (-l 2:-2), or cutting arbitrarily long lines in bounded memory with -M (single-byte delimiter, ascending fields only)."
+  ],
+  "when_not_to_use": [
+    "Regex delimiters: tuc -e'\\s+' (9.870 s) is no faster than hck -d'\\s+' (9.834 s) and runs the general path, not the fast lane.",
+    "Real CSV with quoted fields containing the delimiter: there is no CSV quoting support documented; use a CSV-aware tool.",
+    "Scripts that expect POSIX cut semantics: the CLI differs (fields joined without a delimiter unless -j, fields printed in the order given, no --output-delimiter), so it is not a drop-in replacement.",
+    "macOS: mmap is compiled out (cfg target_os = \"macos\"), so you get the --no-mmap path that was about 1.14x slower in the Linux table.",
+    "GNU coreutils 9.11 (2026-04-20) and later added cut -w for blank-aligned fields, and the unreleased NEWS entry says 'cut -f -w' is up to 10x faster in uni-byte locales, so the 'tr -s | cut' baseline in the multi-character table is now dated."
+  ],
+  "integration": {
+    "form": "crate (installs the tuc binary; prebuilt binaries, Homebrew, MacPorts, AUR, openSUSE and a WASM playground; lib.rs exposes modules, but there is no documented library API)",
+    "dependencies": "anyhow, bstr, memchr, memmap2, pico-args, serde_json; regex optional (default feature)",
+    "min_toolchain": "Rust 1.85 (edition 2024)",
+    "platforms": "any platform Rust targets; mmap only on non-macOS targets and only for file-path input; stdin uses a 64 KiB BufReader",
+    "thread_safety": "single-threaded CLI; not applicable",
+    "drop_in_for_baseline": "partial: covers cut -d/-f/-b/-c/-s/-z use cases, but the default output concatenates fields with no delimiter unless -j is passed, fields come out in the order requested, and option names differ (--complement is -m, no --output-delimiter; use -r)"
+  },
+  "gotchas": [
+    "The benchmarked tuc commands ('tuc -d , -f 1,8,19') omit -j, so tuc prints the three fields concatenated with no separator while cut, hck and awk write delimiters. The outputs are not equivalent, and tuc writes fewer bytes. In the 'non sequential' table, cut -f1,19,8 prints fields in file order (POSIX cut ignores order) while tuc and hck reorder them.",
+    "Harness: the README timings for the other tools nearly match hck's own README, which ran on the full 7M-line HEPMASS all_train.csv on a Ryzen 9 3950X (hck -Ld, 1.276 vs 1.198 s; choose 4.347 vs 4.285 s; hck -d'   ' 2.191 vs 2.180 s; hck -d'\\s+' 9.834 vs 10.014 s). benchmark.sh keeps only the first 1,000,000 lines but never regenerates an existing tmp/data.csv. So either the tables were measured on a larger file than the script produces or the machine was about 7x slower; data size, hardware and the cut and awk versions are all unstated. Ratios within each table still compare like with like.",
+    "benchmark.sh copies hck's command list, including two broken awk rows: -F'[:space:]+' lacks the outer brackets, so it splits on the characters ':', 's', 'p', 'a', 'c' and 'e' rather than whitespace, and '{print $1, $8 $19}' is missing a comma and splits on default whitespace. The awk in the single-character table (35.852 s) is about 7x slower than mawk 1.3.4 at a similar volume in hck's table, so the 33x speedup over awk is against a slow, unnamed awk.",
+    "Release 1.3.0 ignores a custom --fixed-memory size; the fix is only on unreleased master (March 2026). --bytes, and --lines with negative or unordered bounds, read the whole input into memory. Input is mapped with an unchecked unsafe Mmap::map, so the usual mmap hazard applies if the file is truncated while being read."
+  ],
+  "pick_this_over_siblings_when": "Pick tuc over hck (sstadick/hck) for literal-delimiter extraction where its own table shows it 1.18x ahead (1.34x for reordered fields), or when you need templates, negative indices, JSON or line slicing. Pick hck for header-name field selection, compressed input, or regex delimiters, where the two tie. Use uutils coreutils cut (1.63x slower than tuc here) when you need cut's exact CLI.",
+  "verified_claims_summary": "First-party hyperfine runs (3 warmups, at least 5 runs, output to /dev/null) select fields 1, 8 and 19 from HEPMASS all_train.csv: tuc 1.080 s vs the system cut 5.726 s (5.3x), with uutils cut at 1.764 s and hck -L at 1.276 s. On a three-space-delimited copy, tuc takes 1.464 s vs 5.310 s for 'tr -s | cut'; with a regex delimiter it ties hck. The run was on Linux (the mmap rows differ, and mmap is compiled out on macOS); the CPU, rustc version, cut and awk versions and the actual line count are not stated.",
+  "status_note": "Last code change in March 2026 (unreleased fixes) and only Dependabot bumps since (last 2026-07-01); release 1.3.0 is from 2025-09-10. It is a widely packaged GPL-3.0-or-later CLI that is fine to install, but its source is not permissively licensed for vendoring.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/riquito/tuc/HEAD/README.md",
+    "https://raw.githubusercontent.com/riquito/tuc/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/riquito/tuc/HEAD/benchmark.sh",
+    "https://raw.githubusercontent.com/riquito/tuc/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/riquito/tuc/HEAD/src/fast_lane.rs",
+    "https://raw.githubusercontent.com/riquito/tuc/HEAD/src/read_utils.rs",
+    "https://raw.githubusercontent.com/riquito/tuc/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/riquito/tuc/HEAD/src/stream.rs",
+    "https://raw.githubusercontent.com/riquito/tuc/HEAD/src/bin/tuc.rs",
+    "https://raw.githubusercontent.com/riquito/tuc/HEAD/src/options.rs",
+    "https://raw.githubusercontent.com/riquito/tuc/HEAD/src/cut_str.rs",
+    "https://raw.githubusercontent.com/riquito/tuc/HEAD/src/args.rs",
+    "https://raw.githubusercontent.com/riquito/tuc/72d8161/benchmark.sh",
+    "https://raw.githubusercontent.com/riquito/tuc/054f6dc/README.md",
+    "https://raw.githubusercontent.com/riquito/tuc/054f6dc/src/options.rs",
+    "https://github.com/riquito/tuc",
+    "https://github.com/riquito/tuc/tree/master/src",
+    "https://github.com/riquito/tuc/commits",
+    "https://github.com/riquito/tuc/commits/master/benchmark.sh",
+    "https://github.com/riquito/tuc/commits/master/src/options.rs",
+    "https://github.com/riquito/tuc/issues?q=is%3Aissue",
+    "https://crates.io/api/v1/crates/tuc",
+    "https://raw.githubusercontent.com/sstadick/hck/HEAD/README.md",
+    "https://raw.githubusercontent.com/coreutils/coreutils/HEAD/NEWS"
+  ],
+  "confidence": 0.6
+}

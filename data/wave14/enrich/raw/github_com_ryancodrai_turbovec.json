@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/ryancodrai/turbovec",
+  "one_liner": "In-process Rust/Python vector index on 2-4 bit TurboQuant codes; searches 2-5x faster than FAISS IndexPQFastScan at equal bits.",
+  "what_it_does": "A flat (brute-force) vector index for Python (pip install turbovec) and Rust (cargo add turbovec). It stores each float32 vector at 2, 3 or 4 bits per dimension using TurboQuant and searches the compressed codes directly, returning inner-product scores. TurboQuantIndex addresses vectors by slot (O(1) swap_remove); IdMapIndex keys them by uint64 ids with O(1) remove and allowlist filters. Files support crash-safe incremental sync(). It is not a FAISS drop-in: the API is its own, scoring is inner product only and dimensions must be multiples of 8 up to 16,384. Ready-made stores exist for LangChain, LlamaIndex, Haystack and Agno.",
+  "how_it_is_fast": "Data-oblivious quantization: one shared random rotation makes every coordinate follow a known Beta distribution, so the Lloyd-Max scalar codebook is computed analytically, with no training and no rebuilds. Codes are scored with SIMD lookup tables; the x86 kernel adapts FAISS FastScan's pack layout, nibble-LUT scoring and u16 accumulators, and AVX-512, AVX2 or NEON kernels are picked at run time. Since 1.1.0, indexes of 32,768 vectors or more keep bit planes and search in stages: the sign plane (a quarter of the bytes at 4-bit) gives a shortlist, the lower planes rank it, and the best max(64, 1.5k) are rescored exactly. Even before staging, the 1.0.0 whole-index scan was 3.5x FastScan at 4-bit; staging raised that to 4.4x.",
+  "when_to_use": [
+    "Embedded RAG or semantic search over about 10^4 to a few 10^6 OpenAI-class embeddings (d=768 to 3072) where RAM matters: 75 MB vs 586 MB float32 for 100K x 1536 at 4-bit.",
+    "Indexes that change constantly: single add 7.9-21.7 us and remove 1.4-5.8 us, against 0.19-1.03 s per remove_ids on a FAISS IndexIDMap over IndexPQFastScan, which repacks all codes on each call.",
+    "Streaming data where a PQ codebook would need training and periodic retraining; TurboQuant's codebook comes from the maths, not the data.",
+    "Filtered queries (ACLs, time windows, a SQL or BM25 candidate set) via allowlists or slot masks.",
+    "Servers with AVX-512 VBMI and VNNI (Sapphire Rapids class) or ARM Neoverse (Google Axion), where the staged search runs and the published numbers were measured."
+  ],
+  "when_not_to_use": [
+    "Hundreds of millions of vectors or strict tail latency: every query scans the whole index, so cost grows linearly; use HNSW or IVF.",
+    "Sparse, bimodal, one-hot-like or low-dimensional data: open issues #309 (recall drops of up to 65 points on sparse data) and #310 (loses to the FAISS PQ baseline); on GloVe d=200 at 2-bit the uncalibrated index scores R@1 0.550 against FAISS IndexPQ's 0.565.",
+    "x86 hosts without AVX-512 VBMI and VNNI (AVX2-only CPUs): the staged search is off and the whole-index scan runs; no FAISS comparison has been published for such hardware.",
+    "High-concurrency single-query serving with concurrent writers: issue #336 measured reads dropping 40-50% with one writer and almost no gain from Python-level threads (one shared rayon pool).",
+    "You need exact float results, an L2 metric, a network server or replication."
+  ],
+  "integration": {
+    "form": "crate (turbovec) plus a Python extension wheel built with maturin (pip install turbovec)",
+    "dependencies": "Rust: rayon, ordered-float, rand, rand_chacha =0.3.1 and statrs =0.17.1 (exact pins because they shape encoded bytes); Python: numpy>=1.20. FAISS is not needed.",
+    "min_toolchain": "Rust 1.89 (stabilised AVX-512 intrinsics); Python 3.9+",
+    "platforms": "x86-64 (x86-64-v2 baseline; AVX2 and AVX-512 kernels dispatched at run time; the staged search needs AVX-512 VBMI and VNNI), aarch64 NEON; wheel classifiers list Linux, macOS and Windows",
+    "thread_safety": "Search releases the GIL and runs on one process-wide rayon pool. A fair RwLock means each write blocks the readers behind it (issue #336). sync() supports one writer per file path.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The headline speed figures predate a recall fix. The speed JSONs were last regenerated 2026-10-04 (#552, release 1.1.0). Release 1.1.2 (2026-10-06, #562) fixed the 1.1.0 staged search losing recall on corpora whose vectors share a strong common direction (MedCPT k=10 recall 0.931 vs the full scan's 0.944, with the true nearest neighbour sometimes missing). The wider stages cost up to 3% at 4-bit and 7-12% at 2-bit (k=10), or 2-5% from k=32, and the CHANGELOG says the README figures will be refreshed later.",
+    "Harness: at 4-bit the FAISS comparator is IndexPQFastScan(d, m=d, 4), i.e. one-dimensional sub-quantizers. It runs with the default L2 metric and no refine, its version is unpinned (no benchmarks/requirements.txt), and its recall is never measured: the recall tables use IndexPQ(m=d/2, nbits=8). Most of the 4-bit gap predates staging; on x86 at one thread, 1,000-query batches and k=64, the whole-index scan takes 0.701 ms per query against FAISS's 2.518 ms, about 3.6x (derived from page data).",
+    "The staged search returns exact scores but an approximate id set. On structureless random vectors it misses most of the exact top-k. Set TURBOVEC_4BIT_PLANES=0 or TURBOVEC_2BIT_PLANES=0 before the first search to force the whole-index scan. Staging only applies to indexes of 32,768 vectors or more, with dims a multiple of 32.",
+    "Masks name slots, so any mutation, swap_remove included, silently invalidates a mask; use IdMapIndex allowlists instead. bit_width=3 is stored in 4-bit fields (issue #561), and the AVX-512 kernels are not run in CI (issue #282)."
+  ],
+  "pick_this_over_siblings_when": "No vector-search siblings are catalogued in numerics-and-arrays; the nearest entries (Gaius.jl, hpla-rs, TriangularSolve.jl) are dense or sparse linear-algebra kernels. Compared with the FAISS incumbent, pick turbovec for a small-footprint, training-free, frequently mutated in-process index; stay on FAISS for IVF or HNSW at large scale, GPUs or L2 metrics.",
+  "verified_claims_summary": "First-party runs on GCP c4a-standard-8 (Google Axion ARM) and c3-standard-8 (Xeon Platinum 8481C) over 100K normalised OpenAI text-embedding-3 vectors (d=1536 and 3072), k=64, 1,000-query batches, median of 5, both libraries timed through Python. turbovec 1.1.0 was compared with the Python faiss IndexPQFastScan at the same bits per dimension, FAISS version unstated: 3.8-5.1x faster at 4-bit (for example x86, 8 threads, d=1536: 0.127 vs 0.588 ms/query) and 1.8-2.5x at 2-bit. Recall was compared against a different FAISS index (IndexPQ, nbits=8).",
+  "status_note": "Very active (1.1.2 on 2026-10-06, 376 commits, 22 open issues, 17.4k stars), but the PyPI classifier still says 'Development Status :: 3 - Alpha' and the file format has moved to v8 (1.0.0 cannot read v8 files); MIT and copyable. Treat the 4.4x/2.2x figures as first-party numbers measured before the 1.1.2 recall fix, against an unpinned FAISS comparator whose recall was never checked.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/RyanCodrai/turbovec/HEAD/README.md",
+    "https://raw.githubusercontent.com/RyanCodrai/turbovec/HEAD/docs/benchmarks.md",
+    "https://raw.githubusercontent.com/RyanCodrai/turbovec/HEAD/docs/api.md",
+    "https://raw.githubusercontent.com/RyanCodrai/turbovec/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/RyanCodrai/turbovec/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/RyanCodrai/turbovec/HEAD/.cargo/config.toml",
+    "https://raw.githubusercontent.com/RyanCodrai/turbovec/HEAD/turbovec/Cargo.toml",
+    "https://raw.githubusercontent.com/RyanCodrai/turbovec/HEAD/turbovec-python/pyproject.toml",
+    "https://raw.githubusercontent.com/RyanCodrai/turbovec/HEAD/benchmarks/suite/speed_d1536_4bit_x86_mt.py",
+    "https://raw.githubusercontent.com/RyanCodrai/turbovec/HEAD/benchmarks/suite/speed_d1536_2bit_arm_st.py",
+    "https://raw.githubusercontent.com/RyanCodrai/turbovec/HEAD/benchmarks/suite/recall_d1536_4bit.py",
+    "https://raw.githubusercontent.com/RyanCodrai/turbovec/HEAD/benchmarks/results/speed_d1536_4bit_x86_mt.json",
+    "https://raw.githubusercontent.com/RyanCodrai/turbovec/HEAD/benchmarks/results/speed_d1536_4bit_x86_st.json",
+    "https://raw.githubusercontent.com/RyanCodrai/turbovec/HEAD/benchmarks/results/speed_d1536_2bit_arm_st.json",
+    "https://raw.githubusercontent.com/RyanCodrai/turbovec/HEAD/benchmarks/results/recall_d1536_4bit.json",
+    "https://raw.githubusercontent.com/RyanCodrai/turbovec/HEAD/benchmarks/results/recall_d1536_2bit.json",
+    "https://raw.githubusercontent.com/RyanCodrai/turbovec/HEAD/benchmarks/results/recall_glove_2bit.json",
+    "https://raw.githubusercontent.com/RyanCodrai/turbovec/HEAD/benchmarks/requirements.txt",
+    "https://github.com/RyanCodrai/turbovec",
+    "https://github.com/RyanCodrai/turbovec/commits/main/benchmarks/results/speed_d1536_4bit_x86_mt.json",
+    "https://github.com/RyanCodrai/turbovec/issues",
+    "https://github.com/RyanCodrai/turbovec/issues/336"
+  ],
+  "confidence": 0.75
+}
