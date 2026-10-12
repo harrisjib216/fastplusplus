@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/gpg/libgcrypt",
+  "one_liner": "GnuPG's crypto library with runtime-dispatched x86, ARM, PowerPC, s390x and RISC-V assembly; each new kernel beats libgcrypt's previous path.",
+  "what_it_does": "General-purpose C crypto library (ciphers and modes, hashes, MACs, KDFs, CRCs, public-key, post-quantum KEM/signatures) used by GnuPG and many Linux system components. The API is libgcrypt's own handle-based interface (gcry_cipher_open, gcry_md_open, gcry_mac_open and friends), so it is not a drop-in for any other library. At handle open time it picks the fastest compiled-in implementation for the running CPU (AES-NI, VAES/AVX2, VAES/AVX512, SHA-NI, ARMv8 CE, POWER vector crypto, RISC-V vector crypto) and falls back to generic C.",
+  "how_it_is_fast": "Per-architecture hand-written assembly (.S files such as rijndael-vaes-avx512-amd64.S, crc-armv8-aarch64-ce.S) and C files with inline asm (sha1-intel-shaext.c) for each primitive, selected at runtime from CPUID/hwcap feature bits (src/hwf-x86.c). Much of the mode speedup comes from 'bulk' functions that process 4 to 16 blocks per call so independent AES rounds pipeline (the AES-NI XTS 6x came from adding a 4-block bulk XTS path where XTS previously went through the generic mode code), plus carry-less multiply (PCLMUL/PMULL/VPMSUMD) folding for GHASH, POLYVAL and CRC. CPU-specific tuning flags steer around slow units, for example Zen5 is marked as having integer vector latency 2, so Blake2 drops its AVX/AVX2/AVX512 paths there.",
+  "when_to_use": [
+    "You already link libgcrypt (GnuPG, systemd, cryptsetup-style stacks) and want the vector paths: upgrade to 1.12.x to get VAES/AVX512 AES (about 2x OCB/ECB/CBC-decrypt on Zen5) and AVX2/AVX512 CRC and GHASH.",
+    "Bulk symmetric work on large buffers (disk encryption with AES-XTS, OCB/GCM/GCM-SIV streams, Camellia or SM4) where parallel modes can use the 4-to-16-block kernels.",
+    "SHA-1/SHA-256 on x86 CPUs with the SHA extensions (SHA-NI): the SHA-NI path measured 4.0x over libgcrypt's previous SHA-1 assembly on a Celeron J3455 (sha1.c otherwise dispatches SSSE3, AVX, AVX-BMI2 or AVX2-BMI2 assembly; the commit does not name which ran before).",
+    "Non-x86 targets that other libraries cover thinly: ARMv8 CE AES/GHASH/SHA/SM3/SM4/CRC, POWER8-10 vector crypto, s390x CPACF, RISC-V Zbb/Zbc and vector crypto.",
+    "You need an LGPL C library with a FIPS 140-3 mode and service indicator."
+  ],
+  "when_not_to_use": [
+    "Small messages and per-call latency: the commit tables use bench-slope-style ns/B slopes, which by construction exclude fixed per-call cost (key setup, handle open, finalization).",
+    "Serial modes (CBC encrypt, CFB encrypt) and CPUs where the wide paths do not help: the VAES/AVX512 commit shows no gain for CBC/CFB encryption on Zen5 and roughly no change on Zen4 and Tiger Lake.",
+    "Projects that cannot accept LGPL-2.1 linking terms or that want a small vendorable kernel; the library pulls in libgpg-error (1.56 or newer for current master) and an autotools build.",
+    "Deployments that need the newest vector code to be battle-tested: the AVX-512 Poly1305 path (added in 1.11.0, 2024) and the POWER10 Poly1305 path produced wrong tags for crafted inputs until fixes on 2026-10-11, not yet in a release.",
+    "If you want a C++ API or header-only use; libgcrypt is a C shared/static library with opaque handles."
+  ],
+  "integration": {
+    "form": "shared lib (static also buildable)",
+    "dependencies": "libgpg-error (configure.ac requires 1.56 on master)",
+    "min_toolchain": "Autoconf 2.69 / Automake 1.14 to build from git; a C compiler with GNU-style inline asm and an assembler that accepts the AVX512/VAES/SHA-NI mnemonics for those paths (configure probes each, e.g. HAVE_GCC_INLINE_ASM_AVX512)",
+    "platforms": "Generic C everywhere; assembly for x86-64 and i386 (SSSE3/AVX/AVX2/AVX512, AES-NI, VAES, SHA-NI, PCLMUL, GFNI), AArch64 and ARMv7 (NEON, ARMv8 CE, SVE), PowerPC (vector crypto, P10 LE), s390x, RISC-V (Zbb, Zbc, vector crypto); Windows via mingw cross build",
+    "thread_safety": "Documented as thread-safe except functions that modify a shared handle (callers serialize those); gcry_check_version must run before other calls; fork without exec in pthread programs is warned against.",
+    "drop_in_for_baseline": "partial: within libgcrypt the faster kernels are picked automatically with no API change; there is no drop-in for OpenSSL or other library APIs"
+  },
+  "gotchas": [
+    "Correctness bugs in fast paths after release: commit 87714ba (2026-10-11) fixed a lost carry and dropped bit 130 in cipher/poly1305-amd64-avx512.S that gave wrong Poly1305 tags (ChaCha20-Poly1305 and Poly1305 MAC) for crafted inputs on CPUs with the HWF_INTEL_AVX512 feature set (Ice Lake class and later, Zen4/Zen5), shipped since 1.11.0; 3a7a156 the same day fixed a lost carry in poly1305-p10le.s. Neither fix is in a release yet (1.12.4 unreleased).",
+    "The 1.9.0 release that carries most of the claimed speedups also shipped CVE-2021-3345, a heap overflow in _gcry_md_block_write introduced by e76617cb 'Reduce overhead on generic hash write function' (a performance change), fixed in 1.9.1; 1.9.2 fixed an input over-read in sha256-avx2-bmi2-amd64.S found by Guido Vranken.",
+    "Speedups depend on the CPU: Blake2 AVX/AVX2/AVX512 (the 1.3/1.4x row) is now disabled on Zen5, ChaCha20 avoids vector code for single blocks on Zen5, and until b333d8a (2026-10-11) the Zen5 check used the wrong CPUID leaf so Zen6 would also get Zen5 tuning.",
+    "Paths can be switched off per process with gcry_control(GCRYCTL_DISABLE_HWF, ...) before gcry_check_version, or system-wide in /etc/gcrypt/hwf.deny; --disable-asm drops all assembly, so check which features are active before comparing numbers."
+  ],
+  "pick_this_over_siblings_when": "Pick libgcrypt over Nettle when you need its wider mode and algorithm coverage with runtime-dispatched VAES/AVX512, SHA-NI and ARMv8 CE paths behind one library API; pick CRYPTOGAMS when you want individual perlasm kernels to embed without a library, or crc32-vpmsum when you only need a POWER8 CRC.",
+  "verified_claims_summary": "Every figure is a first-party before/after table in the ns/B, MiB/s, c/B format of libgcrypt's tests/bench-slope (which takes the median of 64 runs per buffer size and reports the linear-regression slope over 16 to 4112-byte buffers; the commits do not name the tool) comparing a new kernel with the library's previous code path on one CPU, compiler and flags unstated: SHA-1 SHA-NI 4.50 to 1.11 ns/B against the previous SHA-1 assembly on a Celeron J3455 at 1.5 GHz; AES-XTS 1.66 to 0.270 ns/B on an i7-4790K at 4.0 GHz against the generic XTS mode code; i386 SSSE3 SHA-512 12.58 to 2.78 ns/B on a Ryzen 7 3700X; ARMv8 CE PMULL CRC32 2.89 to 0.341 ns/B on a Cortex-A53 at 1104 MHz; VAES/AVX512 AES OCB 0.030 to 0.016 ns/B on a Ryzen 9 9950X3D against the VAES/AVX2 assembly, with no gain on Zen4 or Tiger Lake. None of this compares against OpenSSL or another library.",
+  "status_note": "Very actively maintained (commits on 2026-10-11, releases through 1.12.3 in August 2026) on git.gnupg.org with the GitHub repository as an untracked mirror; LGPL-2.1 library that is copyable as a whole but hard to vendor kernel by kernel, and the newest AVX-512 and POWER10 Poly1305 paths carried wrong-tag bugs until 2026-10-11.",
+  "sources_read": [
+    "https://github.com/gpg/libgcrypt",
+    "https://github.com/gpg/libgcrypt/commits/master",
+    "https://raw.githubusercontent.com/gpg/libgcrypt/HEAD/NEWS",
+    "https://raw.githubusercontent.com/gpg/libgcrypt/HEAD/README",
+    "https://raw.githubusercontent.com/gpg/libgcrypt/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/gpg/libgcrypt/HEAD/cipher/poly1305.c",
+    "https://raw.githubusercontent.com/gpg/libgcrypt/HEAD/cipher/blake2.c",
+    "https://raw.githubusercontent.com/gpg/libgcrypt/HEAD/cipher/rijndael.c",
+    "https://raw.githubusercontent.com/gpg/libgcrypt/HEAD/cipher/sha1.c",
+    "https://raw.githubusercontent.com/gpg/libgcrypt/HEAD/src/hwf-x86.c",
+    "https://raw.githubusercontent.com/gpg/libgcrypt/HEAD/tests/bench-slope.c",
+    "https://raw.githubusercontent.com/gpg/libgcrypt/HEAD/doc/gcrypt.texi",
+    "https://github.com/gpg/libgcrypt/commit/9e3af928ee",
+    "https://github.com/gpg/libgcrypt/commit/d02958bd30",
+    "https://github.com/gpg/libgcrypt/commit/a00c5b2988",
+    "https://github.com/gpg/libgcrypt/commit/b52dde8609",
+    "https://github.com/gpg/libgcrypt/commit/14c8a593ed",
+    "https://github.com/gpg/libgcrypt/commit/87714ba",
+    "https://github.com/gpg/libgcrypt/commit/3a7a156",
+    "https://github.com/gpg/libgcrypt/commit/b333d8a",
+    "https://github.com/gpg/libgcrypt/commit/24af2a55d8",
+    "https://github.com/gpg/libgcrypt/commit/e76617cbab018dd8f41fd6b4ec6740b5303f7e13",
+    "https://github.com/gpg/libgcrypt/commits/master/cipher/blake2b-amd64-avx2.S",
+    "https://github.com/gpg/libgcrypt/commit/b2f78ae",
+    "https://security-tracker.debian.org/tracker/CVE-2021-3345 (WebSearch snippet only)",
+    "https://dev.gnupg.org/T8514 (fetch failed: ENOTFOUND)"
+  ],
+  "confidence": 0.65
+}

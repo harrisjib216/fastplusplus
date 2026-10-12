@@ -65,3 +65,4 @@ Retier leads, uncatalogued projects and blocked papers reported by verifiers and
 - Enrichment leads (2026-10-12, continued): fleek-network/blake3js-perf (pure-JS BLAKE3 case study, numbers only on the Fleek blog).
 - Enrichment leads (2026-10-12, continued): consento-org/longfn (performance alternative to long.js named in its issue #88).
 - Enrichment leads (2026-10-12, continued): coregx/coregex (Go regex engine, claims 3-3000x over regexp; upstream of the gofiber simd package).
+- Enrichment leads (2026-10-12, continued): athre0z/disas-bench October 2025 charts show yaxpeax-x86 ahead of iced on x86 decode (Ryzen 9 9950X, i9-13900K); yaxpeax-x86 is a candidate for assemblers-and-asm-tooling.

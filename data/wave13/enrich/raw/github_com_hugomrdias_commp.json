@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/hugomrdias/commp",
+  "one_liner": "Rust-to-WASM Filecoin CommP (piece commitment) hasher; 11-34x the throughput of @web3-storage/data-segment in Node and browsers.",
+  "what_it_does": "Computes the Filecoin piece commitment (FR32 padding, SHA-256 truncated to 254 bits, binary Merkle tree padded with zero commitments) for a byte stream. The npm package @hugomrdias/commp-wasm exposes root(data), digest(data) and a streaming create() hasher with write/digest/count/reset/free; digest() returns the same PieceDigest fields (code 0x1011, padding, height, root, multihash bytes) as data-segment's multihash hasher, so it is close to a drop-in for that module. The WASM binary (about 22 KB) is inlined as base64 and instantiated synchronously, so there is no async init.",
+  "how_it_is_fast": "All three steps (FR32 pad, leaf hashing, tree reduction) run inside one WASM call per 1 MiB chunk instead of one JS-level SHA-256 call plus fresh Uint8Array allocations per 64-byte node, which is how data-segment works. Leaves are batched 128 quads (256 leaves) at a time and hashed with a hand-written 4-lane SIMD128 SHA-256 (one message per u32 lane of a v128, transposed in and out), and the second compression block uses a precomputed K+W table because every message is exactly 64 bytes. Completed subtrees go onto an O(log n) binary-counter stack and zero-padding commitments are computed once and cached.",
+  "when_to_use": [
+    "Computing CommP / piece CIDs for Filecoin or Storacha uploads in a browser, Deno, Bun or Node where native addons are unwanted.",
+    "Large uploads streamed in chunks: memory stays O(log n) (about 3 MiB RSS growth for a 1 GiB payload in the repo's M1 Pro run).",
+    "Replacing @web3-storage/data-segment's multihash hasher when hashing is the bottleneck; same digest layout, checked against data-segment and Lotus vectors.",
+    "Bundler-free setups: inline base64 WASM needs no .wasm asset handling or async init."
+  ],
+  "when_not_to_use": [
+    "Server-side bulk CommP where native code is allowed: the project's own native Rust build is 681 MiB/s single-threaded and 3,738 MiB/s with the parallel feature on an M1 Pro, versus 183 MiB/s for WASM; go-fil-commp-hashhash reaches 728 MiB/s (derived ratios 3.7x and 4x from page data). The native crate is not published on crates.io.",
+    "You need piece aggregation, inclusion proofs or segment indexes: this only hashes; data-segment's aggregate/proof APIs have no counterpart here.",
+    "Payloads above 127 * 2^47 bytes (MAX_PAYLOAD_SIZE): write() throws RangeError.",
+    "Maturity-sensitive deployments: npm package created 2026-09-30, 0 stars, single author; issues #2-#7 fixed off-by-one height, wrong empty-input padding, a usize overflow above about 31.75 MiB and a destructive build() in the week before the benchmarks."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime (inline WASM; Rust build uses wasm-bindgen, sha2 0.11 and talc)",
+    "min_toolchain": "Node >= 24 per repo engines; WASM SIMD128 support in the engine; rebuilding needs Rust 1.92.0 (pinned in compare/), wasm-pack and binaryen wasm-opt",
+    "platforms": "any JS engine with WebAssembly SIMD (Node, Chromium, Firefox, WebKit, Deno, Bun per README)",
+    "thread_safety": "Single-threaded WASM instance; one hasher per stream, not documented for workers sharing an instance",
+    "drop_in_for_baseline": "partial — same PieceDigest fields and multihash bytes as data-segment's multihash hasher, but a separate package with its own create(); hashers should be freed with free() (a FinalizationRegistry frees them eventually)"
+  },
+  "gotchas": [
+    "Harness note: in Node the baseline's SHA-256 is node:crypto createHash per 64-byte node (sync-multihash-sha2 node export, native and hardware SHA-capable), wrapped in new Uint8Array, Digest objects and spread pushes; in browsers it is @noble/hashes (pure JS). So the 11.8 MiB/s Node baseline (about 85 ms per MiB, roughly 33,000 hash calls, about 2.6 us per call, derived) measures per-call and allocation overhead, not SHA arithmetic; the speedup comes from fusing and batching, not from a faster compression function.",
+    "The README's 'Fast JS (@webbuf/sha256)' row is not pure JavaScript: commp-js's own header says it uses WASM-backed SHA-256.",
+    "The bench hashes one constant 1 MiB buffer (fill(4)) per iteration with create/write/digest/free; no implementation has a data-dependent shortcut, so this does not inflate the numbers, but it is a single size and the WASM row includes the copy into WASM memory.",
+    "WASM memory never shrinks; the JS wrapper feeds writes in 1 MiB chunks to bound it. Forgetting free() leaves cleanup to the FinalizationRegistry."
+  ],
+  "pick_this_over_siblings_when": "hash-wasm, fast-noble-hashes and awasm-noble give faster generic SHA-256/BLAKE3 to JS, but a CommP built on them still pays one JS-to-WASM call per 64-byte node (the README's @webbuf row reaches only 41 MiB/s that way); pick commp-wasm when the output you need is the Filecoin piece commitment itself.",
+  "verified_claims_summary": "First-party tinybench run (100 ms / 250 iterations, one 1 MiB buffer, create-write-digest per iteration) on Apple Silicon, probably the M1 Pro of compare/results: WASM 181.2 MiB/s vs data-segment 5.3.x 11.8 MiB/s in Node 26 (15.4x); in browsers 185.6 vs 7.5 (Chromium 153), 170.7 vs 5.0 (Firefox 155), 187.3 vs 16.5 (WebKit). The separate compare/ run (M1 Pro, Node v26.10.0, 1 GiB) reproduces the WASM rate at 182.8 MiB/s and shows native Rust and Go faster.",
+  "status_note": "Active (last commit 2026-10-01, all 11 issues closed) but two weeks old with 0 stars; MIT per README and npm (crate says MIT OR Apache-2.0, no LICENSE file), small and dependency-free enough to vendor.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/hugomrdias/commp/HEAD/README.md",
+    "https://raw.githubusercontent.com/hugomrdias/commp/HEAD/packages/bench/bench.js",
+    "https://raw.githubusercontent.com/hugomrdias/commp/HEAD/packages/bench/package.json",
+    "https://raw.githubusercontent.com/hugomrdias/commp/HEAD/package.json",
+    "https://raw.githubusercontent.com/hugomrdias/commp/HEAD/pnpm-workspace.yaml",
+    "https://raw.githubusercontent.com/hugomrdias/commp/HEAD/rs/commp/Cargo.toml",
+    "https://raw.githubusercontent.com/hugomrdias/commp/HEAD/rs/commp/src/lib.rs",
+    "https://raw.githubusercontent.com/hugomrdias/commp/HEAD/rs/commp/src/hasher.rs",
+    "https://raw.githubusercontent.com/hugomrdias/commp/HEAD/rs/commp/src/tree.rs",
+    "https://raw.githubusercontent.com/hugomrdias/commp/HEAD/rs/commp/src/fr32.rs",
+    "https://raw.githubusercontent.com/hugomrdias/commp/HEAD/rs/commp/src/sha256/mod.rs",
+    "https://raw.githubusercontent.com/hugomrdias/commp/HEAD/rs/commp/src/sha256/wasm.rs",
+    "https://github.com/hugomrdias/commp/tree/master/rs/commp/src/sha256",
+    "https://raw.githubusercontent.com/hugomrdias/commp/HEAD/packages/commp-wasm/src/index.js",
+    "https://raw.githubusercontent.com/hugomrdias/commp/HEAD/packages/commp-wasm/src/inline/commp_bg.js",
+    "https://raw.githubusercontent.com/hugomrdias/commp/HEAD/packages/commp-wasm/package.json",
+    "https://raw.githubusercontent.com/hugomrdias/commp/HEAD/packages/commp-js/src/index.js",
+    "https://raw.githubusercontent.com/hugomrdias/commp/HEAD/packages/commp-js/package.json",
+    "https://raw.githubusercontent.com/hugomrdias/commp/HEAD/compare/README.md",
+    "https://raw.githubusercontent.com/hugomrdias/commp/HEAD/compare/results/apple-m1-pro-darwin-arm64.md",
+    "https://github.com/hugomrdias/commp/issues?q=is%3Aissue",
+    "https://github.com/hugomrdias/commp/commits",
+    "https://github.com/storacha/data-segment/tree/main/src",
+    "https://raw.githubusercontent.com/storacha/data-segment/HEAD/src/multihash.js",
+    "https://raw.githubusercontent.com/storacha/data-segment/HEAD/src/proof.js",
+    "https://raw.githubusercontent.com/storacha/data-segment/HEAD/src/ipld/sha256.js",
+    "https://raw.githubusercontent.com/storacha/data-segment/HEAD/package.json",
+    "https://registry.npmjs.org/sync-multihash-sha2/latest",
+    "https://registry.npmjs.org/sync-multihash-sha2/-/sync-multihash-sha2-1.0.0.tgz",
+    "https://registry.npmjs.org/@hugomrdias%2fcommp-wasm",
+    "https://crates.io/api/v1/crates/commp"
+  ],
+  "confidence": 0.8
+}
