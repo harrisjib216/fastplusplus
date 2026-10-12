@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/not-nik/aron",
+  "one_liner": "Incomplete Rust x86-64 Intel-syntax assembler emitting Mach-O; a startup-bound hello-world test ran 12.9x faster than macOS as.",
+  "what_it_does": "aron is a command-line assembler (`aron [-f elf|macho] [-o out] file.s`) for a subset of x86-64 in Intel syntax (`dword ptr [rbp - 4]`), written as a hobby project in 2022. It lexes each line, matches it against an instruction table generated from the x86-csv opcode list, and writes a relocatable object through the Rust `object` crate. Only `.asciz`, `.globl` and `.section` change the output; every other directive is accepted and ignored. It is a binary, not a library, and main.rs always writes Mach-O even when `-f elf` is passed.",
+  "how_it_is_fast": "There is no assembly-speed technique: the generated matcher (encodings.rs, which its generator script calls 'a very naive matching algorithm') tries all 918 instruction templates on every line and encodes each successful candidate to keep the shortest. The measured gap is process startup of one small Rust binary against Apple's `as`, which the verifier notes is a driver that hands off to clang's integrated assembler. aron also does less work on the test file: it drops the `.cfi_*`, `.p2align`, `.build_version` and `.subsections_via_symbols` directives that `as` turns into unwind info, alignment and Mach-O load-command data.",
+  "when_to_use": [
+    "Studying a small, readable example of a table-driven x86-64 encoder: a Python script turns a CSV of opcodes into Rust match functions, and the `object` crate handles Mach-O and relocations.",
+    "Assembling tiny clang -O0 Intel-syntax files on macOS that use only rax-rdi, rbp- or rip-relative addressing and general-purpose integer instructions, in a loop where about 45 ms of `as` driver startup per file matters (for example a toy compiler's test suite).",
+    "Forking a teaching assembler under MPL-2.0, as long as you are prepared to fix the encoder bugs listed under gotchas first."
+  ],
+  "when_not_to_use": [
+    "Any real build: the table has no SSE/AVX instructions at all (no movaps, pxor, cvtsi2sd), no nop, endbr64 or movabs, and memory operands are only `[reg]` or `[reg +/- disp]` with no index*scale, so typical -O1 and higher clang output fails or misassembles.",
+    "Code that uses r8-r15 (r9 makes the assembler panic, and other extended registers are encoded as the wrong register), or that addresses through rsp, r12, or [rbp] with no displacement.",
+    "Linux/ELF targets: `-f elf` is parsed, but main.rs hard-codes ObjectFileType::MachO, and AT&T syntax (the GNU as default) is not parsed.",
+    "Functions that need unwinding (C++ exceptions, debuggers, profilers): `.cfi_*` directives are dropped, so the object carries no unwind info.",
+    "Large files: there is no measurement beyond a 15-instruction file, and every line is matched linearly against 918 templates."
+  ],
+  "integration": {
+    "form": "crate (binary-only CLI, built from source with cargo; not published on crates.io)",
+    "dependencies": "ariadne 0.1, enum_derive 0.1, custom_derive 0.1, object 0.29 (write feature), clap 3.2.17; git submodule GregoryComer/x86-csv plus Python only to regenerate the checked-in encodings.rs",
+    "min_toolchain": "Rust 2021 edition (1.56+); the README screenshot was built with Rust 1.60.0",
+    "platforms": "Builds wherever Rust does; emits x86-64 Mach-O objects only (the ELF writer path exists but the CLI never selects it)",
+    "thread_safety": "Not applicable (single-shot CLI); not documented",
+    "drop_in_for_baseline": "partial: `aron file.s -o out.o` mirrors the `as` command line, but only for Intel-syntax files using a subset of integer instructions, and the object lacks unwind info, build-version data and real section alignment"
+  },
+  "gotchas": [
+    "Register numbering bug: `TryFrom<i32> for Register` (instructions.rs) maps 8 to R8 and then 10 to R9 through 16 to R15, skipping 9. Every generated matcher calls `Register::try_from(reg as i32).unwrap()` on the ModRM reg operand, so any line where r9 could fill that field panics the assembler, and r10-r15 in that field encode as r9-r14.",
+    "Instruction::encode swaps REX.R and REX.B: the r/m register's high bit goes to bit 2 and the reg register's to bit 0. Mixing a legacy register with r8-r15 therefore encodes the wrong registers. No SIB byte is ever written, so `[rsp+...]` and `[r12...]` operands are misencoded, and `[rbp]` without an offset becomes RIP-relative. Narrowing immediates goes through `unwrap_unchecked` (undefined behaviour on overflow).",
+    "Unknown directives are silently ignored (`.p2align`, `.cfi_*`, `.byte/.long/.quad/.zero`, `.text/.data`), so data written through them vanishes without an error, and section alignment is hard-coded to 4. Immediates parse only as decimal: `0x10` becomes a relocation against a symbol named '0x10', and a negative hex value panics.",
+    "Output and symbols: the output file is opened without truncate, so overwriting a larger existing file (both benchmark commands write a.out) leaves stale trailing bytes. Every non-.globl label, L_ temporaries included, is emitted as a linkage-unit (private extern) symbol. The label iterator stops at the first `.globl` name with no definition in that section, which drops the rest of the symbols in random HashMap order."
+  ],
+  "pick_this_over_siblings_when": "Pick minias for a small assembler whose README says it often beats GNU as and the clang assembler, or Keystone for an embeddable assembler library with LLVM MC's instruction coverage. aron makes sense only as reading material, since it emits Mach-O only, has no SSE/AVX, and misencodes r8-r15.",
+  "verified_claims_summary": "One README screenshot of `hyperfine -N --warmup 10` on an unnamed macOS machine (Apple clang 13.1.6 toolchain, Rust 1.60.0, aron 0.1.0) assembling a 31-line, 15-instruction clang -O0 hello-world: aron 3.9 ms against `as` 49.8 ms, 12.94 +/- 2.34x. That is process startup, the author calls it 'not empirical by any means', the objects were never compared, and aron's object omits the unwind, alignment and build-version data that `as` emits.",
+  "status_note": "Abandoned since 2022-10-11 (21 commits, 2 stars, no releases, not on crates.io). The MPL-2.0 source is small enough to read, but the encoder bugs (r9 panic, swapped REX.R/REX.B, no SIB) make it unusable beyond toy -O0 files, so treat it as reference material rather than copyable code.",
+  "sources_read": [
+    "https://github.com/Not-Nik/aron",
+    "https://github.com/Not-Nik/aron/commits/master",
+    "https://github.com/Not-Nik/aron/tree/master/src",
+    "https://github.com/Not-Nik/aron/tree/master/src/assembler",
+    "https://github.com/Not-Nik/aron/tree/master/src/parse",
+    "https://raw.githubusercontent.com/not-nik/aron/HEAD/README.md",
+    "https://raw.githubusercontent.com/not-nik/aron/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/not-nik/aron/HEAD/test.macos.s",
+    "https://raw.githubusercontent.com/not-nik/aron/HEAD/test.c",
+    "https://raw.githubusercontent.com/not-nik/aron/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/not-nik/aron/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/not-nik/aron/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/not-nik/aron/HEAD/src/cli.rs",
+    "https://raw.githubusercontent.com/not-nik/aron/HEAD/src/instructions.rs",
+    "https://raw.githubusercontent.com/not-nik/aron/HEAD/src/number.rs",
+    "https://raw.githubusercontent.com/not-nik/aron/HEAD/src/assembler/mod.rs",
+    "https://raw.githubusercontent.com/not-nik/aron/HEAD/src/assembler/label.rs",
+    "https://raw.githubusercontent.com/not-nik/aron/HEAD/src/assembler/section.rs",
+    "https://raw.githubusercontent.com/not-nik/aron/HEAD/src/parse/mod.rs",
+    "https://raw.githubusercontent.com/not-nik/aron/HEAD/src/parse/parser.rs",
+    "https://raw.githubusercontent.com/not-nik/aron/HEAD/src/parse/lexer.rs",
+    "https://raw.githubusercontent.com/not-nik/aron/HEAD/src/parse/helpers.rs",
+    "https://raw.githubusercontent.com/not-nik/aron/HEAD/src/parse/encodings.rs",
+    "https://raw.githubusercontent.com/not-nik/aron/HEAD/src/parse/tests.rs",
+    "https://raw.githubusercontent.com/not-nik/aron/HEAD/src/parse/generate_instructions.py",
+    "https://crates.io/api/v1/crates/aron"
+  ],
+  "confidence": 0.85
+}

@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/orefkov/simstr",
+  "one_liner": "C++20 string types and expression-template concatenation that build strings with one allocation; 1.5-5x faster than naive std::string idioms.",
+  "what_it_does": "simstr adds 'string expressions' (operator+ over literals, numbers, std::string, std::string_view and its own types) plus split, replace, trim, join, case-insensitive compare and integer/double parsing on string pieces. The header-only part (include/simstr/strexpr.h) works on standard strings (unary + turns a std::string into an expression, the result can be a std::string), while the full library adds its own owning types sstring (shared, immutable, SSO) and lstring<N> (mutable, configurable inline buffer), UTF-8/16/32 conversion through simdutf and a hash map for string keys. It is not a drop-in std::string replacement; the README expects code to be rewritten in stages.",
+  "how_it_is_fast": "Expression templates compute the total length of a whole concatenation once, allocate the result once and write every piece (including numbers formatted in place) directly into it, so no temporaries or reallocations occur. lstring<N> keeps results up to N characters on the stack (the find example builds its 36-character search key without touching the heap), and integer parsing and hex/decimal formatting are inline template code instead of strtol, std::to_string or std::format. There is no SIMD in strexpr.h: substring search is a char_traits::find on the first character followed by compare, the same method libstdc++ uses.",
+  "when_to_use": [
+    "Hot code that builds many short strings from literals, numbers and existing strings (log lines, keys, SQL or type names): string + number + literal into std::string ran 224 ns vs 107 ns per six concatenations (Clang 22, libstdc++) and 333 vs 215 ns (MSVC 19.44).",
+    "Hex or octal number formatting inside a concatenation: 716 ns vs 137 ns against s + std::format(\"{:#x}\") + literal (Clang), 1018 vs 120 ns (MSVC).",
+    "Temporary keys or messages that fit a fixed stack buffer: lstringa<200> took the 'find a concatenated key' row from 114 ns to 20.0 ns on Clang/Linux and 221 to 29.3 ns under MSVC.",
+    "Splitting delimited text and parsing integers without per-part copies: 275 ns to 160 ns (Clang/Linux) and 558 ns to 220 ns (MSVC, splitf).",
+    "Code that needs the same string algorithms for char, char8_t, char16_t, char32_t and wchar_t, where std::format and std::to_chars only cover char."
+  ],
+  "when_not_to_use": [
+    "You want a drop-in std::string: simstr has its own string types and only partly std-compatible methods, so adoption is a rewrite.",
+    "Single integer parsing: std::from_chars is as fast or faster (MSVC 11.9 ns vs to_int 15.5 ns; GCC 15 12.1 ns vs stringa::to_int 17.1 ns).",
+    "String-keyed hash maps on Linux: hashStrMapA (built on std::unordered_map) took 3.73 ms vs 3.64 ms for std::unordered_map<std::string> with Clang and 3.84 vs 3.64 ms with GCC; it wins only under MSVC.",
+    "Long-haystack substring search: ssa::find ties std::string_view::find on Linux (7.82 vs 7.40 ns, Clang); a SIMD searcher is the tool there.",
+    "Toolchains older than C++20, or builds that cannot take simdutf as a dependency (needed by the full library, not by strexpr.h)."
+  ],
+  "integration": {
+    "form": "header-only (strexpr.h part) or static lib (full library: three headers and two sources)",
+    "dependencies": "none for strexpr.h; full library needs simdutf (CMake fetches v7.5.0); the benchmark also pulls Google Benchmark 1.9.4, fmt 12.1.0 and StringZilla main",
+    "min_toolchain": "C++20 (concepts, std::format), CMake 3.20; README says it was checked on MSVC 19, Clang 19 and 21, GCC 13 and Emscripten 4.0.6",
+    "platforms": "any (portable C++ with no intrinsics in strexpr.h); author tests Windows, Linux and 32-bit WASM",
+    "thread_safety": "not documented; sstring shares buffers through an atomic reference count (relaxed ordering), other types are plain values",
+    "drop_in_for_baseline": "partial: strexpr.h expressions accept and produce std::string and std::string_view, but split, parsing and replace use simstr types and the full speedups need stringa or lstring"
+  },
+  "gotchas": [
+    "The std baselines are naive idioms: the find row builds its key with std::string{name} plus two concatenation temporaries, the std hash-map string_view row constructs a std::string on every lookup instead of using C++20 heterogeneous lookup, and the replace row appends to an unreserved std::string. Against the fastest std path in the same suite the gap narrows: hex 1.5x (Clang) to 2.1x (MSVC) vs std::to_chars, and short-text replace with std::string_view find_first_of + copy (166 ns) beats simstr's memorising variant (178 ns) on Clang.",
+    "The catalogue's asm-level label does not fit: the gains come from allocation avoidance and inline number conversion, not from vectorised scanning (find = first-character char_traits::find + compare).",
+    "sstring's reference count is decremented with std::memory_order_relaxed and the buffer freed on the last release, with no release/acquire ordering (SharedStringData::decr in sstring.h). That is the pattern std::shared_ptr avoids; on weakly ordered CPUs such as ARM, sharing one sstring across threads may race a reader's last accesses with another thread's free. x86's locked fetch_sub hides it. This is from reading the code; no failure has been reported.",
+    "Harness notes: the CHECK_RESULT answer checks are compiled out by default; StringZilla is fetched from its main branch and linked header-only with no -march flags, so its competitor rows (sz::string::find 98.6 ns vs std::string::find 7.17 ns on Clang) probably measure a serial fallback and say nothing about StringZilla; in the concat and hex rows the loop values of i (1 to 100000) are compile-time constants not hidden with DoNotOptimize."
+  ],
+  "pick_this_over_siblings_when": "The siblings in this category (WojciechMula's AVX-512 string toys, sliceslice, the MSVC STL's vectorised std::search, Arm Optimized Routines) speed up scanning and copying bytes. Pick simstr when the time goes into building, formatting and splitting many short strings (temporaries, std::to_string, std::format), and pick a SIMD searcher when the cost is searching long buffers.",
+  "verified_claims_summary": "The committed v2.0.0 Google Benchmark files (means of 4 repetitions, one Xeon E5-2682 v4, Linux rows under WSL) time each task against a plain std version. With Clang 22 and libstdc++: number concatenation 224 to 107 ns (2.1x), hex formatting 716 to 137 ns vs std::format (5.2x) but 207 to 137 ns vs std::to_chars (1.5x), concatenated-key find 114 to 51.3 ns (std::string result) or 20.0 ns (lstringa), conditional type-name build 59.3 to 23.6 ns, replace-while-copying 209 to 148 ns, and split plus parse 275 to 160 ns. MSVC 19.44, GCC 15.2, clang-cl and WASM runs show the same direction with different magnitudes; the README's 9-14x hex and 2-3x split figures overstate these files.",
+  "status_note": "Actively maintained by one author (75 commits, v2.0.0 on 2026-10-04, 34 stars, one closed issue, vcpkg port orefkov-simstr). It is MIT-licensed, and strexpr.h alone can be vendored into a C++20 project without dependencies.",
+  "sources_read": [
+    "https://github.com/orefkov/simstr",
+    "https://github.com/orefkov/simstr/commits/main",
+    "https://github.com/orefkov/simstr/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/orefkov/simstr/HEAD/readme.md",
+    "https://raw.githubusercontent.com/orefkov/simstr/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/orefkov/simstr/HEAD/CMakePresets.json",
+    "https://raw.githubusercontent.com/orefkov/simstr/HEAD/bench/bench_str.cpp",
+    "https://raw.githubusercontent.com/orefkov/simstr/HEAD/bench/CMakeLists.txt",
+    "https://raw.githubusercontent.com/orefkov/simstr/HEAD/include/simstr/strexpr.h",
+    "https://raw.githubusercontent.com/orefkov/simstr/HEAD/include/simstr/sstring.h",
+    "https://raw.githubusercontent.com/orefkov/simstr/HEAD/bench/results/000-Xeon%20E5-2682%20v4%2C%20Ubuntu%2022%20%28WSL%29%2C%20Clang-22.txt",
+    "https://raw.githubusercontent.com/orefkov/simstr/HEAD/bench/results/002-Xeon%20E5-2682%20v4%2C%20Ubuntu%2022%20%28WSL%29%2C%20GCC-15.txt",
+    "https://raw.githubusercontent.com/orefkov/simstr/HEAD/bench/results/004-Xeon%20E5-2682%20v4%2C%20Windows%2010%2C%20MSVC-19.txt"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/oldcrow/corvus",
+  "one_liner": "Accuracy-first SIMD double-precision erf/lgamma/incomplete gamma-beta and sin/cos/exp batch kernels; sin/cos 3.2-5.6x faster than scalar vendor libm.",
+  "what_it_does": "A C++20 static library of vectorised double-precision special functions (erf/erfc, lgamma, digamma/trigamma, regularised incomplete gamma and beta and their inverses, lbeta, Bessel I0/I1) plus an elementary family (exp, log, log1p, cos, sin), each validated to about 1 ULP against an mpmath oracle on every SIMD tier. The API is std-only batch calls, f(std::span<const double> in, std::span<double> out), with scalar double entry points only for the incomplete gamma/beta family; there is no per-element std::cos-style overload and no float version.",
+  "how_it_is_fast": "Speed comes from evaluating a whole vector of lanes per instruction through Google Highway with runtime dispatch (SSE2 to AVX-512 AVX3_ZEN4, and NEON), branch-free region selection by masks, and corvus's own double-double exp/log cores rather than per-element libm calls. cos/sin use an exact-split quadrant reduction for |x| <= 2^23 and a vectorised Payne-Hanek reduction beyond it. The extra double-double work is what makes log/log1p (correctly rounded) and lgamma slower than fast vendor libms, so the gain is lane amortisation minus accuracy cost.",
+  "when_to_use": [
+    "Large double arrays (10^5 elements and up) of sin/cos or erf/erfc where you also need 1-ULP results over the full double range: 5.5x vs UCRT on Zen 4 and about 4.9x vs Apple's x86 libm on Kaby Lake at n = 10^6.",
+    "Vectorised statistical CDFs, quantiles and maximum-likelihood fits that need incomplete gamma/beta, their inverses, digamma/trigamma or Bessel I0/I1, which no vendor libm or basic SIMD math library provides.",
+    "Windows builds (clang-cl with AVX-512) whose current baseline is UCRT, where lgamma also wins 1.5-5.2x by band.",
+    "One binary that must pick SSE2 through AVX-512 or NEON at run time, with corvus::active_target() reporting the chosen tier."
+  ],
+  "when_not_to_use": [
+    "You want faster log or log1p: they are 0.21-0.64x and 0.32-0.92x of every vendor libm measured (correctly rounded by design).",
+    "lgamma or exp on macOS: Apple's libm beats corvus lgamma in every stable band (0.2-0.93x), and exp is 0.65x of Apple's x86 libm on Kaby Lake.",
+    "Small batches on Apple M1: at n = 1000 every corvus row ran 3.5-4x slower per element than at n = 10^4 (cos 15.79 vs 4.01 ns, exp 18.62 vs 4.66 ns), giving sin 0.28x of the libm.",
+    "Single precision, tan/pow/sqrt or broadcast arguments: double only, five elementary functions only, every span must be materialised to full length.",
+    "Incomplete gamma/beta inverses in extreme parameter ranges until the open accuracy bugs are fixed (issues #47-#59, e.g. gamma_p_inv(0.1, 0.99) returns 7.9e106 in #48)."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "Google Highway 1.4+ (Apache-2.0; an installed copy is used if found, otherwise 1.4.0 is fetched at configure time with contrib enabled)",
+    "min_toolchain": "C++20 (std::span in the public header), CMake 3.25+, MSVC 19.30+ (VS 2022) if using cl.exe; CI covers GCC on Linux, Apple Clang on macOS arm64 and MSVC on Windows",
+    "platforms": "x86-64 (SSE2, SSSE3, SSE4, AVX2, AVX-512 tiers) and aarch64 NEON with runtime dispatch; MSVC builds cap at AVX2 (use clang-cl for AVX-512); mingw-w64 GCC 16.1 is unsafe at AVX2 and above",
+    "thread_safety": "Stateless and thread-safe; no allocation, every public function noexcept, dispatch pointer resolved on first call (header contract).",
+    "drop_in_for_baseline": "partial: covers std::erf/erfc/lgamma/exp/log/log1p/cos/sin only, as batch span calls replacing a loop of std:: calls; no per-element overloads, double only, and results differ from libm in the last bit"
+  },
+  "gotchas": [
+    "Harness size effect: the scalar libm's own cost per element rises with n (Zen 4 UCRT cos 3.92 ns at n = 10^4 vs 8.86 ns at 10^5; Kaby Apple cos 13.47 ns at 10^3 vs 21.24 ns at 10^4) at about 2 GB/s of traffic, far below memory bandwidth, so PERFORMANCE.md's 'leaves cache' explanation is doubtful; the bench re-times one seeded array 11-51 times, which can let the branch predictor learn the libm's data-dependent branches at small n (my inference, not measured). The 5.5x headline is the n >= 10^5 figure; in-cache ratios are 2.2-2.4x on Zen 4.",
+    "PERFORMANCE.md numbers (2026-08-30/31, v0.9.0 kernels) are stale against the dev/v1.1.0 branch: issue #43 reports correctly rounded fast paths that took M1 exp 4.6 to 2.4, log 13.4 to 3.9, erf 2.2 to 1.8 and cos/sin 4.1 to 2.6 ns/el, not yet on main and with no new x86 numbers; the same issue shows the author's own libstats v2.4.1 kernels (about 0.52 ULP, not correctly rounded) still faster on M1 (exp 1.0, log 1.7, erf 1.4 ns/el).",
+    "Open wrong-result bugs in the incomplete gamma/beta family despite the 'production' label: negative probabilities from beta_p at the x = 0.5 seam (#47), divergent gamma_p_inv near the upper tail (#48), 1e6-2e9 ULP beta inverse errors (#50), a negative denormal from gamma_q (#51), large errors from subnormal divisors on non-FMA tiers (#59). The measured elementary functions and erf are not named in these issues.",
+    "Release builds do not check span lengths (a shorter span is out-of-bounds UB) and partial overlap of in and out is UB; only exact aliasing is allowed."
+  ],
+  "pick_this_over_siblings_when": "Pick corvus over math_intrinsics or SIMD-math-prims when you need double precision with 1-ULP bounds over the full argument range rather than fast single-precision approximations, and over VCL or EVE when you need statistical special functions (erf, lgamma, incomplete gamma/beta, quantiles) with a published per-tier accuracy audit; for float throughput the approximate siblings are the better fit.",
+  "verified_claims_summary": "At n = 10^6 seeded doubles, median of 11 timed reps after a warm-up, corvus cos/sin ran 1.6 ns/el (5.50x/5.58x) against UCRT std::cos/std::sin on a Zen 4 Ryzen 7 (named in issues #37 and #43 as a Ryzen 7 7445HS) built with clang-cl Release at AVX3_ZEN4, 4.4 ns/el (4.87x/4.98x) against Apple's x86 libm on an i7-7820HQ with Apple Clang 15 at AVX2, and 3.27x/3.21x against Apple's arm64 libm on an M1 (single run). erf was 6.33x vs UCRT and 3.43-3.56x vs Apple x86 libm, while exp ranged 0.65-1.28x and log/log1p were slower than every libm; no SIMD peer such as SLEEF or Highway contrib math was timed.",
+  "status_note": "Actively developed by one author (324 commits on main to 2026-10-11, v1.0.1 released 2026-09-19, faster kernels on dev/v1.1.0), MIT-licensed and copyable as a CMake static library, but with 1 star and a dozen open accuracy bugs in the incomplete gamma/beta inverses it is best adopted for erf/erfc and sin/cos first.",
+  "sources_read": [
+    "https://github.com/OldCrow/corvus",
+    "https://github.com/OldCrow/corvus/commits/main",
+    "https://github.com/OldCrow/corvus/branches",
+    "https://github.com/OldCrow/corvus/issues?q=is%3Aissue",
+    "https://github.com/OldCrow/corvus/issues/43",
+    "https://github.com/OldCrow/corvus/issues/37",
+    "https://github.com/OldCrow/corvus/commit/1bcba54",
+    "https://github.com/OldCrow/libstats",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/README.md",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/PERFORMANCE.md",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/VERSIONING.md",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/USER-GUIDE.md",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/CMakePresets.json",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/cmake/FindOrFetchHighway.cmake",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/include/corvus/corvus.h",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/src/trig.cpp",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/PLAN.md",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/tests/bench_trig.cpp",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/tests/bench_exp.cpp",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/bench-evidence/2026-08-30-zen4-quiet/quiet_bench_bench_trig.txt",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/bench-evidence/2026-08-30-zen4-quiet/quiet_bench_bench_exp.txt",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/bench-evidence/2026-08-30-zen4-quiet/quiet_bench_bench_erf.txt",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/bench-evidence/2026-08-30-zen4-quiet/quiet_bench_bench_log.txt",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/bench-evidence/2026-08-30-kaby-quiet/quiet_bench_bench_trig.txt",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/bench-evidence/2026-08-30-kaby-quiet/quiet_bench_bench_exp.txt",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/bench-evidence/2026-08-30-kaby-quiet/quiet_bench_bench_erf.txt",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/bench-evidence/2026-08-30-kaby-quiet/quiet_bench_bench_log.txt",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/bench-evidence/2026-08-31-m1-indicative/quiet_bench_bench_trig.txt",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/bench-evidence/2026-08-31-m1-indicative/quiet_bench_bench_exp.txt",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/bench-evidence/2026-08-31-m1-indicative/quiet_bench_bench_erf.txt",
+    "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/bench-evidence/2026-08-31-m1-indicative/quiet_bench_bench_log.txt"
+  ],
+  "confidence": 0.8
+}
