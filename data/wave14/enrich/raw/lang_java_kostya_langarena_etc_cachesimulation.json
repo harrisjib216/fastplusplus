@@ -1,0 +1,69 @@
+{
+  "id": "lang:java/kostya/langarena#etc-cachesimulation",
+  "one_liner": "HotSpot (Temurin 27, default G1) runs LangArena's string-keyed LRU cache test 1.28x faster than the best C build and 1.6x faster than C++.",
+  "what_it_does": "A LangArena benchmark task, not a library. Each timed iteration does 1,000 get/put operations against a 2,500-entry LRU cache, using keys 'item_0' to 'item_4999' drawn from the suite's LCG and values 'new_<iter>' or 'updated_<iter>'. Each language uses the same hand-written cache: a hash map from key to node plus a doubly linked list, evicting the tail at capacity. The Java side (java/src/main/java/benchmarks/CacheSimulation.java) is a generic LRUCache<K,V> over java.util.HashMap with String keys built by string concatenation. Nothing here can be linked into a C++ program; the row is evidence about the JVM, not a component to adopt.",
+  "how_it_is_fast": "The lead comes from runtime and library behaviour rather than from JIT code generation. Allocation is a TLAB bump-pointer, and evicted nodes are reclaimed by a copying young-generation GC instead of one free() per node. String.hashCode is cached in each String, so a key is hashed once per operation, while C++ re-hashes std::hash<std::string> in get's find, put's find, erase(oldest->key) and operator[] (up to four times on a miss) and C runs strlen plus uthash's Jenkins hash in every HASH_FIND_STR and HASH_ADD_STR. Java builds 'item_'+n through invokedynamic string concatenation (javac target 21), while C and C++ call glibc snprintf twice per operation and C then strdup()s key and value. None of this was profiled by the suite; the breakdown is inference from the code.",
+  "when_to_use": [
+    "Deciding whether a JVM service's in-process LRU or session cache (short string keys, small values, steady eviction churn) needs a C or C++ rewrite: at default settings HotSpot beat every C and C++ build here.",
+    "Throughput-bound batch or server code on a warmed-up JVM that is dominated by building short strings, hashing fresh keys and allocating small nodes, where bump allocation plus young-generation GC replaces malloc/free.",
+    "Hosts with hundreds of MB of heap headroom and a throughput collector (G1 or ParallelGC; the tuned ParallelGC row reached 0.476 s, 1.66x faster than C).",
+    "As a reference point for how much a naive C/C++ cache (snprintf keys, strdup, node-based map) gives away to the JVM."
+  ],
+  "when_not_to_use": [
+    "Memory-constrained deployments: peak RSS was 493 MB for Java against 3.2 MB for C and 6.5 MB for C++ on a cache that holds 2,500 entries.",
+    "SerialGC or small heaps: Java/OpenJDK/Serial (-Xmx512m) took 0.996 s, slower than every Clang/GCC C row, and GraalVM CE 25 JIT (0.865 s) also lost to C.",
+    "Latency-sensitive caches: the suite reports total runtime only, with no GC pause or tail-latency data.",
+    "Against tuned C++: the C++ port stores each key twice as std::string, uses node-based std::unordered_map, copies the value into a std::optional on every hit and formats with snprintf; std::to_chars keys, an open-addressing map and pooled nodes were never measured (inference).",
+    "As a stable result: under OpenJDK 26 the lead was only 1.02-1.05x in four runs (2026-07-14 to 2026-09-18); the 1.28x comes from one run, the first on JDK 27 and a newly installed Arch Linux host."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "A JDK (Temurin OpenJDK 27+35 measured); the suite's harness also uses org.json for its config, but the task itself uses only java.util",
+    "min_toolchain": "Java 21 bytecode (pom.xml source/target 21); measured on Temurin 27+35 with -Xmx2g",
+    "platforms": "Measured on x86-64 Linux (AMD Ryzen 7 3800X); any JVM platform in principle",
+    "thread_safety": "Not thread-safe: single-threaded LRU over an unsynchronized HashMap",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The Java port's removeOldest() leaves the evicted node's prev pointer set (C and C++ free the node; java.util.LinkedHashMap.afterNodeRemoval nulls both links for this reason). The harness also calls System.gc() between the warm-up and the timed loop, which moves the warmed cache into the old generation. Together these let a dead old-generation node keep every later-evicted node, with its key and value Strings, reachable for young collections (GC nepotism). This handicaps Java rather than inflating its result, and may be why the small-heap SerialGC rows lose while the ParallelGC row with -XX:+DisableExplicitGC is fastest (inference; the suite publishes no GC logs).",
+    "The workload is reproducible and identical across languages: my Python replay gives checksum 3263751556 (run.js expects 3263751556) with both the C integer and the Java floating-point next_int formulas, which agree over the LCG's whole 139,968-draw period. The timed run has a 48.6% hit rate (2,431,556 hits, 2,568,444 misses in 5,000,000 operations), and the key sequence repeats about every 140 iterations.",
+    "The 'Unsafe' and 'Fast' C builds do not get the LTO the record mentions: c/Makefile passes -flto=full or -flto=thin only on the link line, and the objects are compiled without -flto. Helper_next_int (helper.c) therefore stays an out-of-line cross-file call in every C build.",
+    "One in-process timing per configuration and no variance. Java's System.gc() after the timer stops means garbage left in the heap at the end is never collected inside the timed region; C and C++ pay free() for every eviction inside the loop."
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued LangArena HotSpot rows, Binarytrees::Obj (0.479 s vs 2.098 s, about 4.4x) and Calculator::Ast (about 1.8x) show the allocation advantage far more clearly; cite CacheSimulation only for string-keyed hash-map churn, where the margin is the thinnest and the least stable. Unlike the benchLANG and xemantic ring-of-nodes siblings, it puts a real hash table on the C side and shows the GC setting flipping the result.",
+  "verified_claims_summary": "In the 2026-10-05 LangArena run on an AMD Ryzen 7 3800X under Linux, Temurin OpenJDK 27 (default G1, -Xmx2g) took 0.617 s for 5,000 timed iterations of 1,000 LRU operations. That compares with 0.789 s for the best of 16 Clang/GCC C and C++ builds (C/Gcc/Unsafe: GCC 16.0.1 trunk, -O3 -march=native -ffast-math, uthash, glibc snprintf and malloc) and 0.991 s for C++/G++ at -O2 with libstdc++ std::unordered_map: 1.28x and 1.6x faster (derived from page data). In the four earlier monthly runs on OpenJDK 26 the lead was 1.02-1.05x.",
+  "status_note": "Active MIT-licensed suite (41 stars, last commit 2026-10-08, monthly reruns; the Java CacheSimulation code has been unchanged since 2026-02-25). This is a benchmark row, not a library: use it as a language-level data point, and in real Java code use LinkedHashMap with accessOrder=true and removeEldestEntry rather than this port, which keeps links on eviction.",
+  "sources_read": [
+    "https://github.com/kostya/LangArena",
+    "https://github.com/kostya/LangArena/issues?q=is%3Aissue",
+    "https://github.com/kostya/LangArena/commits/master/java/src/main/java/benchmarks/CacheSimulation.java",
+    "https://github.com/kostya/LangArena/commits/master/cpp/src/cache_simulation.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/run.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/benchmarks.rb",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/cache_simulation.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/benchmark.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/benchmark.h",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/helper.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/helper.h",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/cache_simulation.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/cache_simulation.hpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/benchmark.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/helper.hpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/helper.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/java/src/main/java/benchmarks/CacheSimulation.java",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/java/src/main/java/benchmarks/Benchmark.java",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/java/src/main/java/benchmarks/Helper.java",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/java/pom.xml",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-09-18-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-09-03-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-08-14-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-07-14-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/openjdk/jdk/master/src/java.base/share/classes/java/util/LinkedHashMap.java",
+    "https://raw.githubusercontent.com/openjdk/jdk/master/src/java.base/share/classes/java/lang/String.java"
+  ],
+  "confidence": 0.6
+}
