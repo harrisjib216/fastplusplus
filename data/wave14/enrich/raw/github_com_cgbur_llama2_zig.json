@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/cgbur/llama2.zig",
+  "one_liner": "Single-file Zig port of karpathy/llama2.c; single-threaded fp32 inference about 1.1-1.2x faster than gcc -Ofast llama2.c on stories15M.",
+  "what_it_does": "A one-file Zig program (src/main.zig, about 1,200 lines) that runs inference on llama2.c's legacy float32 checkpoints (7-int header, shared or separate classifier weights, multi-query attention) with argmax, temperature and top-p sampling, a BPE prompt encoder and a seed flag. It is a CLI, not a library: you run `zig build -Doptimize=ReleaseFast` and `llama2 model.bin -t 0 -n 256`, with the same flags and checkpoint/tokenizer files as llama2.c's run.c. A separate CUDA branch exists; the main branch is CPU-only.",
+  "how_it_is_fast": "Every matrix-vector product goes through one comptime-generated matmul_fused that uses Zig @Vector at the target's suggested width (8 f32 on AVX2) and shares each load of x across the fused q/k/v and w1/w3 rows; the current code also keeps 8 (single) or 4 (fused) independent vector accumulators per row to break the FMA dependency chain. RMSNorm, the attention value sum and the elementwise multiply are SIMD too, scratch buffers are vector-aligned, and the weights are read into a page-aligned buffer instead of llama2.c's mmap, where the weights start 28 bytes into the file and every row load is misaligned; that change alone took the README figure from 612 to 656 tok/s (commit 23c0711, 'Page align weights file for ~8% boost'). The whole file is compiled with @setFloatMode(.optimized), the Zig equivalent of the -Ofast fast-math that llama2.c needs to vectorise its reductions.",
+  "when_to_use": [
+    "You want a readable single-file reference transformer forward pass in Zig, or a Zig project needs llama2-architecture inference without C dependencies.",
+    "Single-threaded fp32 inference of small llama2.c checkpoints (stories15M/42M/110M class) on one core, where the README shows 660 vs 548 tok/s against gcc -Ofast llama2.c on a Ryzen 9 5900X.",
+    "As a worked example of explicit @Vector SIMD, comptime kernel fusion and accumulator splitting that you can port back to C with intrinsics.",
+    "Teaching or experimentation where llama2.c's checkpoint and tokenizer files should be reused unchanged."
+  ],
+  "when_not_to_use": [
+    "Anything multi-core: there is no threading (README Todo calls it 'not going well'), and llama2.c's own OpenMP build reached 1564 tok/s on the same CPU, 2.4x the single-threaded figure.",
+    "Real LLM serving or large models: fp32 only, no quantisation (llama2.c has runq.c for int8), no batching or prompt prefill, and the whole checkpoint is read into RAM rather than mmapped, so a 7B fp32 model needs about 27 GB resident before the first token.",
+    "Very small models (~100K parameters): the README Todo says llama2.c is faster there, blaming expf and GCC's floating-point reordering.",
+    "Toolchains other than Zig 0.16: build.zig.zon sets minimum_zig_version 0.16.0 and the std.Io API it uses changed across 0.11-0.16; issue #12 ('mem.page_size has been removed', April 2025) shows how often it breaks.",
+    "When bitwise-reproducible numerics matter: the file runs in optimized float mode, so results differ from strict IEEE builds."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (Zig standard library only); needs llama2.c-format checkpoint and tokenizer.bin",
+    "min_toolchain": "Zig 0.16.0 (build.zig.zon minimum_zig_version; CI pins 0.16.0); the README numbers were taken with Zig 0.11.0-dev.4315+f5239677e",
+    "platforms": "any Zig target in principle (vector width from std.simd.suggestVectorLength, fallback 4); default build targets the native CPU, so binaries are not portable to older CPUs without -Dtarget; only measured on x86-64 (Zen 3, AVX2)",
+    "thread_safety": "not applicable: single-threaded CLI with global PRNG and verbose state",
+    "drop_in_for_baseline": "partial: same checkpoint and tokenizer files and similar -t/-p/-n/-i/-s flags as llama2.c run.c, but it is a separate program, has no OpenMP build and adds -v and -z flags"
+  },
+  "gotchas": [
+    "The README table is a cross-session composite: the llama2.c runfast row (548) was last re-run on 2023-08-09 (commit 19988eb), when llama2.zig measured 606 (about 1.11x, derived from page data); afterwards only the llama2.zig row was updated (612 on Aug 15, 656 on Aug 16 after page-aligning the weights, 660 on Aug 17), so the headline 660 vs 548 (1.20x) compares runs eight days apart. The top-p row likewise pairs a llama2.zig 579 from Aug 15 or earlier with a llama2.c 463 re-measured on Aug 17 after llama2.c merged its top-p speedup; the OpenMP 1564 and llama2.rs rows date from before Aug 7.",
+    "Part of the margin is data layout rather than code generation: llama2.c mmaps the file and reads weights at a 28-byte offset, so its vector loads are misaligned, while llama2.zig copies them into a page-aligned buffer; aligning the weights alone moved llama2.zig from 612 to 656 tok/s.",
+    "Tokens/s is computed after the first token as (pos-1)/elapsed, like llama2.c, and generation stops early at BOS; before commit 78c7b94 ('Fix mistake in benchmarking', 2023-08-07) the divisor was seq_len-1 even when the story ended early, which inflated the figures (662 to 577 and 341 to 295 after the fix). With top-p sampling and time-seeded RNGs on both sides, each run generates a different-length story, so single runs vary.",
+    "The README help text says top-p defaults to 1.0, but the code (and its own --help) defaults to 0.9, so a bare run does nucleus sampling; prompt tokens are fed one at a time and counted in tok/s, and the README benchmark was not re-run after the 2026-08-02 hot-path rewrite (independent accumulators, register attention sums, Zig 0.16 port)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over llama2.mojo when you want a Zig (not Mojo) single-file port and single-threaded speed, since llama2.mojo's wins are measured against llama2.c's OpenMP build with threads; pick fastGPT (Fortran, GPT-2 via BLAS) for GPT-2 models, and neither of the three for production serving.",
+  "verified_claims_summary": "On one AMD Ryzen 9 5900X core with stories15M and 256 tokens, the README reports llama2.zig (Zig 0.11-dev, ReleaseFast, native) at 660 tok/s argmax and 579 tok/s top-p 0.9, against karpathy/llama2.c built with gcc -Ofast -march=native at 548 and 463 (1.20x and 1.25x, derived from page data) and against gcc -O3 -march=native at 122; the last time both argmax rows were measured together (2023-08-09) the figures were 606 vs 548, about 1.11x.",
+  "status_note": "Active again since a 2026-08-02 port to Zig 0.16 with CI (zig build test, zig fmt), MIT-licensed and a single file that is easy to vendor, but the 2023 benchmark table was not re-run on the current code or with a current llama2.c.",
+  "sources_read": [
+    "https://github.com/cgbur/llama2.zig",
+    "https://raw.githubusercontent.com/cgbur/llama2.zig/main/README.md",
+    "https://raw.githubusercontent.com/cgbur/llama2.zig/main/src/main.zig",
+    "https://raw.githubusercontent.com/cgbur/llama2.zig/main/build.zig",
+    "https://raw.githubusercontent.com/cgbur/llama2.zig/main/build.zig.zon",
+    "https://raw.githubusercontent.com/cgbur/llama2.zig/main/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/cgbur/llama2.zig/9b225a2/src/main.zig",
+    "https://github.com/cgbur/llama2.zig/commits/main/README.md",
+    "https://github.com/cgbur/llama2.zig/commit/78c7b94",
+    "https://github.com/cgbur/llama2.zig/commit/35f65de",
+    "https://github.com/cgbur/llama2.zig/commit/23c0711",
+    "https://github.com/cgbur/llama2.zig/issues?q=is%3Aissue",
+    "https://github.com/cgbur/llama2.zig/issues/1",
+    "https://raw.githubusercontent.com/cgbur/llama2.zig/78c7b94/README.md",
+    "https://raw.githubusercontent.com/cgbur/llama2.zig/19988eb/README.md",
+    "https://raw.githubusercontent.com/cgbur/llama2.zig/8b819e5/README.md",
+    "https://raw.githubusercontent.com/cgbur/llama2.zig/f52ed86/README.md",
+    "https://raw.githubusercontent.com/cgbur/llama2.zig/ea19ffa/README.md",
+    "https://raw.githubusercontent.com/cgbur/llama2.zig/993dce9/README.md",
+    "https://raw.githubusercontent.com/cgbur/llama2.zig/121c63e/README.md",
+    "https://raw.githubusercontent.com/cgbur/llama2.zig/6d408e4/README.md",
+    "https://raw.githubusercontent.com/cgbur/llama2.zig/23c0711/README.md",
+    "https://raw.githubusercontent.com/cgbur/llama2.zig/8e23277/README.md",
+    "https://raw.githubusercontent.com/cgbur/llama2.zig/e46473c/README.md",
+    "https://raw.githubusercontent.com/cgbur/llama2.zig/a78d395/README.md",
+    "https://raw.githubusercontent.com/cgbur/llama2.zig/35f65de/README.md",
+    "https://raw.githubusercontent.com/karpathy/llama2.c/master/run.c"
+  ],
+  "confidence": 0.8
+}

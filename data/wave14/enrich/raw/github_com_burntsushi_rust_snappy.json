@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/burntsushi/rust-snappy",
+  "one_liner": "Pure-Rust Snappy (raw and frame formats) that roughly matches C++ Snappy 1.1.8: within about 10% either way per file.",
+  "what_it_does": "snap is a Rust port of Google's Snappy compressor (from the C++ and Go implementations) with the raw block format (`snap::raw::Encoder`/`Decoder`, caller-supplied output buffers or `compress_vec`) and the streaming frame format (`read::FrameDecoder`, `read::FrameEncoder`, `write::FrameEncoder` over std::io). Raw compressed output is byte-for-byte identical to the C++ library per the README, so it interoperates with any Snappy producer or consumer, but it is a Rust API, not a C/C++ ABI replacement.",
+  "how_it_is_fast": "It reproduces the reference algorithm: a 4-byte multiplicative hash (0x1E35A7BD) into a u16 position table sized to the block, the skip heuristic that hashes less often in incompressible data, 8-byte unaligned match extension and 16-byte over-copies for short literals and copies, and a 256-entry tag lookup table in the decoder, with unchecked indexing in the hot loops. For blocks needing at most 1,024 table entries it uses a table embedded in the Encoder instead of the heap, which avoids the per-call heap working-memory allocation that Snappy 1.1.8 does. Frame-format CRC32C uses SSE4.2 when detected at run time on x86_64, else a slice-by-16 table.",
+  "when_to_use": [
+    "Rust code that must read or write Snappy raw or framed data and should not need a C++ toolchain, pkg-config or a system libsnappy (static or cross builds).",
+    "Many small messages (hundreds of bytes) compressed with one reused Encoder: the stack table avoids heap traffic, and the 200-byte rows are where snap beat C++ 1.1.8 most (compress 237.5 vs 262.4 ns, decompress 112.8 vs 122.4 ns).",
+    "Streaming compression or decompression through std::io Read/Write adapters with framed CRC32C checks.",
+    "Projects that want a widely used pure-Rust implementation (about 125 million crates.io downloads) rather than FFI bindings such as the `snappy` crate."
+  ],
+  "when_not_to_use": [
+    "If you expect a speedup over current C++ Snappy: the only comparison is parity against 1.1.8 (Jan 2020); Snappy 1.1.9, 1.1.10, 1.2.x and 1.3.1 (Sep 2026) all list performance work and were never measured against snap.",
+    "If you need Snappy 1.2's denser compression level 2 or other tuning knobs: snap's Encoder has no level setting.",
+    "C or C++ consumers: use google/snappy directly; this crate exposes only a Rust API.",
+    "no_std or allocation-free embedded targets: the crate depends on std (std::io, runtime CPU feature detection) and allocates a 32 KB table for blocks above 1 KB.",
+    "Highly repetitive single-byte inputs: issue #34 (2020) reported a PyO3 binding of snap slower than python-snappy on such a file; the maintainer called the input pathological but did not show snap winning there."
+  ],
+  "integration": {
+    "form": "crate (snap on crates.io); szip CLI in the same workspace",
+    "dependencies": "none at run time (criterion and the snappy-cpp FFI crate are used only by the bench and test crates)",
+    "min_toolchain": "README states Rust 1.39.0, but CI bumped the pinned MSRV to 1.60 and then 1.70 and stopped testing an MSRV in August 2025, so the stated minimum is untested; edition 2018",
+    "platforms": "any Rust target with std; performance claims cover x86_64 only; CRC32C hardware path on x86_64 with SSE4.2",
+    "thread_safety": "Encoder, Decoder and frame adapters are plain owned values driven through &mut self; use one per thread (not otherwise documented)",
+    "drop_in_for_baseline": "partial: same raw and framed wire formats with byte-identical raw output to C++ 1.1.8, but a Rust API, not a replacement for the C++ library's API or ABI"
+  },
+  "gotchas": [
+    "Harness asymmetry: the C++ side is whatever system libsnappy shared library was installed (README says 1.1.8; snappy-cpp/build.rs only links dylib=snappy, so its build flags are the distribution's), called through the C API over FFI. That C API path builds a heap WorkingMemory on every compress call (snappy.cc 1.1.8 WorkingMemory constructor), and the wrapper parses the length header twice on decompress, while snap uses an inline 1,024-entry table. The 200-byte jpg_200 rows (8-10% snap wins, 10-25 ns) mostly measure that per-call overhead, not the codecs. Both sides decompress snap-compressed input, which is fine given byte-identical output.",
+    "Undefined behavior under Tree Borrows was found in Decompress::read_copy (issue #56, Dec 2023) and fixed in 1.1.1 (commit cda9838); use 1.1.1 or later. The hot loops are unsafe pointer code.",
+    "The raw format caps input at u32::MAX bytes (MAX_INPUT_SIZE); use the frame format for larger or streaming data. Raw APIs require initialized output slices of max_compress_len bytes (MaybeUninit output is an open request, #62).",
+    "1.1.2 (2026-07-15) changed only error validation in the decoder (long-literal length bytes, varint header capped at 5 bytes), so the README numbers still describe the current hot loops; the C++ baseline is what has aged."
+  ],
+  "pick_this_over_siblings_when": "Pick snap over Supersnappy (the Nim sibling, also measured against the C API of a prebuilt libsnappy) when you work in Rust or need the frame format and a large user base. Unlike libbzip2-rs or crabz, which claim wins over C, snap is a parity port: choose it to drop the C++ dependency, not for speed.",
+  "verified_claims_summary": "Criterion microbenchmarks on an Intel i7-6900K over the 12 files of Snappy's own test corpus, with one harness driving snap and the system libsnappy 1.1.8 through FFI: snap ranged from 10% slower (decompress pdf) to 10% faster (compress 200-byte jpg) and was within 2% on most rows. Compiler versions and the C++ build flags are not stated.",
+  "status_note": "Maintained at low churn (1.1.2 released 2026-07-15; open issue #66 asks whether it is still maintained), BSD-3-Clause, about 125 million crates.io downloads; safe to depend on for Rust Snappy, but its speed evidence is a 2020-era parity table against Snappy 1.1.8.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/BurntSushi/rust-snappy/HEAD/README.md",
+    "https://raw.githubusercontent.com/BurntSushi/rust-snappy/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/BurntSushi/rust-snappy/HEAD/bench/Cargo.toml",
+    "https://raw.githubusercontent.com/BurntSushi/rust-snappy/HEAD/bench/src/bench.rs",
+    "https://raw.githubusercontent.com/BurntSushi/rust-snappy/HEAD/snappy-cpp/Cargo.toml",
+    "https://raw.githubusercontent.com/BurntSushi/rust-snappy/HEAD/snappy-cpp/build.rs",
+    "https://raw.githubusercontent.com/BurntSushi/rust-snappy/HEAD/snappy-cpp/src/lib.rs",
+    "https://raw.githubusercontent.com/BurntSushi/rust-snappy/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/BurntSushi/rust-snappy/HEAD/src/compress.rs",
+    "https://raw.githubusercontent.com/BurntSushi/rust-snappy/HEAD/src/decompress.rs",
+    "https://raw.githubusercontent.com/BurntSushi/rust-snappy/HEAD/src/crc32.rs",
+    "https://raw.githubusercontent.com/BurntSushi/rust-snappy/HEAD/src/bytes.rs",
+    "https://raw.githubusercontent.com/BurntSushi/rust-snappy/HEAD/src/read.rs",
+    "https://raw.githubusercontent.com/BurntSushi/rust-snappy/HEAD/src/write.rs",
+    "https://raw.githubusercontent.com/google/snappy/HEAD/NEWS",
+    "https://raw.githubusercontent.com/google/snappy/1.1.8/snappy.cc",
+    "https://github.com/BurntSushi/rust-snappy/commits/master",
+    "https://github.com/BurntSushi/rust-snappy/commit/fea0488",
+    "https://github.com/BurntSushi/rust-snappy/issues?q=is%3Aissue",
+    "https://github.com/BurntSushi/rust-snappy/issues/61",
+    "https://github.com/BurntSushi/rust-snappy/issues/56",
+    "https://github.com/BurntSushi/rust-snappy/issues/34",
+    "https://crates.io/api/v1/crates/snap",
+    "WebSearch: Rust snap crate vs C++ snappy 1.1.9/1.1.10/1.2 benchmark (no newer comparison found)"
+  ],
+  "confidence": 0.8
+}

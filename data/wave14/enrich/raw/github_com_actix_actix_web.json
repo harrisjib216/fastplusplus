@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/actix/actix-web",
+  "one_liner": "Full-featured Rust HTTP/1.1 and HTTP/2 web framework; in HttpArena it beats Drogon and Cutelyst (C++) but trails nginx and h2o.",
+  "what_it_does": "A complete async web framework (crate actix-web 4.x on tokio): routing with optional attribute macros, typed extractors (Path, Query, Json, Bytes), middleware (Logger, Compress, CORS and session via sibling crates), WebSockets, multipart, and static files via actix-files. TLS comes from rustls 0.20-0.23 or OpenSSL. HttpServer takes an App factory closure and runs it on N worker threads. It is an application framework, not a drop-in for nginx or for Drogon's C++ API.",
+  "how_it_is_fast": "actix-server runs one acceptor thread (actix-net accept.rs) that hands sockets round-robin to per-core workers. Each worker owns its own App instance, so the hot path needs no cross-thread locks. actix-http parses and serializes HTTP/1 into reused buffers and supports pipelining, which is why the reference-only pipelined profile reaches 16.3M req/s. The HttpArena entry is built with rustc 1.94, -C target-cpu=native, thin LTO, codegen-units=1 and panic=abort.",
+  "when_to_use": [
+    "Rust services that want a full framework (extractors, middleware, rustls TLS, WebSockets) and keep-alive throughput in the C++-framework class: HttpArena baseline-4096 gives 2,775,120 req/s vs Drogon 2,022,710 and Cutelyst 2,153,860 on a 64-core Threadripper PRO 3995WX.",
+    "JSON APIs over TLS on HTTP/1.1, where actix reaches 1,157,219 req/s at json-tls-4096, against Drogon 253,055 and nginx 1,313,755.",
+    "Many concurrent slow or parked requests: async-32000 runs at 2,112,168 req/s with 1,009 MiB RSS, against Drogon 143,001.",
+    "WebSocket echo or pipelined HTTP/1.1 traffic (echo-ws 3.2-3.4M msg/s, echo-ws-pipeline 37.7-43.7M).",
+    "HTTP/2 over TLS at moderate connection counts: baseline-h2-256 gives 3,884,214 req/s vs nginx 3,414,750, though it falls behind nginx at 1024 connections (3,056,936 vs 3,320,285)."
+  ],
+  "when_not_to_use": [
+    "Maximum plain HTTP/1.1 req/s: on the same board nginx (3,284,513), h2o (3,641,609), the raw tokio entry (4,187,085) and libreactorng (4,377,377) are all faster at baseline-4096.",
+    "Serving static files at scale through actix-files: static-tls-1024 reaches 55,882 req/s at 4.6 GiB RSS against nginx 720,869, and static-h2 reaches 51,989-64,019 req/s at 11.2-37.0 GiB RSS with p99 latency of 1.58-2.64 s against nginx 796,607-802,090. Put a C server or CDN in front.",
+    "Connection-churn traffic. On limited-conn-4096 (10 requests per connection) it reaches 1,135,157 req/s using about 46 of 64 cores, behind Drogon 1,694,883, Cutelyst 1,736,401 and nginx 2,626,297; the single acceptor thread is the likely limit (inferred, not profiled).",
+    "As evidence that Rust beats C or C++ in general: this is one framework against another, Drogon is built from an unpinned image without -march=native while actix gets target-cpu=native, and the rows come from separate runs."
+  ],
+  "integration": {
+    "form": "crate (actix-web 4.15.0 on crates.io; workspace also ships actix-http, actix-router, actix-files, awc)",
+    "dependencies": "tokio, actix-rt, actix-server, actix-service, actix-codec, actix-http, actix-router, bytes, serde, serde_json, serde_urlencoded, url, http types; optional rustls or openssl, brotli/flate2/zstd for compression, cookie",
+    "min_toolchain": "Rust 1.88 (MSRV since 4.13.0)",
+    "platforms": "Any tokio target (Linux, macOS, Windows; 4.14.0 added dual-stack IPv6 sockets on Windows); x86-64 and aarch64",
+    "thread_safety": "Multi-worker server: the worker count defaults to std::thread::available_parallelism, the App factory is instantiated at least once per worker, and shared state goes in web::Data (Arc). Each worker has its own blocking pool, defaulting to 512 / available_parallelism threads.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The HttpArena json-comp win (541,211 vs Drogon 127,466 req/s) does not measure actix-web's Compress middleware. The entry gzips in the handler with flate2 level 1 because actix-http's encoder compresses in place only below 1 KiB (MAX_CHUNK_SIZE_ENCODE_IN_PLACE) and sends larger bodies to spawn_blocking. The entry's own comment says the stock path sat at 66% CPU at 12k req/s. Its meta.json still describes json-comp as handled by the Compress middleware, so stock Compress on 2-6 KB JSON bodies will be much slower.",
+    "TCP_NODELAY is left at the OS default. Issue #3841 measured HTTP/2 over rustls at 41.45 ms per request against 0.14 ms on HTTP/1.1, caused by Nagle's algorithm. 4.13.0 added an HttpServer method to set TCP_NODELAY, but the default stays off until a major release, so set it yourself for latency-sensitive HTTP/2.",
+    "The defaults cap load per worker: 25k concurrent connections, 256 concurrent TLS handshakes, a backlog of 1024, a 5 s keep-alive and a 5000 ms client request timeout (408 on slow headers). High-fan-in or slow-client deployments need tuning.",
+    "The HttpArena entry runs an unreleased main revision (67490f9e) to get actix-files try_compressed(), so the static rows do not match the crates.io release. Past advisories: RUSTSEC-2020-0048 (use-after-free in BodyStream, CVE-2020-35901) and RUSTSEC-2021-0081 (HTTP/1 request smuggling, CVE-2021-38512, patched in 2.2.1 and 3.0.0-beta.9); both predate the 4.x series."
+  ],
+  "pick_this_over_siblings_when": "Pick actix-web over the raw tokio, tokio-uring, cpeak or zix HttpArena entries when you need a maintained full framework rather than a minimal benchmark server; those siblings post 3.5-4.4M req/s at baseline-4096 but are not general-purpose frameworks. Over ntex (2,168,712 at baseline-4096), pick it for the larger ecosystem (24.9k stars, about 85M downloads) and the higher baseline score.",
+  "verified_claims_summary": "HttpArena (Threadripper PRO 3995WX, 64 cores, server and gcannon load generator pinned to separate halves, loopback, 5 s runs, best of 3) gives actix-web 2,775,120 req/s on baseline-4096, against Drogon 2,022,710 (1.37x, derived from page data) and Cutelyst 2,153,860 (1.29x). It is behind nginx 3,284,513 and h2o 3,641,609. pipelined-4096 gives 16,338,425 vs Drogon 7,801,404 and nginx 4,037,345, but that profile is reference-only. Actix was built with rustc 1.94, target-cpu=native and thin LTO; Drogon used drogonframework/drogon:latest with CMake Release and jemalloc preloaded but no -march=native.",
+  "status_note": "Actively maintained: 4.15.0 released 2026-08-21, 5,221 commits, 24.9k stars, about 85M crates.io downloads, dual MIT OR Apache-2.0, 145 open issues. Production-grade and copyable as a dependency.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/actix/actix-web/HEAD/actix-web/README.md",
+    "https://raw.githubusercontent.com/actix/actix-web/HEAD/actix-web/Cargo.toml",
+    "https://raw.githubusercontent.com/actix/actix-web/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/actix/actix-web/HEAD/actix-web/CHANGES.md",
+    "https://raw.githubusercontent.com/actix/actix-web/HEAD/actix-http/Cargo.toml",
+    "https://raw.githubusercontent.com/actix/actix-web/HEAD/actix-http/src/encoding/encoder.rs",
+    "https://raw.githubusercontent.com/actix/actix-web/HEAD/actix-web/src/server.rs",
+    "https://raw.githubusercontent.com/actix/actix-net/HEAD/actix-server/src/accept.rs",
+    "https://github.com/actix/actix-web",
+    "https://github.com/actix/actix-web/commit/67490f9e75d3262446449481c510e5ab36c9bcfa",
+    "https://github.com/actix/actix-web/issues?q=is%3Aissue+is%3Aopen+label%3AC-perf",
+    "https://github.com/actix/actix-web/issues?q=is%3Aissue+performance+sort%3Aupdated-desc",
+    "https://github.com/actix/actix-web/issues/3444",
+    "https://github.com/actix/actix-web/issues/3841",
+    "https://crates.io/api/v1/crates/actix-web",
+    "https://github.com/rustsec/advisory-db/tree/main/crates/actix-http",
+    "https://raw.githubusercontent.com/rustsec/advisory-db/main/crates/actix-http/RUSTSEC-2021-0081.md",
+    "https://raw.githubusercontent.com/rustsec/advisory-db/main/crates/actix-http/RUSTSEC-2020-0048.md",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/actix/Dockerfile",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/actix/Cargo.toml",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/actix/meta.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/actix/src/main.rs",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/drogon/Dockerfile",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/drogon/main.cc",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/actix.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/drogon.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/nginx.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/benchmark.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/common.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/profiles.sh"
+  ],
+  "confidence": 0.8
+}

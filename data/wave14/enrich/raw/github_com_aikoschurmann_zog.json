@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/aikoschurmann/zog",
+  "one_liner": "Zig CLI that filters, extracts and aggregates JSONL by raw byte scanning; README claims 20-50x over jq/jaq.",
+  "what_it_does": "zog is a command-line filter for line-delimited JSON: `zog [--file F] [SELECT fields WHERE] key op value [AND/OR ...]` with operators eq, neq, gt, lt, gte, lte, has, exists and in, NOT, AND-before-OR grouping without parentheses, s:/n:/b: type prefixes, --limit, --count, and TSV, CSV or JSON output. SELECT can pull fields or compute count/sum/min/max/avg in one pass. It is not a jq replacement: it has its own query syntax, no paths, no nesting, no transforms beyond picking top-level-looking fields.",
+  "how_it_is_fast": "It never parses JSON. A reader thread fills two 8 MiB buffers in turn (cut at the last newline) while the main thread splits lines with 32-byte @Vector newline masks and @ctz, and finds candidate keys by comparing one vector against '\"' and the next (offset by one byte) against the key's first character. Each hit is confirmed with memcmp, then the value is compared as raw bytes (pre-quoted string, literal number with a terminator check, or a fast integer/float parse for range operators). The query is compiled once up front, and the scan allocates no heap memory.",
+  "when_to_use": [
+    "Grepping large flat JSONL logs (one object per line, few nested keys) for a field value or range at multi-GB/s, where jq's full parse is the bottleneck.",
+    "Quick COUNT/SUM/MIN/MAX/AVG over a field in a single pass, when approximate semantics (string \"99.99\" counted as a number) are acceptable.",
+    "Pre-filtering a big file down to candidate lines before handing them to jq, jaq or Miller for exact processing.",
+    "Streaming use (tail -f app.jsonl | zog level eq error) on Linux x86-64 or macOS arm64, where prebuilt binaries exist."
+  ],
+  "when_not_to_use": [
+    "Any query where nesting matters: a key inside a sub-object, an array element or even a string value equal to the key name is treated as the key (see gotchas).",
+    "Producing JSON for another program: --format json can emit invalid or retyped JSON, and object or array values are cut short.",
+    "Numbers written in different forms (eq 90 does not match 90.0), integers of 19 or more digits, keys written with \\u escapes, pretty-printed JSON, or lines longer than 8 MiB.",
+    "Anything needing validation, paths, transforms, sorting, grouping or parentheses in boolean logic; use jq, jaq or Miller.",
+    "Windows (no release binary; the v0.1.1 release note says 'windows support later')."
+  ],
+  "integration": {
+    "form": "standalone CLI binary (single static executable; prebuilt zog-linux-amd64 and zog-macos-arm64, or zig build -Doptimize=ReleaseFast)",
+    "dependencies": "none (Zig standard library only)",
+    "min_toolchain": "Zig 0.16.0 (build.zig.zon minimum_zig_version); build.zig defaults to Debug unless -Doptimize is given",
+    "platforms": "Linux x86-64 and macOS arm64 binaries; portable @Vector(32, u8) code. The release workflow builds -Dtarget=x86_64-linux with no -Dcpu, so the Linux binary targets baseline x86-64 and its 32-byte vectors lower to SSE2 rather than the AVX2 the README describes; build with -Dcpu=native for AVX2.",
+    "thread_safety": "not applicable (CLI); internally one reader thread plus one scanning thread synchronised with two semaphores",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The WHERE matcher accepts any occurrence of the quoted key text and does not check for a following colon, so a string value equal to the key name counts. Read from src/scanner.zig: `error exists` matches {\"level\":\"error\"}, and because neq succeeds if ANY occurrence differs, `status neq 200` matches {\"type\":\"status\",\"status\":200}. Use NOT key eq value for a safe negation.",
+    "--format json decides whether to quote a string by its first byte (isFastPrimitive: a digit, '-', 't', 'f' or 'n'), so the string \"fatal\" is printed as fatal (invalid JSON) and \"45\" becomes the number 45. Object and array values are cut at the first comma or closing brace, and keys and values are not escaped. The same code existed at the benchmarked commit 7e83065, so the 'JSON Re-Formatting' row compares output that is not equivalent to jq's (a harness flaw in the comparison, not a measurement error).",
+    "SELECT with one field (including a single aggregate) uses a looser extractor (extractValueSingle, no colon check) than SELECT with two or more fields. If the key name first appears as a string value, the single-field path returns an empty value: `SELECT sum:bytes` can undercount where `SELECT sum:bytes,count:bytes` does not, and `count:error` counts lines that contain the string \"error\" anywhere.",
+    "parseFastInt accumulates into i64 with no overflow check, so a data integer of 19 or more digits (9.22e18 or more) in a range comparison or an aggregation is undefined behaviour in the ReleaseFast release builds and a panic in Debug or ReleaseSafe. A line longer than the 8 MiB block never fits the buffer, and the reader then issues a zero-length read that ends the scan early (code reading, not tested)."
+  ],
+  "pick_this_over_siblings_when": "Pick zog over Miller 6 when the data is flat JSONL, the question is a simple field filter or sum, and throughput matters more than exact JSON semantics; Miller parses the JSON properly and handles nesting. If the data can be TSV, eBay tsv-utils (tsv-filter) gives correct field semantics at lower but still fast speeds.",
+  "verified_claims_summary": "Only the author's README table backs the claim, unchanged since commit 7e83065 (2026-02-27, the Zig 0.13 code): a 1 GB, 6.7-million-line JSONL file on 'a modern NVMe SSD', with no CPU, versions, flags, commands, dataset or cache state given. zog file mode ran at 2.24-4.03 GB/s versus 0.05-0.10 GB/s for a merged jq/jaq column (about 28-58x, derived from page data). ripgrep ran at 0.54-2.97 GB/s on the three rows it can express, and zog's file mode uses two threads.",
+  "status_note": "Small single-author MIT tool (27 commits, 49 stars, no issues filed). v1.0.0 (2026-07-17) is a contributor's port to Zig 0.16 std.Io. Nobody has re-measured since that port: the README numbers predate it and the March 2026 feature commit. `zog --version` still prints 0.1.5, and the README's Linux download URL (zog-linux-x64) does not match the released asset name zog-linux-amd64.",
+  "sources_read": [
+    "https://github.com/aikoschurmann/zog",
+    "https://raw.githubusercontent.com/aikoschurmann/zog/HEAD/README.md",
+    "https://raw.githubusercontent.com/aikoschurmann/zog/HEAD/build.zig",
+    "https://raw.githubusercontent.com/aikoschurmann/zog/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/aikoschurmann/zog/HEAD/src/main.zig",
+    "https://raw.githubusercontent.com/aikoschurmann/zog/HEAD/src/scanner.zig",
+    "https://raw.githubusercontent.com/aikoschurmann/zog/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/aikoschurmann/zog/HEAD/.github/workflows/release.yml",
+    "https://raw.githubusercontent.com/aikoschurmann/zog/7e83065/src/scanner.zig",
+    "https://raw.githubusercontent.com/aikoschurmann/zog/e7e7ca3/README.md",
+    "https://raw.githubusercontent.com/aikoschurmann/zog/548f657/README.md",
+    "https://raw.githubusercontent.com/aikoschurmann/zog/7e83065/README.md",
+    "https://raw.githubusercontent.com/aikoschurmann/zog/1c02e64/README.md",
+    "https://github.com/aikoschurmann/zog/commits",
+    "https://github.com/aikoschurmann/zog/commits/main/README.md",
+    "https://github.com/aikoschurmann/zog/issues?q=is%3Aissue",
+    "https://github.com/aikoschurmann/zog/releases",
+    "https://github.com/aikoschurmann/zog/releases/expanded_assets/v1.0.0",
+    "https://github.com/aikoschurmann/zog/pull/2"
+  ],
+  "confidence": 0.6
+}

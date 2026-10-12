@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/brentp/mosdepth",
+  "one_liner": "Nim command-line tool for BAM/CRAM coverage; about 2x faster per-base than the pre-2021 pileup-based samtools depth.",
+  "what_it_does": "mosdepth computes read depth from a coordinate-sorted, indexed BAM or CRAM: per-base depth (run-length BED.gz with CSI index, or D4), mean or median depth per window or per BED region, quantized bins, threshold counts per region, and cumulative coverage distributions and summaries for QC. It is a standalone CLI (`mosdepth [options] <prefix> <BAM-or-CRAM>`) with its own output files, not a library and not a drop-in for the `samtools depth` command line or its per-position text output.",
+  "how_it_is_fast": "For each chromosome it allocates one int32 array of chromosome length, adds +1 at every aligned-block start and -1 at every block end, then takes a cumulative sum (a difference array, like BEDTools genomecov), so no per-base pileup objects are built. Regions, windows, thresholds and distributions are read off the finished array in one pass. In --fast-mode it uses only alignment start and end, skips mate-overlap correction and asks htslib to decode only the needed CRAM fields (CRAM_OPT_REQUIRED_FIELDS), which the changelog says made CRAM up to 2x faster.",
+  "when_to_use": [
+    "Whole-genome or exome QC where you need per-window or per-BED-region mean or median depth, thresholds (e.g. bases at 1X/10X/20X/30X per exon) or genome-wide coverage distributions from a single pass.",
+    "CNV-style binned depth on WGS (`-n --fast-mode --by 500`), where the README reports under 9 minutes of user time with 3 threads on a 30X genome.",
+    "Callable-loci style quantized output (`--quantize 0:1:5:150:`) as a lighter replacement for GATK CallableLoci.",
+    "Pipelines that already pull mosdepth from bioconda, brew or the static release binary (nf-core/Sarek calls it), so no Nim toolchain is needed."
+  ],
+  "when_not_to_use": [
+    "Small one-off regional queries: the README says it is slower than samtools there, because it builds the whole-chromosome array first.",
+    "Memory-constrained jobs: about 4 bytes times the longest chromosome (about 1.2 GB on human, against 27 MB for samtools depth in the README table).",
+    "When you just need samtools-compatible per-position output and already run samtools 1.13 or later: its rewritten, non-pileup `depth` (3-30x faster than 1.11 in the samtools PR) has never been benchmarked against mosdepth by the project.",
+    "RNA-seq with --fast-mode: fast mode counts from alignment start to end, so deletions and spliced introns (N) are counted as covered; use the default mode there (an independent Megadepth paper, search snippet only, reports mosdepth 2.7x slower than Megadepth on RNA-seq BAMs).",
+    "Unindexed or unsorted input, or CRAM without a reference (-f or REF_PATH): it exits with an error."
+  ],
+  "integration": {
+    "form": "CLI binary (static release binary, bioconda, brew, quay.io container) or built from source with nimble",
+    "dependencies": "htslib >= 1.4 (the static release binary bundles htslib and libdeflate), hts-nim >= 0.3.31, docopt 0.7.1, d4-nim plus the Rust libd4binding for optional --d4 output",
+    "min_toolchain": "Nim >= 1.0.0 per mosdepth.nimble; CI builds with Nim 1.6.18 and 2.0.2; must be compiled with --mm:refc (set in nim.cfg) and -d:release",
+    "platforms": "Linux x86-64 (static release binary, CI on ubuntu-22.04) and macOS (CI on macos-14 with Homebrew htslib); other platforms not documented",
+    "thread_safety": "Not applicable (single process); -t sets htslib BGZF/CRAM decompression threads only, with no benefit past about 4 threads per the README.",
+    "drop_in_for_baseline": "false: different command line and output (run-length BED.gz with CSI index, summary and distribution files) from samtools depth's per-position TSV."
+  },
+  "gotchas": [
+    "Stale baseline and harness asymmetry: the 2x claim is against pileup-based samtools depth (2017-era: the same numbers are in the 2018 paper and the scaling plot dates from October 2017, so the table predates --fast-mode, tagged in v0.2.4 on 2018-11-19, and timed the default CIGAR-and-overlap mode). samtools 1.13 (July 2021, PR #1428) rewrote depth without pileup, 3.3x faster than 1.11 on a 30-50x BAM (19.755 s vs 6.049 s) and 33x on deep CRAM, so the README's 'why faster' no longer describes current samtools. The two tools also wrote different outputs (uncompressed per-position text vs run-length bgzipped BED plus index), and no hardware, versions or commands are given.",
+    "The timing table predates correctness fixes that changed depth values: 0.2.2 fixed wrong values on consecutive chromosomes of the same length, 0.2.5 stopped double counting fully overlapping mates, and 0.2.0 fixed distribution output for chromosomes over 2.1 Gb.",
+    "Must be built with --mm:refc: the README warns other memory managers (Nim 2's default ORC) hurt performance and correct operation. Default mode keys mate-overlap correction on read names in a hash table and only for proper pairs on the same chromosome; fast mode does no overlap correction and counts D/N spans as covered.",
+    "Histogram and median caps: the distribution clamps depths above 400,000 to 399,990, and --use-median uses a 65,536-bin counter, so region medians above 65,535 are clamped. Open issue #268 (May 2026): the static v0.3.14 binary reported CRAM 3.1 'Slice decode failure' on a file samtools reads (maintainer could not reproduce)."
+  ],
+  "pick_this_over_siblings_when": "Pick mosdepth over sambamba (the D sibling, which wins on view, flagstat and markdup) for depth: its own README table has sambamba depth 5.71x slower on the same 30X BAM. Other genomics siblings (mako for sorting, rasusa for subsampling, skani for ANI) solve different problems and pair with it rather than compete.",
+  "verified_claims_summary": "On one unstated machine with a 30X human WGS BAM, single-threaded per-base depth took 25:23 for mosdepth vs 50:12 for samtools depth (1.98x) and 2:24:53 for sambamba and 2:14:44 for bedtools genomecov; CRAM samtools was 1.79x slower. These were 2017-era tool versions (samtools depth still pileup-based) with unknown build flags. The Bioinformatics 2018 paper repeats the same table (search snippet only).",
+  "status_note": "Active (last commit 2026-05-02, v0.3.14, 879 stars, MIT), widely used through bioconda; the performance evidence is first-party and dates from 2017, before samtools 1.13's depth rewrite, so treat the 2x figure as historical until someone re-runs it.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/brentp/mosdepth/HEAD/README.md",
+    "https://raw.githubusercontent.com/brentp/mosdepth/HEAD/nim.cfg",
+    "https://raw.githubusercontent.com/brentp/mosdepth/HEAD/mosdepth.nim",
+    "https://raw.githubusercontent.com/brentp/mosdepth/HEAD/mosdepth.nimble",
+    "https://raw.githubusercontent.com/brentp/mosdepth/HEAD/depthstat.nim",
+    "https://raw.githubusercontent.com/brentp/mosdepth/HEAD/int2str.nim",
+    "https://raw.githubusercontent.com/brentp/mosdepth/HEAD/CHANGES.md",
+    "https://raw.githubusercontent.com/brentp/mosdepth/HEAD/scripts/install.sh",
+    "https://raw.githubusercontent.com/brentp/mosdepth/HEAD/.github/workflows/build.yml",
+    "https://github.com/brentp/mosdepth",
+    "https://github.com/brentp/mosdepth/commits/master",
+    "https://github.com/brentp/mosdepth/issues?q=is%3Aissue+samtools",
+    "https://github.com/brentp/mosdepth/issues/268",
+    "https://github.com/brentp/mosdepth/issues/234",
+    "https://raw.githubusercontent.com/samtools/samtools/HEAD/NEWS.md",
+    "https://github.com/samtools/samtools/pull/1428",
+    "https://raw.githubusercontent.com/ChristopherWilks/megadepth/HEAD/README.md",
+    "https://raw.githubusercontent.com/38/d4-format/HEAD/README.md",
+    "WebSearch: mosdepth vs samtools depth speed benchmark (snippets of the Bioinformatics 2018 paper and the Megadepth Bioinformatics 2021 paper)",
+    "https://github.com/brentp/mosdepth/tags?after=v0.2.6"
+  ],
+  "confidence": 0.75
+}

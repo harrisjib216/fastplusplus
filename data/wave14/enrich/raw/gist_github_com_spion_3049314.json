@@ -1,0 +1,41 @@
+{
+  "id": "https://gist.github.com/spion/3049314",
+  "one_liner": "2012 gist where LuaJIT's plain table counts words from a 19-word sentence faster than naive C and std::unordered_map versions.",
+  "what_it_does": "Three single-file programs (test.c, test.cpp, test.lua, plus test.js) count how often each word of a hard-coded, pre-split 19-word sentence occurs, repeated 1,000,000 times (19M increments into a 17-key table). The C version is a hand-written chained table of 256 buckets indexed by the first character, with strcmp on strdup'd keys. The C++ version is std::unordered_map<string,int> with a hash that returns s[0]. The Lua version is a plain table indexed by the word. It is a demonstration, not a library; the author's a-warning.md (2015) says it 'has been misleading for a while'.",
+  "how_it_is_fast": "LuaJIT interns every string, so equal words are the same object with a hash computed once at creation. A table lookup is a masked hash on that cached value plus a pointer compare, and the trace compiler inlines it into the loop. The C baseline instead calls strcmp on heap copies for every chain probe, and the C++ baseline compares std::string contents after libstdc++'s modulo-by-prime bucket step and node walk. That LuaJIT also folds the three map[text[i]] accesses per iteration into one lookup is an inference from its alias analysis; nobody published a -jdump. So the gap measures interned versus content-compared string keys more than JIT versus AOT compilation.",
+  "when_to_use": [
+    "As a teaching example of why string interning and cached hashes matter for small, fixed string-keyed tables.",
+    "As evidence that std::unordered_map<std::string,int> with a weak first-character hash is a poor fit for a tiny hot dictionary; jh3141's fork shows pointer keys plus a small linear table beat LuaJIT (90 ms vs 95 ms).",
+    "In Lua code that counts tokens from a small vocabulary of strings that already exist, where a plain LuaJIT table needs no tuning.",
+    "As a starting point for a discussion of micro-benchmark pitfalls, which is how the author now frames it."
+  ],
+  "when_not_to_use": [
+    "As evidence that LuaJIT beats C or C++ at hash tables in general. The author says real text, larger dictionaries and un-split words (each new word must be allocated and interned) would change the result.",
+    "As a template for a C or C++ word counter. Both baselines are weak: a first-letter hash with strcmp in C, and std::string keys in a node-based std::unordered_map in C++.",
+    "For large dictionaries in LuaJIT. joeatbayes (2015) reports long pauses above 1 GB and the 2 GB heap limit on a Wikipedia-scale word count, which forced FFI or C hash tables.",
+    "As copyable code: the gist has no licence."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "LuaJIT (test.lua calls table.getn, a Lua 5.1 function); gcc and g++ with libstdc++ for the baselines; node for test.js",
+    "min_toolchain": "g++ with -std=gnu++0x (C++11 initializer lists); test.c needs a compiler that accepts C89 implicit int (see gotchas). gcc, g++ and LuaJIT versions not documented.",
+    "platforms": "Any platform with gcc and LuaJIT; the original runs were on Linux, hardware not documented",
+    "thread_safety": "Not applicable: single-threaded benchmark programs",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Unverified optimisation claim. test.lua's 2013 comment says 'luajit probably optimizes away all dictionary lookups', and the author's 2020 comment says 'only luajit is doing super-clever (unrealistic) optimizations'. Neither was checked with -jdump. The about 4 ns (2020) to 8.5 ns (2012) per word that LuaJIT takes is consistent with one real interned-key lookup per word (inference), not with the work being removed.",
+    "The baselines collide by design. Four first-letter pairs share a C bucket (at/a, lazy/lake, over/of, near/new) and pay a full strcmp per probe on strdup'd copies. The C++ hash s[0] puts the same pairs in one libstdc++ bucket chain. The C malloc per counter runs only 17 times, not per increment, so Zack24's complaint about allocation in the loop does not explain the gap.",
+    "Several comment-thread numbers do not measure the same work. ayosec's Rust 0.104 s loop runs range(0u32, 100000), 100,000 passes, against C's 1,000,000-pass 0.179 s, so it did a tenth of the work. Zack24's (0.003 s) and mbossX's (C 0.001 s, LuaJIT 1.774 s) C programs index an array and do no hashing. marcomagdy's pointer-keyed std::unordered_map was still 0.495 s against LuaJIT 0.186 s on craigbarnes' machine, so most of the C++ cost is the container, not string comparison.",
+    "test.c declares fht_put without a return type (C89 implicit int) and never returns a value. GCC 14+ and Clang 16+ reject implicit int by default in C99 and later modes, so rebuilding needs -std=gnu89 or -fpermissive. The bucket index is a plain char, which would go negative and index out of bounds for non-ASCII first bytes where char is signed."
+  ],
+  "pick_this_over_siblings_when": "Use this gist only as the historic, minimal three-file illustration of interned string keys. For a string-keyed hash-table comparison with named toolchains, the LuaJIT 2.1 k-nucleotide entry in kostya/jit-benchmarks (g++ 12.2.0 -O3, std::unordered_map<std::string,int>) and the LangArena Etc::Words entries (g++ 16 and clang++ 22 in 16 configurations) are better evidence.",
+  "verified_claims_summary": "One `time` run each in 2012 on an unnamed Linux machine, with unstated gcc, g++ and LuaJIT versions: 19M increments into a 17-key string table took 0.161 s in LuaJIT, 0.234 s in C (gcc -O3, first-letter chained table) and 0.321 s in C++ (g++ -O3 -std=gnu++0x, libstdc++ std::unordered_map with an s[0] hash). That is 1.45x and 1.99x (derived from page data). The author's 2020 rerun (no versions or hardware) gave 0.08 s vs 0.173 s and 0.36 s, and at 10x the iterations 0.76 s vs 1.44 s and 3.35 s, so process startup does not explain the gap.",
+  "status_note": "Abandoned gist (code from 2012, a comment edit in 2013, a warning file added 2015-08-18) with no licence, so it is a reference only; the author himself labels it misleading.",
+  "sources_read": [
+    "https://gist.github.com/spion/3049314",
+    "https://gist.github.com/spion/3049314/revisions",
+    "https://gist.github.com/jh3141/768a9672dba9a8fc2524"
+  ],
+  "confidence": 0.75
+}

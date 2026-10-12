@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/awnion/fastgrep",
+  "one_liner": "Rust parallel grep with a lazy on-disk trigram index; beats single-threaded GNU grep 3.12 on recursive searches by using every core.",
+  "what_it_does": "A command-line grep (cargo installs it as both `grep` and `fastgrep`; the crate also exposes CompiledPattern and search_file) that accepts most GNU grep flags, adds --json JSON Lines output, and is aimed at AI agents that run many recursive searches. It deliberately departs from GNU grep: by default it skips files over 100 MiB, truncates lines over 15000 bytes, and prints files in completion order. Patterns use Rust regex-crate syntax (ERE-like); -G (BRE), -P, -z, -R and --binary-files are not implemented.",
+  "how_it_is_fast": "Two to four walker threads feed file paths through bounded kanal channels to one search thread per logical CPU. Each worker reads small files into a reused buffer and mmaps files over 256 KiB, then searches literals with memchr::memmem (SIMD substring search). Regexes run through a literal-prefix memmem candidate filter before regex-crate verification, and single files over 4 MiB are split at newlines across all threads. A lazy trigram index (trigram to sorted file-ID postings, bitcode-serialized under the OS cache directory, invalidated by mtime and size) lets repeat searches skip unchanged files that lack a required trigram, but only when the candidates are under 90% of indexed files.",
+  "when_to_use": [
+    "An agent or editor integration repeating selective literal searches (identifiers, error strings) over the same large tree, where a warm index can skip most files.",
+    "Recursive -rn or -rc searches over hundreds of files on a multi-core machine, where GNU grep's single thread is the bottleneck.",
+    "Tooling that wants JSON Lines output and guard rails against multi-GB blobs and minified one-line files.",
+    "Literal search in a single file larger than 4 MiB, which is split across threads."
+  ],
+  "when_not_to_use": [
+    "Scripts written for GNU grep's default BRE: `foo\\|bar`, `\\(x\\)`, `a\\+` and `\\{2\\}` are literals or different operators in Rust regex syntax, and back-references are unsupported.",
+    "Regexes with an optional character after the literal prefix (`colou?r`, `https?://`, `ab*c`) under -c, on files over 4 MiB, or with a warm index: lines are silently missed (see gotchas).",
+    "Output that must be deterministic (diffs, golden tests), or logs over 100 MiB, which are skipped by default.",
+    "One-off searches in many fresh directories: the first recursive search builds the index (44.6 ms vs 7.4 ms with --no-index on a 14 MB corpus; 322 ms vs 11 ms on a 165.6 MiB Linux corpus) and the cache can grow to 2 GiB.",
+    "Low-core or -j1 environments, where the main advantage (parallelism) disappears."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "memchr, regex, memmap2, kanal, bitcode, serde, serde_json, clap, dirs, itoa",
+    "min_toolchain": "Rust 1.99 (edition 2024)",
+    "platforms": "Linux x86-64 and arm64 (static musl release archives, CI on Ubuntu 24.04/26.04 and Debian 13), macOS Apple Silicon; Intel macOS source-only and untested in CI; Windows not documented",
+    "thread_safety": "CLI tool; workers share one mutex-guarded stdout writer and flush per-file buffers, so lines from one file stay together but the file order varies. Library thread-safety guarantees are not documented.",
+    "drop_in_for_baseline": "partial — installs as `grep` and accepts most GNU grep flags, but its regex syntax is not GNU BRE, -G/-P/-z/-R/--binary-files are missing, output order is nondeterministic, and it skips files over 100 MiB and truncates long lines by default"
+  },
+  "gotchas": [
+    "Correctness bug in src/pattern.rs extract_literal_prefix: it keeps the character before a `?`, `*` or `{` quantifier, so `colou?r` gets the required prefix \"colou\" and `https?://` gets \"https\". That prefix drives the warm-index file filter (required_trigrams), the -c count path (count_matches) and the over-4-MiB parallel chunk path (collect_prefix_accelerated), all of which only look at lines containing the prefix. Lines with only \"color\" or \"http://\" are silently missed, even though GNU grep and fastgrep's own cold streaming path find them, so a first run and a later run can disagree. The benchmark patterns are unaffected.",
+    "The regex dialect is the Rust regex crate with unicode(false): GNU BRE escapes become literals (`grep 'foo\\|bar'` silently matches nothing), and `.`, `\\w` and -i work on bytes and ASCII only. The harness had to pass `impl\\s\\+Drop` to GNU grep and `impl\\s+Drop` to fastgrep.",
+    "The index trusts mtime (ns) plus size: a file whose content changed but whose mtime was restored with the same size (cp -p, rsync -t, tar extraction) is skipped as non-matching until more than 10% of records go stale. Index files live under ~/.cache/fastgrep/trigram (or ~/Library/Caches) and are evicted LRU only past 2 GiB.",
+    "Harness: every fastgrep row runs one search thread per logical CPU (12) plus 2-4 walkers against single-threaded GNU grep. That includes the 'Single file (100k lines)' row, which the bench source calls a raw speed comparison, but its 8.7 MB file (derived from benches/corpus.rs) is above the 4 MiB parallel-chunk threshold. The project's own Linux thread sweep shows the effect of threads: -j1 vs -j12 is 22.80 vs 12.64 ms for a no-index literal and 75.14 vs 17.92 ms for a regex count. No -j1 run against GNU grep is published, and the warm-index default is slower than --no-index in 4 of the 5 indexed rows."
+  ],
+  "pick_this_over_siblings_when": "Pick fastgrep over xerg (compared against an unnamed, probably BSD system grep) or zrep (numbers known only from search snippets) when you want GNU-grep flag compatibility, JSON output and a public Criterion harness against a named GNU grep 3.12. For general code search, the regex-crate-based ripgrep is the more mature parallel option, and fastgrep publishes no comparison with it.",
+  "verified_claims_summary": "Criterion 0.8.2 on an Apple M2 Max (12 logical CPUs), macOS 27.0.1, LC_ALL=C, warm page cache, with process start-up and captured output in every sample. fastgrep 0.1.9 (Rust 1.99.0, opt-level \"s\", LTO) ran on 12 threads against single-threaded Homebrew GNU grep 3.12 (build flags unstated) over an 84.9 MB generated corpus (200 files x 5,000 lines; size derived from benches/corpus.rs). fastgrep was 1.41x to 9.91x faster on 6 of 7 queries (e.g. -rn 'fn main' 8.82 vs 32.99 ms; -rc 'use ' 8.55 vs 84.75 ms), and GNU grep won -rl (7.12 vs 7.50 ms).",
+  "status_note": "Active but young (crate first published 2026-03-04; work in bursts, the latest on 2026-10-05/06; v0.1.10, 2 stars, MIT OR Apache-2.0) and copyable, but the prefix-extraction bug in the index, -c and large-file paths means it should not replace grep in scripts until that is fixed.",
+  "sources_read": [
+    "https://github.com/awnion/fastgrep",
+    "https://github.com/awnion/fastgrep/commits/main",
+    "https://github.com/awnion/fastgrep/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/README.md",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/rust-toolchain.toml",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/docs/benchmarks/README.md",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/docs/benchmarks/results.json",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/bench_baseline/baseline.md",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/bench_baseline/baseline_bench.rs",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/benches/grep_bench.rs",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/benches/corpus.rs",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/src/pattern.rs",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/src/searcher.rs",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/src/trigram.rs",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/src/cli.rs",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/src/output.rs",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/src/threadpool.rs",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/src/walker.rs",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/src/bin/grep.rs",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/src/bin/fastgrep.rs",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/src/bin/common/mod.rs",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/GNU_GREP_COMPAT.md",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/ARCHITECTURE.md",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/docs/profiling/2026-10-05/README.md",
+    "https://raw.githubusercontent.com/awnion/fastgrep/HEAD/docs/index-performance.md",
+    "https://raw.githubusercontent.com/microsoft/tgrep/main/README.md",
+    "WebSearch: fastgrep awnion \"drop-in replacement for GNU grep\" trigram index AI agents (snippet of docs.rs/crate/fastgrep 0.1.8: earlier README claimed '2-12x faster than GNU grep across common workloads')",
+    "WebSearch: tgrep \"Trigram-indexed grep\" github"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/0xd34df00d/hwc",
+  "one_liner": "Single-threaded Haskell wc (GHC LLVM backend, mmap input) that claims 4-6x over GNU coreutils wc, using ASCII-only word and width rules.",
+  "what_it_does": "A command-line wc clone (executable hwc-exe) that takes GNU's -c, -m, -l, -L and -w flags and long options for files or stdin, and computes only the requested statistics. It prints one line per statistic ('N bytes', 'N words', 'N lines'), with no file name and no total, so its output is not wc's format. The library module Data.WordCount exposes a type-level API, e.g. wc @('Bytes '::: 'Words) on a strict ByteString, plus wcLazy for lazy input. A Template Haskell dispatcher generates a specialised call for each of the 31 non-empty statistic subsets.",
+  "how_it_is_fast": "Each statistic is a strict per-byte fold step over Word64 state. Characters are counted as bytes that are not UTF-8 continuation bytes, using bit arithmetic, and words as transitions into one of six ASCII whitespace codes. Requested statistics combine at the type level, so GHC compiles one fused BS.foldl' loop per subset, built with -fllvm -O2. Regular files are mmapped through bytestring-mmap, which keeps the data off the GC heap; issue #1 shows a run allocating 80,552 bytes in total. Part of the gap is doing less work: GNU wc 8.32 in a UTF-8 locale calls mbrtowc, iswprint and iswspace for every non-ASCII character (and wcwidth for -L), and hwc does none of that.",
+  "when_to_use": [
+    "Counting lines, words and bytes of large ASCII or UTF-8 files when splitting words on ASCII whitespace is acceptable and the output format does not matter.",
+    "Hosts stuck on coreutils 8.x, where wc -w and -m in a UTF-8 locale go through the slow mbrtowc path.",
+    "As a reference for composing several strict folds into one specialised loop in Haskell (GADTs, closed type families, Template Haskell dispatch).",
+    "As the single-threaded counterpart to Chris Penner's parallel Haskell wc, when comparing per-core throughput."
+  ],
+  "when_not_to_use": [
+    "As a drop-in wc in scripts. It prints one 'N bytes' style line per statistic with no file name or total, has no --files0-from, and the binary is named hwc-exe.",
+    "Text with Unicode whitespace, East Asian wide characters or combining marks. Words split only on ASCII whitespace, and -L counts every byte from 32 up, including UTF-8 continuation bytes, as one column ('привет' gives 12, not 6).",
+    "Any -L run on input that can contain backspace characters (see gotchas).",
+    "Against current coreutils. 9.0 made wc -l up to 5x faster with AVX2, 9.5 made wc 'much faster in single-byte locales', and 9.11 sped up -m on non-ASCII UTF-8 by 2.6x and -l on Neon by 4.5x. The 2020 ratio has not been re-measured against any of these.",
+    "Projects that need a maintained toolchain. It is pinned to Stackage lts-15.2 (GHC 8.8 series) with the LLVM backend, has no releases and is not on Hackage."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "base, bytestring, bytestring-mmap 0.2.2 (extra-dep), optparse-applicative, template-haskell, unix; an LLVM toolchain for -fllvm",
+    "min_toolchain": "Stack resolver lts-15.2 (GHC 8.8 series) with an LLVM version supported by that GHC (not stated in the repo)",
+    "platforms": "POSIX only: it uses the unix package and mmap through bytestring-mmap; CPU architectures not documented",
+    "thread_safety": "The library functions are pure over an immutable ByteString. The CLI is single-threaded and uses unsafeMMapFile, so a file changed or truncated while being counted gives undefined results (general mmap behaviour, not documented by the project).",
+    "drop_in_for_baseline": "partial — same short and long flags as GNU wc, but a different output format (one line per statistic, no file name, no total), no --files0-from, and ASCII-only word and width rules"
+  },
+  "gotchas": [
+    "Max-line-length underflow bug. The backspace rule `step MaxLLState {..} 8 = MaxLLState maxLen $ max 0 (curLen - 1)` (commit 'Handle backspace symbols in max line length', 2020-02-29) works on Word64, so at column 0 the subtraction wraps and max 0 does not clamp it. A backspace followed by a line end or end of file makes -L report 18446744073709551615, and '\\babc' reports 2. GNU wc 8.32 ignores the non-printable backspace and reports 3. This was checked by simulating the exact step with 64-bit wraparound; hwc itself was not run, since no GHC is available here.",
+    "Semantics differ from GNU wc. -m counts non-continuation bytes in every locale and does no UTF-8 validation (GNU 8.32 counts bytes in the C locale and skips invalid bytes in UTF-8 locales). -w splits on bytes 9-13 and 32 only, while GNU in a UTF-8 locale also splits on iswspace characters and no-break spaces, and before 9.5 GNU did not let non-printable characters start a word. The test suite checks words against Haskell's `words` after replacing non-ASCII spaces with '_', and has no -L test.",
+    "Some subsets are not Haskell code wins. -l alone runs bytestring 0.10.10.0's fps_count, a plain C byte loop. -c alone is the mmapped length, while GNU wc also takes the size from fstat, so neither can show a codegen advantage.",
+    "The claim has no methodology and the baseline has moved. The README gives one ratio sentence with no file, timings, hardware, locale or coreutils version (early 2020, so 8.31 or 8.32). A third-party Habr reply (search snippet only, per the record) measured a hand-written single-threaded C wc at 0.637 s against 2.811 s for a simple Haskell version on a 1.8 GB file."
+  ],
+  "pick_this_over_siblings_when": "Pick hwc only to study a single-threaded, type-level composable wc in Haskell. For a faster wc to actually use, cw (Rust) publishes per-flag hyperfine ratios against GNU wc 8.30 on a named 341 MB file, and Chris Penner's Haskell wc shows that its own single-core version loses to BSD wc, so its only win is parallelism.",
+  "verified_claims_summary": "The only evidence is the README sentence 'about 4-6 times faster than GNU coreutils' wc, depending on the exact subset of statistics being computed', single-threaded against single-threaded. It refers to a build with GHC 8.8 (lts-15.2) -fllvm -O2 and RTS -A2m against an early-2020 GNU wc. The repository publishes no timings, input file, hardware, locale or wc version, and the author's blog post and Habr article could not be reached from here.",
+  "status_note": "Abandoned since 2020-03-15 (61 commits, no releases, one closed issue). It is BSD-3-Clause and small enough to read or vendor, but pinned to GHC 8.8 with the LLVM backend, and -L has a Word64 underflow bug on backspace input.",
+  "sources_read": [
+    "https://github.com/0xd34df00d/hwc",
+    "https://github.com/0xd34df00d/hwc/commits/master",
+    "https://github.com/0xd34df00d/hwc/issues?q=is%3Aissue",
+    "https://github.com/0xd34df00d/hwc/issues/1",
+    "https://raw.githubusercontent.com/0xd34df00d/hwc/HEAD/README.md",
+    "https://raw.githubusercontent.com/0xd34df00d/hwc/HEAD/package.yaml",
+    "https://raw.githubusercontent.com/0xd34df00d/hwc/HEAD/stack.yaml",
+    "https://raw.githubusercontent.com/0xd34df00d/hwc/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/0xd34df00d/hwc/HEAD/ChangeLog.md",
+    "https://raw.githubusercontent.com/0xd34df00d/hwc/HEAD/src/Data/WordCount.hs",
+    "https://raw.githubusercontent.com/0xd34df00d/hwc/HEAD/src/Data/Dispatch.hs",
+    "https://raw.githubusercontent.com/0xd34df00d/hwc/HEAD/app/Main.hs",
+    "https://raw.githubusercontent.com/0xd34df00d/hwc/HEAD/test/Spec.hs",
+    "https://raw.githubusercontent.com/haskell/bytestring/0.10.10.0/Data/ByteString.hs",
+    "https://raw.githubusercontent.com/haskell/bytestring/0.10.10.0/cbits/fpstring.c",
+    "https://raw.githubusercontent.com/coreutils/coreutils/v8.32/src/wc.c",
+    "https://raw.githubusercontent.com/coreutils/coreutils/master/NEWS"
+  ],
+  "confidence": 0.7
+}

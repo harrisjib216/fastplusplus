@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/acefsm/rust_sort",
+  "one_liner": "Rust `sort` clone (crate gnu-sort) with rayon, mmap and an integer radix path; timed only against the macOS system sort.",
+  "what_it_does": "A command-line `sort` (binary named `sort`, crate gnu-sort 1.0.5) that accepts GNU sort's option set (-n, -g, -h, -V, -M, -f, -d, -b, -k/-t, -u, -s, -R, -c, -m, -z, -T) and the legacy +N syntax. Single files up to 100 MiB are memory-mapped and sorted as pointer and length pairs. Larger files go through a separate 'external' module, multiple input files are each sorted on their own thread and then merged, and stdin is copied to a temp file first. It is meant as a drop-in for the `sort` binary and offers no library API worth using.",
+  "how_it_is_fast": "Zero-copy line slices into an mmap with rayon par_sort_unstable_by, compared by an AVX2, SSE4.2 or NEON memcmp-style byte loop. For -n on 1000 or more lines whose first 100 lines are plain integers, each line is parsed to an i64 and sorted with an LSD byte radix sort (2 passes for the benchmark's values below 32749). -R groups identical lines in a HashMap and shuffles the groups. The reference sort is the macOS system sort, so much of the reported gap is all cores against one process, plus a radix sort on low-cardinality integers.",
+  "when_to_use": [
+    "Experiments with sorting single plain-integer files (every line an optionally signed integer of at most 18 digits) on a multi-core machine, where its parallel radix path applies.",
+    "Sorting a single ASCII file under 100 MiB in ascending byte or C-locale order with no -r, where the code path is the simple mmap and par_sort one.",
+    "As reading material on mmap plus rayon line sorting, not as a production `sort`."
+  ],
+  "when_not_to_use": [
+    "Any pipeline that depends on GNU-correct output: by code reading, several common flag combinations give wrong order or keep duplicates (see gotchas), and the README says it has not been run against the GNU coreutils test suite.",
+    "Several input files, or very large inputs: each file is mapped and sorted whole in memory on its own thread. Open issue #1 (January 2026, unanswered) reports `LC_ALL=C sort -u large_file*txt` on 1.5 TB being OOM-killed at about 92 GB RSS on a 96 GB Debian 13 box.",
+    "Reading stdin beyond 2 GB: sort_stdin reads through take(2 GiB) and silently drops the rest.",
+    "-u or -s on many duplicates: its own table loses to uutils sort (10M -u 0.55 s vs 0.39 s, -s 0.55 s vs 0.31 s).",
+    "Locale-sensitive work: LC_COLLATE support calls strcoll per comparison and is labelled experimental."
+  ],
+  "integration": {
+    "form": "crate (binary `sort` from crates.io package gnu-sort; source build via cargo build --release)",
+    "dependencies": "clap =4.4.18, rayon =1.7.0, memmap2, crossbeam-channel, tempfile, num_cpus, itertools, rand 0.8, parking_lot, libc, thiserror",
+    "min_toolchain": "Rust 1.70 (rust-version in Cargo.toml)",
+    "platforms": "Benchmarked only on macOS 15.5 aarch64 (Apple M2 Max); SIMD compare has runtime-detected AVX2/SSE4.2 (x86-64) and NEON (aarch64) paths; commits mention i686 and Windows line-ending fixes; issue #1 ran it on Debian x86_64",
+    "thread_safety": "Not applicable (CLI); uses the global rayon pool, sized by RAYON_NUM_THREADS",
+    "drop_in_for_baseline": "partial — it parses GNU sort's flags, but by code reading -r is applied twice outside the numeric path, inputs over 100 MiB drop most flags, and multi-file merges ignore -n/-r/-f/-u, so its output differs from GNU sort on common inputs"
+  },
+  "gotchas": [
+    "By code reading at HEAD (not executed), the benchmark's 10M text and -f rows ran a different code path than the smaller rows. Single files over 100 MiB go to external_sort.rs, whose API passes only the numeric and unique flags, so -f, -r, -g, -k/-t, -R, -s and -b are ignored there. The 10M strings file is 138.9 MB. Its -f row (0.42 s) costs the same as the plain text row (0.43 s), while at 1M lines -f costs 0.05 s vs 0.03 s. The all-lowercase test data hid this from the correctness check, so the '19x faster case-insensitive' headline timed a plain byte sort.",
+    "Global -r without -k is reversed twice for non-numeric modes: zero_copy.rs compare_with_config already reverses on config.reverse, and core_sort.rs sort_lines_direct and compare_lines_direct reverse again on args.reverse, which lib.rs copies from config.reverse. So `sort -r`, `-rf`, `-rg` and `-sr` should come out ascending. -rn escapes because its radix path reverses the vector once, and -rn and -nru are the only reverse cases the benchmark runs.",
+    "The -n radix fast path checks only the first 100 lines for 'simple integer'. parse_integer_fast then computes (byte - b'0') for every byte with no validation, which wraps in release builds. Later lines with a decimal point, spaces, text or more than 18 digits get garbage keys and are silently misordered. -u also dedups by exact bytes when no -k is given, so `sort -nu` keeps both '1' and '01', and `sort -fu` keeps both 'A' and 'a'.",
+    "Other merge paths are broken. The external k-way merge (used when a file exceeds the computed chunk, e.g. above 448 MB on macOS where available memory is hard-coded to 4096 MB) reverses MergeItem::cmp and then wraps items in Reverse inside a max-heap, so it pops the largest head first and emits unsorted output. It also ignores -n. The multi-file merge compares raw bytes and never deduplicates."
+  ],
+  "pick_this_over_siblings_when": "Rarely: uutils coreutils sort is the more mature Rust `sort`, is tested against GNU behaviour and beats rust-sort on -u and -s in rust-sort's own table. For dedup or counting jobs, huniq, runiq or cuniq were measured against real GNU sort. Pick rust-sort only to experiment with its integer radix path on a single plain-integer file.",
+  "verified_claims_summary": "benchmark.sh timed each case once with /usr/bin/time (10 ms resolution) on an Apple M2 Max under macOS 15.5. The column labelled 'GNU sort' is the macOS system sort, not GNU coreutils. Rows like 1M -n 1.00 s vs 0.03 s (33x) and 10M -n 6.21 s vs 0.45 s (13.8x) pit rayon on all cores against that system binary, on low-cardinality arithmetic data (at most 32749 distinct integers, 9973 distinct strings). Against uutils sort the same table gives 0.6x to 3.0x, and the 10M text and -f rows ran a code path that ignores -f (see gotchas).",
+  "status_note": "Stale since 2025-09-11 (44 commits written 2025-09-07 to 09-11), 1 star, one open unanswered OOM bug. MIT LICENSE file, but the crate metadata says MIT OR Apache-2.0. The code is small enough to read but has the correctness bugs listed in gotchas, so it is not usable as a `sort` replacement without fixes.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/acefsm/rust_sort/HEAD/README.md",
+    "https://raw.githubusercontent.com/acefsm/rust_sort/HEAD/benchmark.sh",
+    "https://raw.githubusercontent.com/acefsm/rust_sort/HEAD/performance_comparison_table.md",
+    "https://raw.githubusercontent.com/acefsm/rust_sort/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/acefsm/rust_sort/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/acefsm/rust_sort/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/acefsm/rust_sort/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/acefsm/rust_sort/HEAD/src/core_sort.rs",
+    "https://raw.githubusercontent.com/acefsm/rust_sort/HEAD/src/external_sort.rs",
+    "https://raw.githubusercontent.com/acefsm/rust_sort/HEAD/src/radix_sort.rs",
+    "https://raw.githubusercontent.com/acefsm/rust_sort/HEAD/src/zero_copy.rs",
+    "https://raw.githubusercontent.com/acefsm/rust_sort/HEAD/src/locale.rs",
+    "https://raw.githubusercontent.com/acefsm/rust_sort/HEAD/src/simd_compare.rs",
+    "https://raw.githubusercontent.com/acefsm/rust_sort/HEAD/src/adaptive_sort.rs",
+    "https://raw.githubusercontent.com/acefsm/rust_sort/HEAD/src/hash_sort.rs",
+    "https://raw.githubusercontent.com/acefsm/rust_sort/HEAD/src/config.rs",
+    "https://raw.githubusercontent.com/acefsm/rust_sort/HEAD/scripts/check.sh",
+    "https://github.com/acefsm/rust_sort",
+    "https://github.com/acefsm/rust_sort/commits",
+    "https://github.com/acefsm/rust_sort/issues?q=is%3Aissue",
+    "https://github.com/acefsm/rust_sort/issues/1",
+    "https://github.com/acefsm/rust_sort/tree/main/scripts",
+    "https://crates.io/api/v1/crates/gnu-sort"
+  ],
+  "confidence": 0.75
+}
