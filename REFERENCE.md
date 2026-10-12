@@ -90,6 +90,47 @@ A 20-line memset wrapper that fills huge buffers by memcpy-doubling an 8 MiB blo
 
 #### simd-intrinsics-libraries
 
+##### Quicker ADC (faiss-quickeradc)  `C++`  `BSD-3-Clause-Clear`  `abandoned`  `Tier B`
+
+2018 FAISS fork that scans PQ codes with quantized in-register lookup tables; about 4-5x faster than FAISS PQ ADC at equal recall.
+
+**Beats:** FAISS PQ ADC (IndexPQ-style m x 8 float lookup-table scan, FAISS as of mid-2018) and polysemous codes — The paper's SIFT1M exhaustive-search table (README image; single-threaded per the committed scripts; AVX-512 BW CPU, model and compiler unstated) shows m x {8,8} AVX-512 at 1.18 ms per query vs 5.50 ms for mid-2018 FAISS PQ ADC with 64-bit codes at equal R@100 (0.918), and 2.36 vs 9.51 ms with 128-bit codes (about 4-5x, derived from page data); the 9.5-12x rows use lower-recall {6,6,4} or {4,4} layouts, and against polysemous codes the gain ranges from a tie to about 2x.
+
+**Known shortcoming:** Raised from C to B: the README table image is the TPAMI 2021 paper's own table (venue confirmed by snippet only, paper text unopened). The baseline is mid-2018 FAISS, the about 10x gains appear only at lower recall, and against polysemous codes it is a tie to about 2x; no CPU model or compiler. Clear BSD licence with no patent grant; abandoned since 2019. Related to the listed Quick ADC but a separate project.
+
+**Known shortcoming:** Enricher: the committed bench_vpq_sift1m.py (identical at d11c5af and HEAD) runs neither the {8,8} AVX-512 variants nor the 64-bit {4,4} AVX-512 variant, and bench_polysemous_sift1m.py runs only 128-bit IndexPQ at R@1, so the headline {8,8} rows, the 64-bit FAISS PQ row and all baseline R@100 values come from runs not in the repo; the README's reproduce command names a file that returns 404. Timing is one time.time() around one 10k-query batch; results are dequantised distances with no float re-rank; AVX-512 classes silently fall back to scalar without __AVX512F__. Likely bug in an unregistered class: signed VecProductQuantizer_4_AVX256 adds with _mm_adds_epu8 then compares with _mm_cmplt_epi8, so lane sums over 127 wrap negative (published numbers unaffected).
+
+**Independent measurement:** verifier batch-127 (wave 13 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Per query it computes the float distance tables, scans the first 4k codes with them to seed the top-k heap, then quantizes the tables to 8-bit (4-bit sub-codes) or 16-bit entries between the per-subquantizer minimum and the current k-th distance. Codes are stored in transposed groups so one shuffle looks up many codes at once: pshufb (_mm_shuffle_epi8 / _mm256_shuffle_epi8) for 16-entry tables and AVX-512 BW 16-bit permutes (_mm512_permutexvar_epi16, _mm512_permutex2var_epi16 with mask blends) for the 6-bit and 8-bit sub-codes of the irregular quantizers. Saturating adds accumulate the distances, a SIMD compare against the quantized heap bound plus movemask selects the few candidates that touch the heap.
+
+**Use it when:**
+- Reproducing or extending the Quicker ADC paper (arXiv 1812.09162, IEEE TPAMI) on x86-64 with AVX-512 BW.
+- Billion-scale IVF, Inverted Multi-Index or HNSW-IVF search with 64-bit or 128-bit PQ codes where per-query scan time dominates and the {8,8} layout keeps PQ-level recall.
+- Latency-bound single-thread exhaustive PQ scans over about 1M codes where about 1.2 ms per query (vs 5.5 ms for 2018 FAISS PQ at 64 bits) matters.
+- As a source of the {6,6,4} and {8,8} AVX-512 scan kernels to port into a current ANN library.
+
+**Skip it when:**
+- New projects on current FAISS: upstream now ships IndexPQFastScan and IndexIVFPQFastScan (4-bit codes with 8-bit tables in registers, credited to Andre et al.), maintained and with AVX2 support (FAISS wiki and API docs, seen as search snippets only).
+- Inner-product or cosine search: only L2 is implemented.
+- Non-x86 or pre-AVX2 hardware: the build always adds -mf16c and the kernels use x86 intrinsics; without AVX-512 the fast {6,6,4} and {8,8} variants fall back to scalar code.
+- When you need exact PQ distances or the best recall from the faster layouts: {4,4} and {6,6,4} lose recall versus 8-bit PQ (64-bit codes: R@100 0.807 and 0.859 vs 0.918).
+- Production use needing maintenance or a patent licence: abandoned since 2019-01-03, Python 2 benchmark scripts, Clear BSD code with no patent grant on top of FAISS's old BSD+PATENTS terms.
+
+**Vs siblings:** Pick it over Quick ADC (the standalone 4-bit SSE predecessor) or PQ Fast Scan when you want the work inside FAISS with IVF, IMI and HNSW-IVF indexes and the AVX-512 {6,6,4} or {8,8} layouts that keep 8-bit-PQ recall; bolt targets learned encoders against Eigen matmul, a different trade-off.
+
+**Gotchas:**
+- Result distances are dequantized 8-bit or 16-bit sums (heap entries come from unquantize_sum), with no float re-ranking, so ties and near-ties can order differently from FAISS PQ.
+- The AVX-512 classes are wrapped in #ifdef __AVX512F__ and otherwise silently alias the scalar NoVec/NoVecTable classes under the same names, so a build on a machine without AVX-512 runs the slow path without warning.
+- Reproducibility gap: the committed benchs/bench_vpq_sift1m.py (identical at the pinned commit d11c5af and at HEAD) evaluates neither the {8,8} AVX-512 variants (2vc/4vc) nor the 64-bit {4,4} AVX-512 one (2W4 is commented out), and benchs/bench_polysemous_sift1m.py runs only the 128-bit IndexPQ(d,16,8) with k=1 and reports R@1, so the headline {8,8} rows, the 64-bit FAISS PQ row and every baseline R@100 value come from runs not in the repo. The README's reproduce command names benchs/bench_vpq_sift1000m.py, which does not exist (404), with 'pyton' and PYTHON_PATH typos. Timing is one time.time() pair around a single 10,000-query batch, single-threaded on both sides, no warm-up or repeats.
+- The signed VecProductQuantizer_4_AVX256 class shown in the README sums its two lanes with an unsigned saturating add (_mm_adds_epu8) and then a signed compare (_mm_cmplt_epi8), so far codes whose lane sums exceed 127 wrap negative and would enter the heap with a too-small distance; it is not registered in VPQ_Impl.h (the _AVX2 names map to the _unsigned classes), so the published numbers are unaffected, but do not instantiate it directly.
+
+**Status:** Abandoned since 2019-01-03 on a mid-2018 FAISS base with Python 2 scripts and a Clear BSD licence without patent grant, so treat it as a reference implementation of the paper's kernels rather than a library to deploy; upstream FAISS fast-scan covers the 4-bit case.
+
+[repo](https://github.com/technicolor-research/faiss-quickeradc) · [benchmark](https://github.com/technicolor-research/faiss-quickeradc)
+
 ##### validateutf8-experiments (lookup UTF-8 validation, Keiser and Lemire)  `C++`  `no license`  `active`  `Tier B`
 
 Research harness for the Keiser-Lemire 'lookup' SIMD UTF-8 validator, about 4-6x faster than the best scalar validator it tests.
@@ -3896,6 +3937,48 @@ Educational benchmark of float-array sum kernels (unrolled, SIMD, threaded, GPU)
 **Status:** Stale since 2025-07-22 (119 stars, not archived) and unlicensed, so it is reference only. The multi-accumulator f64 loop is sound teaching material, but avx2_f64_t, avx512_f32unrolled_t and avx512_f32interleaving_t give wrong sums on non-uniform data, and the Zen4 AVX-512 1 GB rows come from pre-fix kernels that read half the array.
 
 [repo](https://github.com/ashvardanian/ParallelReductionsBenchmark) · [benchmark](https://github.com/ashvardanian/ParallelReductionsBenchmark)
+
+##### parasail  `C`  `LicenseRef-Battelle-BSD-style`  `stale`  `Tier C`
+
+C99 SIMD library of local, global and semi-global pairwise sequence alignment kernels; beats SSW on protein database search.
+
+**Beats:** SSW (Complete-Striped-Smith-Waterman-Library, C, SSE2 striped Smith-Waterman); the same page also times Opal, SWIPE and ssearch36 — On a 2.3 GHz Xeon E5-2670 v3 with Intel ICC 15.0.1 -O3, one thread, BLOSUM50, gap open 3 and extend 1, score-only search of four queries (110-513 residues) against 547,964 Swiss-Prot sequences took 9.3-21.5 s with parasail's AVX2 16-bit striped profile kernel versus 12.0-48.7 s for SSW's SSE2 ssw_test, and 10.8-33.8 s with parasail SSE4.1 16-bit (mean of three runs, 2015). The SSW timer includes database parsing and suboptimal-score work, so part of the gap is harness rather than kernel.
+
+**Known shortcoming:** Numbers are from 2015 (ICC 15.0.1 -O3, Xeon E5-2670 v3) on unpinned pre-1.0 code; on Haswell SWIPE beats parasail SSE4.1 only at 110 residues. Usability is reference: the Battelle licence is BSD-3-like with a citation clause and is not OSI-approved.
+
+**Known shortcoming:** Enricher: asymmetric harness on the SSW side: ssw_test starts its clock() before re-reading and parsing the whole Swiss-Prot FASTA for every query (performance.md says read time was not measured) and computes the suboptimal score on every target, which parasail skips; ssw_test uses the same 8-then-16-bit strategy as parasail 'sat', and like for like parasail SSE4.1 sat is slower than SSW at 390 and 513 residues (44.4 vs 41.5 s, 55.2 vs 48.7 s). Open wrong-score issue #111 (16-bit sg_qb_db returns -32757 with the saturated flag 0); no AVX-512; stale since v2.6.2 (2023). Downgraded from A to C.
+
+**Independent measurement:** verifier batch-125 (wave 13 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Intra-sequence (query-parallel) vectorization: Farrar's striped layout (2007), the author's prefix-scan formulation (Daily 2015), anti-diagonal (Wozniak 1997) and blocked (Rognes and Seeberg 2000) kernels, each written for SSE2, SSE4.1, AVX2, AltiVec and NEON with 8, 16, 32 and 64-bit lanes. A reusable query profile removes per-target substitution lookups, and the 'sat' variants run 8-bit lanes first (32 lanes on AVX2) and redo the alignment at 16 bits only when the score overflows. The benchmarked win over SSW comes mostly from 256-bit AVX2 lanes and from skipping the 8-bit first pass on long queries.
+
+**Use it when:**
+- Protein or DNA database search where one query is aligned against many targets: build a profile once and call the striped profile functions per target.
+- You need several alignment modes (local, global, semi-global with free end gaps on either sequence) from one library with one calling convention.
+- x86-64 hosts with AVX2 where queries are a few hundred residues or longer: the AVX2 16-bit striped kernel was 2.1x to 2.4x faster than SSW at 195-513 residues on Haswell.
+- You want to compare vectorization strategies (striped vs scan vs diagonal) for your own sequence-length mix; parasail ships all of them behind the same API.
+- Python, Java or Rust callers who want a maintained binding (parasail-python, parasail-java, parasailors) to the same kernels.
+
+**Skip it when:**
+- Pure many-target protein database search on SSSE3-class hardware: SWIPE (inter-sequence vectorization) was faster than parasail SSE4.1 16-bit on every query in the MacBook table, and the author's own text says SWIPE remains fastest for that problem.
+- Long-read or highly similar DNA alignment: banded or difference-recurrence methods such as ksw2 or wavefront alignment (WFA2-lib) do far less work than a full striped DP.
+- Hosts with AVX-512 or modern Apple Silicon expecting tuned kernels: there are no AVX-512 kernels (issue #80 open since 2020) and Apple M1 install problems are open (#85, #89).
+- Pipelines that need the SSW secondary (suboptimal) score: parasail's SSW emulation omits it.
+- Projects that need an OSI-approved licence: the Battelle BSD-style licence adds a clause that redistributions and publications should cite the 2016 BMC Bioinformatics paper.
+
+**Vs siblings:** Pick parasail over SSW when you want AVX2 kernels, several alignment modes or reusable profiles for database search, and over ksw2 or WFA2-lib when sequences are short-to-medium proteins and you need exact full DP across local, global and semi-global modes; pick ksw2 for global nucleotide alignment with banding (its README measures it ahead of parasail) and WFA2-lib for long similar sequences.
+
+**Gotchas:**
+- Width choice is the caller's job: _8 and _16 kernels can saturate, so check parasail_result_is_saturated() or use _sat; open issue #111 (2025) reports parasail_sg_qb_db_diag_avx2_256_16 returning -32757 instead of 21 with the saturated flag at 0, which the maintainer agreed would be a bug.
+- Calling an instruction-set-specific function on a CPU that lacks the extension returns NULL with errno ENOSYS rather than faulting; unchecked NULL results crash later. Gap opening applies only the open penalty (README note), which differs from BLAST-style G+kE conventions used by tools such as SWIPE.
+- Harness flaw in the SSW baseline: SSW's ssw_test (current src/main.c) starts its clock() timer before the loop that re-opens and parses the whole database FASTA for each query, so database parsing sits inside SSW's timed region although performance.md says read time was not measured (only output suppression is mentioned as a modification). ssw_test also computes SSW's suboptimal score (maskLen = readLen/2) on every target, work parasail skips. Both inflate SSW's times by an unquantified amount.
+- Strategy mismatch behind the headline: ssw_test builds its profile with score_size 2 (8-bit first, 16-bit on overflow), which is the same strategy as parasail's 'sat' rows; like for like, parasail SSE4.1 sat is slower than SSW at 390 and 513 residues on Haswell (44.4 vs 41.5 s and 55.2 vs 48.7 s), and the faster parasail rows skip the 8-bit pass entirely.
+
+**Status:** Stale: last version bump v2.6.2 (March 2023; no GitHub releases are published), one fix commit since (2025-08-27) and 33 open issues including an open wrong-score report (#111); usability is reference because the Battelle BSD-style licence carries a citation clause and is not OSI-approved, though the code is permissive enough for most research use.
+
+[repo](https://github.com/jeffdaily/parasail) · [benchmark](https://github.com/jeffdaily/parasail/blob/master/performance.md)
 
 ##### recip_rsqrt_benchmark (fast vectorized reciprocal and rsqrt)  `C++`  `no license`  `abandoned`  `Tier C`
 

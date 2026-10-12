@@ -220,6 +220,20 @@ after 2 failed fetches, the privacy/scratch rules above, and the terse final-rep
   original `today` (render the seed prompts with it too); the new verdicts carry the old date, which matches earlier
   backfill rounds.
 
+## Status (2026-10-13, seed sweep)
+
+- Seed sweep of the wave 13 and 14 enricher leads closed 2026-10-13: 13 seed groups across ten waves (w1-seed-c,
+  w3-seed-a, w5-seed-b, w6-seed-b, w7-seed-b, w8-seed-n, w10-seed-g, w11-seed-b, w13-seed-a/b, w14-seed-a/b/c; 64
+  projects), 61 new verified entries, all enriched; duplicates leancrypto (PQRV kernels) and go-cv-simd (c2goasm of
+  ermig1979/Simd); isa-l_crypto folded into its wave 7 entry; FreeBSD libmd carries a `paper:` id (freebsd-src is
+  listed in wave 5). Lists: COPYABLE 2748, REFERENCE 265, REJECTED 41; 3014 verified (A 600, B 483, C 1671, D 260).
+  Tier moves: grpc_bench rows to C (Pekko gRPC, Armeria, Vert.x gRPC, grpc-dotnet, grpc-go, tonic: cpp_grpc_mt
+  pre-posts one call per completion queue, gRPC's own server 5000), parasail A to C (SSW timer includes FASTA
+  parsing), Hare compile throughput A to C (stdlib cache reused across runs), noodles A to B, sylph and
+  block-aligner B to C, Lace C to D, zspell D to C, ish, Quicker ADC C to B, pixman C to A (RVV commit benchmark).
+  An org spend-limit kill mid-sweep killed 13 agents; all were relaunched after the restore of each wave's
+  original `today` (see Lessons).
+
 ## Status (2026-10-13)
 
 - Waves 13 and 14 closed and the single enrichment pass (wave 1 stdlib seeds, wave 13, wave 14) finished on

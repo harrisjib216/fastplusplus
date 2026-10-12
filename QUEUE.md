@@ -48,6 +48,7 @@ extension passes further down. Waves 1-14 are closed (see CLAUDE.md Status); ext
 
 Closed waves, for reference: wave 8 (398 then 401 verified), wave 9 (136 then 141), wave 10 (254 then 265),
 wave 11 (144 then 145), wave 12 (220 then 227), wave 13 (303), wave 14 (274); details in CLAUDE.md Status.
+Seed sweep of the wave 13-14 leads done 2026-10-13 (61 verified; see CLAUDE.md). Still open from it: ParlayLib, io-uring-echo-server, kbench9000, morton-nd, zp7, dSFMT_AVX512, amoeba, weaviate/sroar, NeuralAmpModeler-rs, MADDNESS (paper: id in dblalock/bolt), secpoline, and the paper-access retiers for OpenCilk, Lace, block-aligner, ish, sylph, aes-armcortexm, lazypoline, bolt and ksw2.
 Added 2026-10-13: paper-access retiers for waves 13-14 (Savina TACO 2023, Rewrite-it-in-Rust CBET paper, NPB-Rust
 arXiv 2502.15536, ixy ANCS 2019, Perceus TR cross-check) and the seed leads in `data/wave13/leads.md` and
 `data/wave14/leads.md` (zipgrep, megadepth, sylph, zimdjson, Singeli, copia, armeria, hunt-rs, uutils/findutils,

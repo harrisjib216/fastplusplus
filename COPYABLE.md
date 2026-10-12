@@ -747,6 +747,49 @@ Multi-buffer SHA-256 in Rust whose wasm simd128 build hashes small-message batch
 
 [repo](https://github.com/spool-labs/sha256) · [benchmark](https://raw.githubusercontent.com/spool-labs/sha256/HEAD/benches/wasm/README.md)
 
+##### mogwai  `Rust`  `MIT`  `active`  `Tier B`
+
+Rust/Wasm browser GUI crate without a virtual DOM; its 2023 benchmark build beats React 19.2 hooks, but not vanilla JS.
+
+**Beats:** React 19.2 hooks (react-hooks-v19.2.0-keyed, JavaScript in Chrome/V8) in krausest/js-framework-benchmark; also compared with vanilla JavaScript (vanillajs-keyed) — In krausest/js-framework-benchmark (MacBook Pro 14 M4, Chrome 154, development snapshot), the keyed mogwai 0.6.5 entry has a median total duration geometric mean of 0.719x React 19.2 hooks over the nine CPU benchmarks (recomputed here from results.ts), driven by swap rows (13.0 vs 89.7 ms), select (3.3 vs 5.4 ms) and update every 10th row (11.5 vs 14.7 ms), and is 1.31x slower than vanillajs-keyed. Create and replace-all timings benefit from the app's DOM row pool, and the prebuilt wasm bundle's toolchain is not recorded.
+
+**Known shortcoming:** Measures mogwai 0.6.5 (2023), not the current 0.8.0; slower than vanilla JS on all nine operations and the win over React rests on the swap rows; MacBook Pro 14 M4, Chrome 154 development snapshot; among keyed entries the best-entry gap is 1.37x; no licence file in the repo (MIT only on crates.io); CSP note #1139.
+
+**Known shortcoming:** Enricher: the keyed app keeps cleared and removed rows with their <tr> nodes in a cache and reuses them for new ids, so the timed create-1k and replace-all runs reuse warm-up rows and create-10k reuses the 1k rows; the suite's keyed check only counts tr mutations, so it passes. Without rows 01, 02 and 07 mogwai is still 0.635x React, so the React claim holds, but the replace-all win (26.3 vs 30.2 ms) rests on recycling. Manual event delegation and row-model selection (suite notes #800 and #801 missing). The repo's current bench app (0.2.0) is non-keyed.
+
+**Independent measurement:** verifier batch-125 (wave 13 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** There is no virtual DOM diff: views create real DOM nodes through web-sys once, and updates go straight to the bound text or attribute (fine-grained reactivity). In the measured 0.6.5/mogwai-dom 0.2 build, lists are a ListPatchModel whose remove, replace and insert patches move existing DOM nodes, which is why swapping two of 1,000 rows costs 13.0 ms against 89.7 ms for React's keyed reconciliation. The benchmark app also uses two app-level tricks: one delegated click handler on the container that reads a 'key' attribute, and a pool that keeps cleared or removed Row objects with their DOM nodes and reuses them for new rows.
+
+**Use it when:**
+- A Rust-only team building an interactive browser UI that wants no JavaScript framework and no virtual DOM.
+- Lists that are reordered or patched in place (swaps, single-row inserts and removals), where direct DOM patching beats React's keyed diff by a wide margin.
+- Code that should render both in the browser and on the server from the same widget types (the ssr feature).
+- Small to medium apps where an async, futures-based event model fits better than callback closures.
+
+**Skip it when:**
+- You need the fastest DOM code: vanilla JavaScript is faster on all nine CPU benchmarks (about 1.31x less time on geometric mean), and other Rust/Wasm entries in the same run (spair 0.662x, Leptos 0.684x, Dioxus 0.698x, Sycamore 0.711x of React's time) edge out mogwai's 0.719x.
+- Startup, memory or download size matter: the measured build paints first at 306 ms against 227 ms for React, uses 9.65 MB against 4.37 MB after running, and ships 66.3 against 51.4 compressed units.
+- Large appends: appending 1,000 rows to 1,000 takes 37.8 ms against 29.3 ms for React.
+- You want benchmark numbers that describe the current crate: the suite measures mogwai 0.6.5 from 2023, and 0.8.0 (2026) has a different API that has not been submitted.
+- Projects that need a mature ecosystem: three open issues, a small user base (about 427 stars) and a single main author.
+
+**Integration:** crate · wasm-bindgen, wasm-bindgen-futures and web-sys (web feature), async-channel (ssr feature), futures-core, mogwai-macros · Rust edition 2024 (rustc 1.85+) for mogwai 0.8.0, wasm32-unknown-unknown target, wasm-bindgen; trunk recommended · browsers through wasm32-unknown-unknown; native targets for server-side rendering
+
+**Vs siblings:** Against spair, the only Rust/Wasm UI sibling catalogued here, mogwai is slightly slower on the same suite run (0.719x against 0.662x of React's time) but has a newer release (0.8.0, September 2026) and server-side rendering; pick it for its futures-based event model, not for speed.
+
+**Gotchas:**
+- The measured keyed entry recycles DOM rows: mogwai-js-framework-benchmark 0.1.0 (src/lib.rs, the App the suite builds) moves cleared and removed Row objects with their captured <tr> nodes into an 11,000-slot cache and dequeue() reuses them for new ids and labels. The suite warms up 'create rows' with run and clear, and 'replace all rows' with repeated runs, so the timed create and replace reattach 1,000 recycled rows instead of building new ones (1,000 of 10,000 in 'create many rows'). The suite's keyed check only counts added and removed <tr> mutations, so it passes, yet this breaks the 1:1 data-item-to-DOM-node rule that defines keyed mode. Dropping those three benchmarks still leaves mogwai at 0.635x React's time, so the React claim survives, but the replace-all win (26.3 vs 30.2 ms) rests on the recycling.
+- The same app uses manual event delegation (one click handler on #main matching #run, .lbl and .remove and parsing a 'key' attribute) and keeps selection state on each row model, which the suite flags for other entries as notes #801 and #800; the mogwai entry carries only note #1139 (strict CSP).
+- The benchmark app in the current repository (crates/mogwai-js-framework-benchmark 0.2.0, mogwai 0.8) is non-keyed: its swap copies ids and labels between rows 1 and 998, and clear empties the tbody with set_text_content; it also logs at Trace level on every click. If submitted, it belongs in the non-keyed table.
+- No LICENSE file at the repository root; the MIT licence comes from Cargo.toml metadata (the benchmark app crate is MIT OR Apache-2.0).
+
+**Status:** Actively developed (0.8.0 released 2026-09-26, three open issues), MIT-licensed per crates.io metadata, but the only public speed data describe the 2023 0.6.5 release built with an app that recycles rows and delegates events by hand.
+
+[repo](https://github.com/schell/mogwai) · [benchmark](https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/webdriver-ts-results/src/results.ts)
+
 #### hand-written-asm-kernels
 
 ##### Boost.Context  `C++ and assembly`  `BSL-1.0`  `active`  `Tier A`
@@ -920,6 +963,50 @@ Go package of AVX2/NEON assembly kernels for and/or/xor/andnot/not, any-bit and 
 **Status:** Active (last commit 2026-07-26, PRs from three contributors, CI on Go 1.25) and MIT-licensed, small enough to vendor, but it has 2 stars, no tagged releases and an untested arm64 path in CI.
 
 [repo](https://github.com/bwesterb/go-and) · [benchmark](https://github.com/bwesterb/go-and)
+
+##### mlkem-native (pq-code-package)  `C`  `Apache-2.0 OR ISC OR MIT`  `active`  `Tier A`
+
+Formally verified C90 ML-KEM (FIPS 203) with AArch64 Neon and x86-64 AVX2 assembly, about 2-3x faster than its portable C.
+
+**Beats:** mlkem-native's own portable C backend (CI 'no-opt' rows, native backends disabled); that C code is a C90 fork of the pq-crystals/kyber ref implementation and is what liboqs ships as its portable C ML-KEM since 0.13.0 — The project's CI benchmark (test/bench/bench_mlkem.c: 500 samples of 300 iterations after 50 warm-up calls, median cycles, shared-secret equality checked) runs the same tree with native backends on and off, built with the same GCC from nixpkgs nixos-26.05 at -O3 -flto and per-CPU -march flags; for ML-KEM-768 at commit aad9b74 the native build takes 1.9x to 3.0x fewer cycles than the C backend across eight AWS EC2 instance types (for example decaps 67,682 to 26,122 cycles on Sapphire Rapids c7i.metal, 134,838 to 68,518 on Graviton2). The harness itself looks sound; the limitation is that the baseline is the project's own optimised C, not the unmodified reference code or another library.
+
+**Known shortcoming:** The baseline is the project's own portable C backend, not pq-crystals' reference directly, and the rows are rolling CI history on shared EC2 VMs (ML-KEM-768 1.90x-3.01x across eight targets, data.js at aad9b74).
+
+**Known shortcoming:** Enricher: bench harness sound (500 samples x 300 iterations, median, shared-secret check, optimised and no-opt builds run back to back on the same instance), but the baseline is the project's own C backend and no-opt disables native arithmetic and native Keccak x4 together; native backends are off in the shipped config and chosen at compile time unless a custom capability function is set; up to 18% variance on virtualised EC2 (#429, fixed only for c7i by moving to metal; other rows are small VMs, t4g.small burstable); open #1772 (no vzeroupper in AVX2 assembly) and #1338 (high stack use).
+
+**Independent measurement:** verifier batch-122 (wave 13 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** A fixed C frontend calls two swappable backends: arithmetic (NTT, inverse NTT, base multiplication with cached Montgomery products, rejection sampling, (de)compression, (de)serialisation) and FIPS-202/Keccak, including a 4-way batched Keccak-f1600 used for matrix generation. The AArch64 Neon assembly is written as clean code and then scheduled by the SLOTHY constraint-solving superoptimiser; the x86-64 backend is AVX2 assembly, including keccak_f1600_x4_avx2_asm.S. The measured speedup over the C backend comes from both backends together, since the no-opt build turns off native arithmetic and native Keccak at once.
+
+**Use it when:**
+- Adding ML-KEM (or hybrid X25519MLKEM768 key exchange) to a C or C++ TLS, VPN or KEM stack on x86-64 with AVX2 or on AArch64 servers and phones.
+- You need assurance beyond tests: HOL-Light proofs of functional correctness, memory safety and constant-time behaviour for the AArch64 and x86-64 assembly, and CBMC memory and type-safety proofs for the C code.
+- Handshake-heavy servers where tens of thousands of cycles per encaps/decaps matter: CI shows ML-KEM-768 decaps at about 26k cycles on Sapphire Rapids versus about 68k for the C backend.
+- Embedded or freestanding builds that need a C90 code base with stack-only allocation by default, optional custom allocator, zeroize, randombytes, memcpy and memset hooks.
+- You already depend on liboqs (0.13.0+) or AWS-LC (v1.50.0+), which ship this code, and want to vendor the same implementation directly.
+
+**Skip it when:**
+- You need ML-DSA or other post-quantum schemes: this repository is ML-KEM only.
+- Microcontrollers such as Cortex-M4: the Armv8.1-M Helium backend is experimental and disabled by default, and pqm4 has dedicated Cortex-M4 assembly.
+- Threat models with power, EM, fault-injection or speculative-execution attackers: the project states it only targets timing side channels.
+- Generic distribution binaries built for baseline x86-64 or Armv8.0 without a capability hook: backends are chosen at compile time by default, so without -mavx2 or MLK_CONFIG_CUSTOM_CAPABILITY_FUNC you get only the C backend.
+- Stack-constrained targets: issue #1338 (open) reports stack usage much higher than mlkem-c-embedded.
+
+**Integration:** source-drop · none (ships its own FIPS-202; you can plug in your own FIPS-202 or randombytes) · C90 plus stdint.h and 64-bit unsigned long long; native backends need GNU-style assembler support (GCC or Clang) and the matching -march flags · any for the C backend; native backends for AArch64 (Neon, optional SHA-3 extension Keccak), x86-64 (AVX2), RISC-V 64 (RVV), ppc64le (VSX, POWER8+); Armv8.1-M MVE experimental
+
+**Vs siblings:** Pick it over neon-ntt or PQRV when you want a complete, maintained, formally verified ML-KEM rather than research kernels for one ISA, and over pqm4 when the target is an application-class CPU rather than a Cortex-M4.
+
+**Gotchas:**
+- Native backends are off in the shipped mlkem_native_config.h: you must set MLK_CONFIG_USE_NATIVE_BACKEND_ARITH and MLK_CONFIG_USE_NATIVE_BACKEND_FIPS202 (or pass them in CFLAGS) to get the measured speed, and set MLK_CONFIG_CUSTOM_CAPABILITY_FUNC when the build machine differs from the run machine.
+- The x86-64 AVX2 assembly does not issue vzeroupper on return (issue #1772, open); maintainers call this deliberate and unmeasured, but callers that run legacy SSE code afterwards on older Intel cores may pay AVX-SSE transition costs.
+- Including mlkem_native.h before the sources in a single-unit build silently dropped build-only config options (issue #1919, fixed September 2026); check your build if you vendored an earlier version.
+- Benchmark data are rolling CI points: issue #429 showed up to about 18% run-level variance on virtualised x86 EC2 instances, fixed only for c7i by moving it to bare metal; the other EC2 rows (c6i.large, c7a.medium, c6a.large, t4g.small burstable, c7g/c8g/c9g.medium) are still small VMs, although opt and no-opt run back to back on the same instance in one job.
+
+**Status:** Very actively maintained under the Linux Foundation's PQCA (last commit 2026-10-12 per the verified record, tested against the ACVP and Wycheproof ML-KEM vectors), triple-licensed Apache-2.0, ISC or MIT, and shipped as the default ML-KEM in liboqs and in AWS-LC.
+
+[repo](https://github.com/pq-code-package/mlkem-native) · [benchmark](https://raw.githubusercontent.com/pq-code-package/mlkem-native/gh-pages/dev/bench/data.js)
 
 ##### neon-ntt (hand-written Armv8-A Neon assembly NTTs for Dilithium, Kyber and Saber)  `C`  `MIT OR CC0-1.0`  `stale`  `Tier A`
 
@@ -1700,6 +1787,49 @@ Research C++14 PQ search engine whose AVX2 scan uses 4-bit sub-quantizers and ps
 
 [repo](https://github.com/technicolor-research/quick-adc) · [benchmark](https://raw.githubusercontent.com/technicolor-research/quick-adc/HEAD/README.md)
 
+##### WFA2-lib  `C`  `MIT`  `active`  `Tier B`
+
+Exact wavefront (WFA/BiWFA) pairwise aligner in C; about 7x faster than unbanded KSW2 on long, similar reads.
+
+**Beats:** KSW2 (ksw2_extz2_sse, exact unbanded gap-affine DP with CIGAR); the artifact also times edlib, BitPAl and WFA-LM — In the BiWFA paper artifact (smarco/BiWFA-paper, gcc 10.2.0, -O3 -march=native, BSC AMD cluster nodes with unnamed CPU), WFA2 high-memory mode in exact mode took 7.26x and 7.51x less total time than unbanded ksw2_extz2_sse on 1,326 ONT-region pairs and 1,991 ultra-long MinION pairs (penalties 0,4,6,2, CIGAR output; ratios derived from the per-pair rows), BiWFA about 9.8-10x, with identical scores; edlib (edit distance only) was faster still.
+
+**Known shortcoming:** Ratios recomputed from the BiWFA paper's statistics_all.tsv.gz (7.26x and 7.51x vs ksw2, scores equal on all 3,317 pairs) with the timer covering only the alignment call, but no CPU model is stated, the measured code is the d5532da paper snapshot, the workload favours long low-divergence reads, edlib is faster than every WFA2 mode, and the gain comes from the algorithm rather than SIMD (loose category fit).
+
+**Known shortcoming:** Enricher: the library defaults (C attributes and the C++ WFAligner) turn on the wf-adaptive heuristic, so out-of-the-box results are not guaranteed optimal; the BiWFA paper benchmark used wf_heuristic_none, so the measured numbers are exact. Open #102 (suboptimal ends-free results with a nonzero match score, no maintainer reply) and #97 (OOM or segfault after millions of alignments).
+
+**Independent measurement:** verifier batch-126 (wave 13 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** The wavefront alignment algorithm only computes the furthest-reaching diagonal offsets for each score, so its time is O(ns+s^2) in alignment score s rather than O(n^2) DP cells; on similar sequences most of the work is the 'extend' step, which compares 8 bytes at a time with 64-bit XOR plus count-trailing-zeros. The per-score 'compute' loops are written to be auto-vectorised by the compiler (PRAGMA_LOOP_VECTORIZE, -O3 -march=native) instead of using ISA intrinsics. BiWFA (memory mode ultralow) runs the wavefronts from both ends and recurses at the meeting point, cutting memory to O(s) while keeping O(ns) time.
+
+**Use it when:**
+- Exact gap-affine global or ends-free alignment with CIGAR of long, similar sequences (ONT/PacBio reads against a reference region, assembly contigs, haplotypes) where full DP is O(n^2).
+- Pipelines that currently call ksw2 without banding and want the optimal alignment faster: the BiWFA artifact shows about 7x total-time gains at 0,4,6,2 penalties on long human ONT data.
+- Very long pairs (100 kbp to Mbp) where O(s^2) or O(n^2) memory is a problem: use the ultralow (BiWFA) mode for O(s) memory.
+- Portable builds that must run on x86, ARM or other ISAs without per-ISA SIMD code paths.
+
+**Skip it when:**
+- Highly divergent pairs or pairs with very different lengths: cost grows with score s, and issue #13 (labelled bug) reports slow runs when lengths differ greatly; banded SIMD DP (ksw2, parasail) can win there.
+- Local (Smith-Waterman) alignment: not supported (open feature request #61); use SSW or parasail.
+- Edit distance only: in the same artifact edlib was faster than every WFA2 mode.
+- Ends-free alignment with a nonzero match score: open issue #102 reports suboptimal results, with no maintainer reply.
+- Short reads in bulk with the default high-memory mode and per-pair aligner creation: issue #97 reports out-of-memory and segfaults after millions of alignments.
+
+**Integration:** static lib · none for the C library (libm; optional OpenMP); C++ bindings ship as libwfacpp; Rust bindings generated with bindgen · C compiler with GNU builtins (__builtin_ctzl, __builtin_expect), i.e. GCC or Clang; CMake 3.16+ or the plain Makefile; no minimum version documented · any 64-bit target the compiler auto-vectorises for (README names SSE, AVX2, AVX-512, NEON, SVE, POWER, RISC-V); Release builds use -march=native
+
+**Vs siblings:** Pick WFA2-lib over ksw2 when you need the exact gap-affine CIGAR of long, similar sequences without tuning a band; pick ksw2 or parasail for banded or divergent alignments and their SIMD striped kernels, and SSW or parasail when you need local alignment.
+
+**Gotchas:**
+- The default attributes (wavefront_aligner_attr_default, also used by the C++ WFAligner constructors) enable the wf-adaptive heuristic (min_wavefront_length 10, max_distance_threshold 50), so out-of-the-box results are not guaranteed optimal despite the README's 'exact' framing; set heuristic.strategy = wf_heuristic_none (or setHeuristicNone()) for exact results. The BiWFA-paper benchmark used align_benchmark's own default wf_heuristic_none, so the measured numbers are exact-mode numbers.
+- Create the aligner once and reuse it; per-pair create/delete has significant overhead and is implicated in the memory blow-ups of issue #97.
+- CIGARs describe pattern-to-text; swap arguments to get SAM-convention I/D, and ultralow (BiWFA) breaks score ties differently from the other modes.
+- The measured numbers come from a 2022 BiWFA-paper snapshot (commit d5532da), not the current main, on long low-divergence ONT reads; CPU model unstated.
+
+**Status:** Active (commits through 2026-09-30, README and CI fixes in September 2026), MIT-licensed and easy to vendor as a static C library, but 17 open issues include an unanswered suboptimal-result bug in ends-free mode (#102) and memory problems at scale (#97).
+
+[repo](https://github.com/smarco/WFA2-lib) · [benchmark](https://github.com/smarco/BiWFA-paper/tree/main/evaluation/data)
+
 #### wasm-libraries-and-apps
 
 ##### Dioxus (web renderer)  `Rust`  `Apache-2.0 OR MIT`  `active`  `Tier A`
@@ -2309,6 +2439,49 @@ Mozilla's source-map library with its mappings parser in Rust compiled to WebAss
 **Status:** Active Mozilla project (0.8.0 published to npm 2026-07-20 after a three-year gap, last commit 2026-07-21), BSD-3-Clause and copyable. The 2018 speedup is over the library's own untuned JS, which mraleph showed could be tuned to roughly match, and the open issues on wasm memory exhaustion (#476), browser bundling (#408, #527, #496) and Rust 1.96+ builds (#530) are the main risks.
 
 [repo](https://github.com/mozilla/source-map) · [benchmark](https://hacks.mozilla.org/2018/01/oxidizing-source-maps-with-rust-and-webassembly/)
+
+##### supercop.wasm  `C (orlp/ed25519 compiled to WebAssembly with Emscripten, JavaScript wrapper)`  `0BSD`  `abandoned`  `Tier B`
+
+orlp/ed25519 compiled to a size-optimized WebAssembly module; about 10x faster than pure-JS @noble/curves 0.7.0 for Ed25519.
+
+**Beats:** @noble/curves 0.7.0 (pure JavaScript ed25519) and node:crypto ed25519 (native OpenSSL) in the third-party berith benchmark; tweetnacl-js and a native SUPERCOP build are not measured — In a third-party benchmark in the competing hazae41/berith repo (Node v18.12.1, Apple M1 Max, 1,000 samples of keygen + sign + verify on a 1,024-byte message), supercop.wasm 5.0.1 took 187.96 us per iteration against 1.99 ms for pure-JS @noble/curves 0.7.0 (about 10.6x, derived from page data); native node:crypto was faster at 152.67 us with KeyObject keys and slower at 555.61 us when keys were serialized.
+
+**Known shortcoming:** Numbers come from a competitor's (berith) README table, a single M1 Max run with keygen, sign and verify mixed per iteration (187.96 us vs @noble/curves 1.99 ms); slower than native node:crypto with unserialised keys (152.67 us); the HEAD bench file lacks the serialised rows, so the table is from an older harness; built at -Oz (emcc -Oz --llvm-lto 1 --closure 1) with the Emscripten version unstated; abandoned since 2018-02-24.
+
+**Known shortcoming:** Enricher: no harness bug inflates the 10.6x over @noble/curves 0.7.0, but the bench never checks the verify result and the serialised node:crypto row is missing at HEAD. Security flaws in the bundled orlp/ed25519 at the pinned commit: sign trusts the caller-supplied public key (double-public-key key leak); verify checks only the top 3 bits of S with no S < L check, so malleable signatures pass; the 64-byte secret key is the SHA-512-expanded form, incompatible with libsodium and tweetnacl; key bytes are freed from the wasm heap without zeroing.
+
+**Independent measurement:** verifier batch-128 (wave 13 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** The speed comes from running the ref10-derived C field and group arithmetic of orlp/ed25519 (radix-2^25.5 field elements, precomputed base-point tables for ge_scalarmult_base) as WebAssembly instead of JavaScript BigInt or number arithmetic. The JS wrapper only copies inputs into the wasm heap with malloc, calls the exported C function and copies the result out. The build is tuned for size (-Oz, LTO, Closure), not speed.
+
+**Use it when:**
+- Browser or Node code that needs Ed25519 sign/verify on raw key bytes and is currently on an old pure-JS library such as @noble/curves 0.7.x or supercop.js
+- Bundles where module size matters: the wasm build is size-optimized and the README says it is multiple times smaller than supercop.js
+- Workloads that already store keys as raw bytes, where node:crypto would need a KeyObject import per call (the serialized node:crypto row was about 3x slower in the berith table)
+- Projects already using the supercop.js API that want a faster, smaller replacement with the same key format
+
+**Skip it when:**
+- Node with KeyObject-held keys: native node:crypto measured 152.67 vs 187.96 us per keygen+sign+verify in the same table
+- Interoperating with libsodium, tweetnacl or RFC 8032 seed-based keys: the 64-byte secretKey is the clamped SHA-512 expansion of the seed, not seed||publicKey, so secret keys are not interchangeable (orlp/ed25519 issue #35)
+- Consensus or strict-verification settings: verify only rejects signatures whose top three bits of S are set, it does not check S < L or reject small-order or non-canonical public keys, so it accepts malleable signatures that strict verifiers reject
+- Code that needs maintenance, audits or side-channel guarantees: last commit and npm release 5.0.1 date from 2018-02-24, with no constant-time claim in the README
+- Signing very large messages in one call: the build does not set ALLOW_MEMORY_GROWTH, so the message must fit in Emscripten's fixed default heap (limit not documented)
+
+**Integration:** module · none at runtime (prebuilt src/supercop.js and wasm in the npm package); rebuilding needs Emscripten, gulp and LiveScript plus a vendored orlp/ed25519 checkout · Any engine with WebAssembly support (Node 8+ era, modern browsers); Emscripten version used for the published build is not documented · any WebAssembly host (Node, browsers); no SIMD or threads
+
+**Vs siblings:** No other Ed25519 or signature library is catalogued in this category; hash-wasm is the closest wasm crypto sibling but covers hashes only, so pick supercop.wasm when you need signatures in JS and can accept an old, unaudited code base.
+
+**Gotchas:**
+- sign(msg, publicKey, secretKey) trusts the caller's publicKey: the nonce depends only on the secret key and message, so signing the same message under two different public keys yields two signatures with the same R and lets an attacker recover the private scalar; always pass the matching key.
+- Secret keys and messages are copied into the wasm heap and released with free() without being zeroed, so key material can remain in linear memory after a call.
+- Benchmark harness: the berith bench at HEAD (src/node/bench/index.bench.ts) has no serialized node:crypto row, so the 555.61 us figure came from an older harness version; every iteration mixes RNG, keygen, sign and verify of a 1,024-byte message, and the verify result is never checked.
+- The published wasm is built with -Oz (size first); a speed-optimized build of the same C would likely be faster, but no such number is published.
+
+**Status:** Abandoned since 2018-02-24 (34 commits, 13 stars, one enhancement issue) but 0BSD-licensed and tiny, so it can be vendored; treat it as legacy code because of the orlp key format, lax verification and absent maintenance.
+
+[repo](https://github.com/nazar-pc/supercop.wasm) · [benchmark](https://raw.githubusercontent.com/hazae41/berith/HEAD/README.md)
 
 ##### Sycamore  `Rust`  `MIT`  `active`  `Tier B`
 
@@ -6876,6 +7049,49 @@ The original 2011 public-domain Ed25519 amd64 assembly in SUPERCOP. On Westmere 
 **Status:** Frozen 2011 research code (software page last revised 2017-01-22) that is still shipped and benchmarked in SUPERCOP 20260831. The promised NaCl integration never shipped: NaCl's latest release, 20110221, still ships a prototype crypto_sign and points to SUPERCOP. It is public domain and easy to copy for study, but a maintained descendant is the better production choice.
 
 [repo](https://ed25519.cr.yp.to/software.html) · [benchmark](https://ed25519.cr.yp.to/ed25519-20110926.pdf)
+
+##### fiat-crypto (generated Curve25519 field arithmetic in BoringSSL)  `Coq (generates C, Rust, Go, Java, Zig, Bedrock2, x86-64 asm)`  `MIT OR Apache-2.0 OR BSD-1-Clause`  `active`  `Tier B`
+
+Coq-proved generator of finite-field arithmetic in C, Rust, Go and Zig; matches hand-written Curve25519 field code in BoringSSL, not faster.
+
+**Beats:** BoringSSL's previous curve25519 code: hand-written x86_64 x25519 assembly (884086e) and the earlier C field arithmetic on master (b2c312d) — BoringSSL's bssl speed -filter 25519 runs show parity, not a speedup: in b2c312d (clang, 32-bit toolchain, Release, an unnamed Google Cloud Xeon with AVX2) the 32-bit fiat field code matched the previous C code on arbitrary-point and base-point multiplication and Ed25519 signing, with Ed25519 verify about 4% slower, and in 884086e (no CPU or compiler stated) fiat64 was about 9% slower than the old x86_64 assembly on arbitrary-point multiplication and won base-point multiplication only by using the Ed25519 table.
+
+**Known shortcoming:** Not faster than its baseline: BoringSSL commits 884086e and b2c312d show parity with BoringSSL's C, and the x86_64 assembly is still about 9% faster at arbitrary-point multiplication; the base-point win comes from switching to Ed25519 tables, not faster field code. No CPU model in either commit; the '7547 to 10237 ops/sec' figure is derived, not in commit 884086e; b2c312d was a 32-bit toolchain build, and two master runs appear to be the fiat author's own data. S&P 2019 paper unreachable. Lead: kbench9000 shows fiat64 about 1.12x faster than donna64 (snippet only).
+
+**Known shortcoming:** Enricher: parity with BoringSSL's C confirmed, not faster; the base-point win comes from the Ed25519 table. The README says only the Bedrock2 backend is proven and gives no quality guarantee for generated code; the Java backend is known buggy (#707); 64-bit C needs __int128 (no MSVC). Newer first-party evidence is CryptOpt assembly from Fiat templates in BoringSSL (43f8891 Curve25519 +31.2% with no baseline row or CPU; 20c9406 P-256 ECDH +63.5% on Cascade Lake only with -DOPENSSL_SMALL=1, no gain on Haswell); CryptOpt is catalogued separately in wave 13.
+
+**Independent measurement:** verifier batch-57 (wave 7 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** It does not use a new algorithm; speed comes from emitting the same limb-scheduled, fully unrolled, branch-free multiply-and-reduce code an expert would write by hand (unsaturated Solinas reduction for 2^255-19, Montgomery word-by-word reduction for generic primes), with proven bounds that let it drop unnecessary carries. A value barrier (empty asm) keeps compilers from turning selectznz back into branches. Since 2023 BoringSSL also ships x86-64 ADX assembly that CryptOpt compiles from Fiat templates and checks with the translation validator in the Fiat repository.
+
+**Use it when:**
+- You maintain a crypto library and want Curve25519, P-256, P-384, P-521, secp256k1 or Poly1305 field arithmetic with a machine-checked correctness proof at the speed of good hand-written C.
+- You need constant-time field code for an unusual prime (the generator covers 80+ primes and arbitrary Solinas or Montgomery-friendly moduli) rather than writing and auditing your own.
+- Portable 32-bit targets: the 10-limb 32-bit Curve25519 code is what the Linux kernel's generic 32-bit Curve25519 uses.
+- Rust projects that already depend on it indirectly (curve25519-dalek tests the fiat backend; the crate has about 151 million crates.io downloads) and want the formally verified backend selected.
+
+**Skip it when:**
+- You want a faster X25519 or Ed25519 than BoringSSL or OpenSSL: the only third-party runs show parity with BoringSSL's C and the old x86_64 assembly about 9% faster on arbitrary-point multiplication.
+- You need a complete protocol API (keygen, sign, verify, ECDH): Fiat stops at the field, so ladders, tables, encoding and side-channel hygiene of the rest are yours.
+- MSVC or other compilers without unsigned __int128 for the 64-bit unsaturated files; use the 32-bit variants there.
+- Regenerating code for new primes on a laptop: the toolchain needs Coq 9.0+ and OCaml 4.08+, a full build takes over an hour, and large primes can need a 1 GB stack and an hour per run.
+- The Java backend: the README marks it unmaintained and known buggy (issue #707).
+
+**Integration:** source-drop · none for the generated C (stdint.h only); generator needs Coq 9.0+ with Rocq stdlib 9.1+, OCaml 4.08+ and jq; Rust users take the fiat-crypto crate · C99-style C with GCC or clang for the 64-bit files (unsigned __int128 and __extension__); 32-bit files are plain C; Rust crate fiat-crypto 0.3.0 states no rust-version · any two's-complement target (the files #error otherwise); 64-bit unsaturated code needs a compiler with 128-bit integers; the CryptOpt ADX assembly in BoringSSL is x86-64 with BMI2/ADX only
+
+**Vs siblings:** Pick Fiat when correctness proofs and coverage of many primes matter more than peak speed; ENG25519 (AVX-512 IFMA) and the amd64-64-24k Ed25519 code are faster on their target CPUs but carry no machine-checked proofs, and libsecp256k1 remains the complete, faster choice for secp256k1 signing rather than Fiat's bare secp256k1 field code.
+
+**Gotchas:**
+- Proof scope: only the Bedrock2 backend has a proof that the emitted AST matches the internal semantics; the C, Rust, Go and Zig printers are unproven, the README says integer-size casts are not verified against what gcc or clang select, and it gives no quality guarantee for generated code.
+- Inputs must respect the typed bounds (loose versus tight field elements, e.g. call carry or carry_mul before feeding an add result to to_bytes); violating them voids the proofs and can overflow limbs silently.
+- The BoringSSL base-point speedup in commit 884086e (38817.1 versus 15095.3 ops/sec) comes from switching to the Ed25519 precomputed 30 kB table, not from faster field arithmetic; on arbitrary-point multiplication fiat64 was slower (13905.1 versus 15094.0 ops/sec).
+- Newer speed claims are for CryptOpt assembly, not the C: BoringSSL 43f8891 (2023, by fiat's lead author, reviewed by BoringSSL) reports +31.2% on Curve25519 arbitrary-point multiplication (28263.1 ops/sec) with no baseline row, CPU or compiler, and 20c9406 reports +63.5% P-256 ECDH on Cascade Lake but only under -DOPENSSL_SMALL=1 (against the small-footprint path, not nistz256), with no difference on Haswell.
+
+**Status:** Actively maintained (Zig backend rewrite merged 2026-10-09) under a choice of MIT, Apache-2.0 or BSD-1-Clause; the generated C files are self-contained and easy to vendor, and BoringSSL, the Linux kernel's 32-bit Curve25519 and curve25519-dalek's fiat backend already do.
+
+[repo](https://github.com/mit-plv/fiat-crypto) · [benchmark](https://github.com/google/boringssl/commit/884086e0e28aad7efe418d9ed7459912e6683fbb)
 
 ##### FourQlib (SchnorrQ / FourQ curve arithmetic)  `C`  `MIT`  `abandoned`  `Tier B`
 
@@ -12171,6 +12387,49 @@ Pure-Java PNG encoder that beats javax.imageio's PNG writer by compressing image
 
 #### rasterizers-2d
 
+##### pixman (SIMD bilinear fast paths: SSE2, NEON, RVV)  `C`  `MIT`  `active`  `Tier A`
+
+Pixman's hand-written SIMD bilinear fetchers (SSE2, NEON, RISC-V RVV) beat its own scalar C paths by 1.5x to 11x.
+
+**Beats:** pixman's own scalar C bilinear affine fetcher (bits_image_fetch_bilinear_affine_normal_a8r8g8b8 in pixman-fast-path.c) for the RVV row; pixman's generic C compositing path for the 2011 SSE2 and NEON rows — On a SpacemiT K3 (RVV 1.0) pinned to one core, built with GCC 15.2.0 in Meson release mode, test/affine-bench at 1920x1080 SRC a8r8g8b8 bilinear rose from 29.15 to 44.74 MPix/s for a 30-degree rotation (1.53x) and from 36.46 to 60.75 for a 0.25 shear (1.67x). The baseline was the previous tree's scalar C affine fetcher, the figures are medians of five interleaved runs (e1f49d9), and pure scaling did not change. caa79f2 extended the fetch to none-repeat and x8r8g8b8 sources (+46% to +62%). The 2011 Siamashka commits report SSE2 bilinear scaling at 70.48 to 165.38 MPix/s on an unnamed Core i7 and NEON gains of 6.6x to 10.9x on a Cortex-A8, with no compiler or flags given.
+
+**Known shortcoming:** Tier A rests on the RVV commit e1f49d9 (2026-09-01: in-tree test/affine-bench.c, GCC 15.2.0, Meson release buildtype, SpacemiT K3, medians of 5 interleaved runs against the generic C fetch; rotate 29.15 to 44.74 MPix/s, shear 36.46 to 60.75), a gain of only about 1.5-1.7x; the forced-C build beats RVV below about 52-54 px widths (caa79f2). The 2011 SSE2 and NEON rows are first-party commit messages with no compiler or flags and CPU given only as Intel Core i7. 'Release build' means the Meson buildtype, not a stated flag list. No independent benchmark; gitlab.freedesktop.org unreachable, evidence read from the X11Libre GitHub mirror.
+
+**Known shortcoming:** Enricher: the tier-A RVV row's baseline (e1f49d9) is not the general compositing path but pixman-fast-path.c's scalar bits_image_fetch_bilinear_affine_normal_a8r8g8b8, which runs a repeat() wrap and mask test per tap that the RVV cover fetcher skips, so the 1.53x and 1.67x mix SIMD with a cover-only shortcut. Absolute MPix/s are not comparable across RVV commits (pure-scale row 75.39 in e1f49d9 vs 116.91 in the caa79f2 baseline with the governor pinned at 2.2 GHz; e1f49d9 states no frequency). The RVV affine fetchers are on master only (September 2026); the newest tag is pixman-0.46.4 (2025-07-20). The x86 and ARM SSE2, SSSE3 and NEON bilinear paths are scale-only, so rotate and shear run scalar C there. RVV math is bit-exact with the C formula.
+
+**Independent measurement:** verifier batch-120 (wave 10 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Pixman stacks implementations at run time (general C, then format-specialised C, then each CPU's SIMD layer). Each layer registers fast paths and iterators keyed on format, operator and image flags, such as SCALE versus AFFINE transform and FAST_PATH_SAMPLES_COVER_CLIP_BILINEAR. For pure scaling, SSE2 and NEON use bilinear scanline functions, and SSSE3 and RVV use a two-row cache that interpolates each source row horizontally once and reuses it for the vertical blend. The 2026 RVV affine fetch handles rotation and shear. It computes each lane's 16.16 fixed-point coordinate as x + i*ux and loads the four taps with indexed gathers (vluxei32, falling back to 64-bit offsets above 4 GiB). It then blends two channels at a time in 16-bit lanes with widening multiply-accumulates on 7-bit weights, which reproduces the C fetcher's integer formula. Because the cover flag guarantees in-bounds taps, it also skips the C fetcher's per-tap repeat() wrap.
+
+**Use it when:**
+- Your stack already composites through pixman or Cairo image surfaces on RISC-V with RVV 1.0 and draws rotated or sheared bilinear a8r8g8b8/x8r8g8b8 images. Current master measured 1.5x to 1.7x on a SpacemiT K3.
+- Scaled (not rotated) bilinear SRC or OVER blits of 8888 or 0565 images on x86-64 (SSE2/SSSE3) or ARM NEON, where hand-written scale paths exist (2.35x SSE2 on a Core i7 and 6.6x to 10.9x NEON on a Cortex-A8 against the 2011 C path).
+- You need identical output whichever path runs: the RVV paths reuse the C integer weight formula, and the RVV commits report the full pixman test suite passing (35 tests).
+- You want to A/B test SIMD against C in one binary: PIXMAN_DISABLE='rvv', 'sse2 ssse3 mmx' or 'fast' switches implementations off at startup.
+
+**Skip it when:**
+- Rotated or sheared bilinear sources on x86-64 or ARM: SSE2, SSSE3 and NEON register scale-only bilinear paths, so these transforms run the scalar C affine fetcher in pixman-fast-path.c. Blend2D is the faster choice there.
+- Distro or tagged pixman builds that need the RVV affine speedup: the fetchers landed in master in September 2026. The mirror's newest tag is pixman-0.46.4 (2025-07-20), and meson.build at HEAD reads 0.46.5.
+- Short rows on RVV: a forced-C build beats the RVV gather fetch below about 52-54 pixels (none-repeat 0.75x scale sweep), so the library keeps C through 53 pixels for positive horizontal scales.
+- Format, operator or repeat combinations with no registered fast path or iterator drop to the general path and gain nothing.
+- Full vector-graphics rendering (paths, gradients, text): pixman is a compositing back end, and sibling renderers such as Blend2D cover the whole pipeline.
+
+**Integration:** shared lib (Meson library 'pixman-1'; static with default_library=static) · libm and threads (pthreads); libpng, GTK 3/GLib and OpenMP are optional and only for tests and demos · C99 (c_std gnu99,c99), Meson >= 1.3.0; the RVV layer needs RISC-V vector intrinsics from GCC 14 or Clang 18 and is built with -march=rv64gcv1p0 · Any C99 target. SIMD layers exist for x86 MMX/SSE2/SSSE3, ARMv6 SIMD, ARM NEON, AArch64 NEON, MIPS DSPr2, POWER VMX/POWER8/POWER9, Loongson MMI and RISC-V RVV 1.0. RVV builds only for riscv64, is detected at run time on Linux (hwprobe or getauxval) and FreeBSD (elf_aux_info), and is disabled elsewhere.
+
+**Vs siblings:** Pick pixman when you are already on Cairo's image backend or the X server and only need faster image compositing, or when you target RISC-V RVV, where it now has vector bilinear affine fetches. For a standalone 2D renderer, Blend2D (JIT pipelines; the clear winner in the ETH thesis) or Vello CPU is faster across whole scenes.
+
+**Gotchas:**
+- Baseline correction for the tier-A RVV rows: 'previous tree' means pixman-fast-path.c's scalar C fetcher bits_image_fetch_bilinear_affine_normal_a8r8g8b8, which is format- and repeat-specialised by MAKE_BILINEAR_FETCHER. It is not the general compositing path. That fetcher wraps every tap through repeat() and tests the mask per pixel even when samples cover the clip, so the 1.5x to 1.7x gain mixes vectorisation with a cover-only fetcher that drops that work.
+- Do not compare absolute MPix/s across the RVV commits. The pure-scale src_8888_8888 'M' row reads 75.39 MPix/s in e1f49d9 but 116.91 in the caa79f2 baseline measured by 95853c3. That later run pinned the userspace governor at 2.2 GHz; e1f49d9 states no frequency or governor. Each commit's ratios come from interleaved medians and remain usable.
+- Path selection depends on flags and table order. COVER needs every tap, zero-weight ones included, inside the image (caa79f2 forced the none-repeat path by shortening the source one row). rvv_iters[] comments warn that reordering entries silently routes scale sources onto the gather path.
+- The RVV width thresholds (53 pixels for the affine gather, 11 pixels for the vectorised vertical pass) and the gather design were tuned on one core, the SpacemiT K3 X100. A vectorised horizontal gather was 6.9-8.3% slower there and was dropped.
+
+**Status:** Actively maintained: the GitHub mirror's last commit is 2026-10-02, and RVV work by ISCAS contributors landed through September 2026 (committed by mattst88). MIT-licensed, but the RVV affine fetchers are not in any tag yet (newest 0.46.4, 2025-07-20). The upstream gitlab.freedesktop.org was unreachable, so everything was read from the X11Libre read-only mirror. The record's baseline wording ('general compositing path') is wrong for the tier-A RVV rows: their baseline is the format-specialised C fetcher in pixman-fast-path.c.
+
+[repo](https://gitlab.freedesktop.org/pixman/pixman) · [benchmark](https://github.com/X11Libre/mirror.fdo.pixman/commit/e1f49d9e6665ce354b90a189bf7bb5bbde9a1f20)
+
 ##### tiny-skia  `Rust`  `BSD-3-Clause`  `active`  `Tier A`
 
 Pure-Rust port of Skia's CPU raster pipeline; about 1.7-2.3x faster than cairo on x86 overall, slower on solid rect fills.
@@ -13578,6 +13837,49 @@ WHATWG-compliant C++20 URL parser used by Node.js; about 7.8x faster than libcur
 [repo](https://github.com/ada-url/ada) · [benchmark](https://github.com/ada-url/ada#readme)
 
 #### http-servers-frameworks
+
+##### agensio  `C++`  `MIT`  `active`  `Tier A`
+
+Pre-alpha C++ static-file, FastCGI and reverse-proxy web server on Asio; outpaces nginx on most HttpArena infrastructure rows.
+
+**Beats:** nginx 1.31.4 (HttpArena nginx entry with a custom C handler module); HttpArena rows for h2o and Drogon also compared — On HttpArena's public board (AMD Threadripper PRO 3995WX, Ubuntu 24.04, Docker; agensio v0.1.0-alpha.23 built with GCC from Debian trixie at CMake Release plus -march=native and its hardening defaults, nginx 1.31.4 at -O3 -march=native with a custom C handler module), agensio led nginx on static-tls (1.19M vs 0.72M req/s), the HTTP/2 and h2c baselines (14.2-14.8M vs 2.5-3.3M) and HTTP/3 rows, edged it on HTTP/1.1 baseline-4096 (1.08x), and trailed it by 2 percent on limited-conn; h2o stays ahead on baseline-4096 and baseline-h2, zix on json-h2c and pipelined, Drogon on pipelined.
+
+**Known shortcoming:** HttpArena rows match the agensio, nginx, zix, h2o and Drogon result files, but the JSON profiles pre-serialise item JSON at load time (against HttpArena's infrastructure rule and unlike the nginx module's per-request sprintf), so json-tls 1.31x and json-h2c 2.64x are not like-for-like; h2 and h2c rows against zix and h2o look load-generator bound. agensio ran with hardening on and nginx links Debian OpenSSL, not quictls. Loses to nginx on limited-conn, to zix on baseline-4096 and json-h2c, to Drogon on pipelined. Numbers are from v0.1.0-alpha.23; the repo is now at alpha.72, pre-alpha with 1 star.
+
+**Known shortcoming:** Enricher: the JSON harness flaw holds at HEAD (load_httparena_dataset in src/handlers/httparena.cpp pre-serialises item JSON at load, breaking HttpArena's per-request serialisation rule; PR #1511 merged without comment on it), so json-tls 1.31x and json-h2c 2.64x partly measure skipped work. Baseline and JSON rows run a benchmark-only handler (-DAGENSIO_HTTPARENA=ON, 'never in a release'). h2 and h2c rows are load-generator bound (the author's own notes show h2load at 1200%). Static rows depend on precompressed .br twins; before them the author's lite run had agensio at 0.36-0.42 of nginx req/s. The alpha.57 large-body chunking fix does not touch the measured static-tls path.
+
+**Independent measurement:** verifier batch-82 (wave 5 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** One Asio io_context per worker thread, each with its own SO_REUSEPORT acceptor, so a connection never leaves its core and the request path takes no locks. Static files come from a two-level in-memory cache (a shared store touched under a mutex only on miss, insert or evict, plus a per-worker index that makes hits lock-free) holding prebuilt header blocks and pre-compressed .br/.gz twins, revalidated by stat() at most once per interval. The HTTP/2 layer batches a read's answers into one send (one sendmsg per ~57 answers in the author's profile) and uses an HPACK dynamic table so a small response's header block shrinks from 48 to 8 bytes; small HTTP/1 responses go out as one gathered write of prebuilt fragments with a once-per-second Date header.
+
+**Use it when:**
+- Serving static sites whose assets fit in the memory cache (default 4 MB per file, 256 MB total), especially over TLS and HTTP/2, where the HttpArena static-tls and static-h2 rows show 1.65x and 1.8x nginx's req/s.
+- Small VPS hosting where CPU and memory per request matter: the author's single-worker Ryzen 9 9900X runs show 1.9-2.0 us vs nginx 3.0 us of CPU per plain 1 KB request and 2.7-2.8 vs 4.3-4.4 us over HTTPS, and HttpArena records 297 MiB against nginx's 3.5 GiB on baseline-4096.
+- Many small HTTP/2 or HTTP/3 requests per connection, where agensio reached 4.3-5.9x nginx on the h2/h2c baseline rows at about a quarter of nginx's CPU.
+- PHP hosting (Laravel, WordPress, Statamic, Drupal) on a single Linux box, if you can accept pre-alpha software and want the bundled per-application hardening presets.
+
+**Skip it when:**
+- Anything you cannot afford to have exposed or down: the project started 2026-09-19, has one star and a handful of users, and its README warns of undiscovered bugs, some possibly security bugs; alpha.56 and alpha.57 fixed an HTTP/2 timeout loop that could stall a worker and a TLS slow-client cut-off found by the author's own audit.
+- Deployments that need on-the-fly compression, directory listing, rate limiting, wildcard or DNS-01 certificates, OCSP stapling or HTTP/3 0-RTT; none are implemented.
+- Non-Linux production hosts: macOS builds and Windows compiles, but only Linux is tested release by release.
+- Large streamed files over TLS: the author's own tables show nginx level or ahead on 10 MB streams (no kTLS yet, so TLS uses the copy path).
+- HTTP/1.1 pipelining-heavy load: on HttpArena's pipelined profile agensio does 4.96M req/s against Drogon 7.8M and zix 58.8M.
+
+**Integration:** standalone server binary (CMake build) · standalone Asio 1.38+ (fetched if absent), vendored toml++ 3.4.0; optional OpenSSL 3 for TLS (3.5+ for HTTP/3), optional zlib (archive installs) and libxcrypt (password auth) · C++20 (CMakeLists sets CMAKE_CXX_STANDARD 20), GCC 12+, Clang 16+, Apple clang 15+ or MSVC 2022 per README, CMake 3.24+; the design notes target GCC 14+ and Clang 18+ · Linux (epoll, SO_REUSEPORT) supported; macOS (kqueue) builds and runs; Windows compiles but is untested
+
+**Vs siblings:** Pick agensio over Drogon or cinatra when you want a configured server in front of static files, PHP or a proxied app rather than a C++ framework to write handlers in; over Lwan or Kore when you need HTTP/2, HTTP/3, ACME and FastCGI out of the box and can tolerate pre-alpha maturity. Pick Drogon if you write C++ request handlers or depend on pipelining throughput.
+
+**Gotchas:**
+- The baseline and JSON rows run a benchmark-only handler (src/handlers/httparena.cpp, compiled only with -DAGENSIO_HTTPARENA=ON and 'never in a release'), and its JSON path pre-serializes every item except the total at dataset load (load_httparena_dataset builds item.prefix; still the same code at HEAD), while nginx's module runs ngx_sprintf over every field per request; HttpArena's infrastructure rule for json-tls and json-h2c requires per-request serialization, so the 1.31x json-tls and 2.64x json-h2c leads over nginx partly measure skipped work. The PR #1511 review (merged 2026-10-06) raised no comment on this.
+- The h2 and h2c rows are load-generator bound: the author's own CLAUDE.md notes h2load at 1200 percent bounds the pinned row and that agensio, h2o and zix all land at 12-16M req/s; compare the CPU column (agensio 1.5-1.9k percent vs 3-4k for zix and h2o) rather than req/s there.
+- The static rows depend on serving the arena's pre-compressed .br twins: the author's first local run, before twins were served, had agensio at 0.36-0.42 of nginx's req/s because nginx sent 15 KB brotli bodies against 58-60 KB raw ones. The HttpArena nginx entry also runs without open_file_cache, which the infrastructure tier allows and which widens the static-tls gap.
+- Numbers come from the alpha.23 build while releases have reached alpha.72. The alpha.57 change that splits large cached bodies into 64 KB pieces touches the HTTP/1 static path, but only for bodies beyond the first write plus one 64 KB piece; the arena's brotli twins and binary files are all under about 60 KB, so the measured static-tls path is unaffected. agensio's hardening flags (stack protector, _FORTIFY_SOURCE=2, _GLIBCXX_ASSERTIONS, zero-init locals, PIE and RELRO) were on during the run.
+
+**Status:** Very active pre-alpha (317 commits, releases almost daily, alpha.72 on 2026-10-12) and MIT-licensed, but one star and a few weeks of field use, so treat it as an experiment rather than an nginx replacement for production yet.
+
+[repo](https://github.com/YiannisBourkelis/agensio) · [benchmark](https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/agensio.json)
 
 ##### CPV Framework  `C++`  `MIT`  `abandoned`  `Tier A`
 
@@ -18977,6 +19279,49 @@ Header-only C++20 SIMD Philox4x32-10 engine; bulk fill runs 1.3-4.6x std::mt1993
 
 [repo](https://github.com/sinhaparth5/vphilox) · [benchmark](https://raw.githubusercontent.com/sinhaparth5/vphilox/HEAD/docs/benchmarks/README.md)
 
+##### dSFMT (MersenneTwister-Lab)  `C`  `BSD-3-Clause`  `stale`  `Tier B`
+
+Double-precision SIMD Mersenne Twister in C that emits IEEE 754 doubles directly; about 1.6x MT19937 for bulk uniform doubles.
+
+**Beats:** MT19937 (NumPy's reference-derived mt19937 implementation, as exposed by randomgen) — randomgen's performance table (Python timeit through NumPy's Generator, 25,000 values per call, best of 10x100, Intel Cascade Lake at 3.1 GHz, Linux) gives DSFMT 2.5 ns per uniform double against randomgen's MT19937 4.0 ns (about 1.6x, derived from page data) and NumPy RandomState 5.2 ns, with integer, exponential and gamma rows equal or slower; it measures randomgen's vendored dSFMT.c built with -DHAVE_SSE2, not this repository, and the compiler, version and flags behind the table (last edited 2020-2023) are not stated.
+
+**Known shortcoming:** Third-party randomgen numbers (Cascade Lake 3.1 GHz) with no compiler or flags, timed through Python wrappers on randomgen's vendored copy; only uniform doubles are clearly faster (2.5 vs MT19937 4.0 ns), Normal is 10.1 vs 10.5 ns, Uint32, Expon and Gamma are slower, and there is no gain over SFMT. Stale (last commit 2025-05-19).
+
+**Known shortcoming:** Enricher: the 1.6x uniform-double win is structural (randomgen's MT19937 builds each 53-bit double from two 32-bit outputs while dSFMT makes one 52-bit double per output), and dSFMT is slower on Uint32 (2.8 vs 2.5 ns); the randomgen table was last edited 2020-2023, so its build flags remain unknown (current meson.build uses -DHAVE_SSE2 -mavx2). fill_array's size and 16-byte alignment are checked only by assert() while the Makefile sets -DNDEBUG; a MEXP mismatch calls exit(1).
+
+**Independent measurement:** verifier batch-181 (wave 8 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** The state is an array of 128-bit words updated with a single SSE2 (or AltiVec) recursion of shifts, a 32-bit shuffle, XORs and a mask (do_recursion in dSFMT-common.h), producing two doubles per step with no tempering. Because the exponent bits are fixed by the recursion, no integer-to-float conversion is needed; MT19937 by contrast spends two tempered 32-bit outputs per 53-bit double (randomgen's mt19937_next_double), which is where most of the measured uniform-double gain comes from. fill_array_* writes a whole block straight into the caller's 16-byte-aligned array, the authors' recommended fast path.
+
+**Use it when:**
+- Monte Carlo code that consumes large blocks of uniform doubles and can call dsfmt_fill_array_close_open on an aligned buffer of at least 382 elements (MEXP 19937).
+- Reproducing results of software that used dSFMT, such as Julia's MersenneTwister (the default RNG before Julia 1.7) or randomgen's DSFMT bit generator.
+- Projects that want an MT-family generator with a very long period (2^19937-1 by default, up to 2^216091-1 via DSFMT_MEXP) and jump-ahead (the repo's jump/ directory) but faster double output than MT19937.
+- Plain C99 code bases on x86-64 or POWER that prefer a small BSD-3-Clause source drop (dSFMT.c plus headers) over a library dependency.
+
+**Skip it when:**
+- Integer streams: randomgen's own table shows DSFMT slower than MT19937 for Uint32 (2.8 vs 2.5 ns) and equal for Uint64 (4.2 vs 4.2 ns, each uint64 consumes two dSFMT outputs); the header itself says dsfmt_genrand_uint32 'is slower than SFMT, only for convenience usage'.
+- New designs with no compatibility need: randomgen's performance page recommends against every Mersenne Twister variant, and SFC64, Xoshiro256 and PCG64DXSM are as fast or faster for doubles there with tiny state.
+- Many parallel streams or per-task generators: the state is 192 128-bit words (about 3 KB) at MEXP 19937, the large-state cost Julia's 1.7 release notes cite for moving its default to per-task Xoshiro256++.
+- ARM64 or other non-SSE2, non-AltiVec targets on the master branch: the portable C path is used there; AVX2, AVX-512 and NEON code exists only on the unreleased 'experimental' branch (ver. 2.2.99, 2025-07-15), whose PR notes AVX-512 'still doesn't run correctly'.
+- Anything security related: it is a linear generator and not cryptographically secure.
+
+**Integration:** source-drop · none (C standard library; emmintrin.h when HAVE_SSE2 is defined) · C99 (Makefile uses -std=c99 -O3); GCC, Clang, MSVC and Borland code paths present · any IEEE 754 platform; SIMD path only for x86 SSE2 (-msse2 -DHAVE_SSE2) and PowerPC AltiVec (-DHAVE_ALTIVEC); big-endian non-GCC needs DSFMT_BIG_ENDIAN
+
+**Vs siblings:** Pick dSFMT over SFMT when the output you need is doubles (SFMT is the better MT variant for 32/64-bit integers and ties dSFMT on randomgen's uniform row at 2.5 ns); pick it over randomgen's SFC64 or Xoshiro256 only when you need the dSFMT stream itself or MT-family period guarantees, since those match or beat it on the same table with a tiny state, and prefer VMT19937 when the standard MT19937 stream must be reproduced with AVX2 or AVX-512.
+
+**Gotchas:**
+- fill_array preconditions (size even, size >= dsfmt_get_min_array_size(), array 16-byte aligned on the SIMD build) are enforced only by assert(), and the shipped Makefile compiles with -DNDEBUG, so a short, odd-sized or misaligned buffer is silently undefined behaviour rather than an error.
+- fill_array_* and genrand_* calls must not be mixed on one state without re-initialising, per the dSFMT.c documentation.
+- DSFMT_MEXP must be identical for dSFMT.c and every caller; a mismatch makes dsfmt_init_gen_rand print 'DSFMT_MEXP doesn't match with dSFMT.c' and call exit(1) from inside the library. Leaving it undefined triggers a #warning and defaults to 19937.
+- SIMD is opt-in: without -DHAVE_SSE2 the code compiles the scalar path with no warning, and doubles have 52-bit resolution (multiples of 2^-52), one bit less than MT19937's 53-bit doubles in NumPy and randomgen.
+
+**Status:** Stale but stable: master last changed 2025-05-19 (PR #7), the code base is ver. 2.2.x from 2011-2020 with no tagged releases, one open issue (#9, seeding from another RNG), and a 2025 AVX2/AVX-512/NEON contribution parked on an experimental branch; BSD-3-Clause and small enough to vendor.
+
+[repo](https://github.com/MersenneTwister-Lab/dSFMT) · [benchmark](https://github.com/bashtage/randomgen/blob/main/doc/source/performance.rst)
+
 ##### FastShuffleExperiments (nearly divisionless bounded random integers)  `C++`  `Apache-2.0`  `stale`  `Tier B`
 
 Benchmark and reference code for Lemire's nearly divisionless bounded random integers; Fisher-Yates shuffles about 8-10x faster than std::shuffle.
@@ -20318,6 +20663,49 @@ Bounds-checked Zig fannkuch-redux kernel, about 6% faster than GCC -O2 C in Lang
 
 [repo](https://github.com/kostya/LangArena) · [benchmark](https://github.com/kostya/LangArena/blob/master/results/2026-10-05-kostya-ms7c37.js)
 
+##### ish  `Mojo`  `Apache-2.0`  `active`  `Tier B`
+
+Mojo grep-like CLI that filters lines or FASTA/FASTQ records by striped-SIMD alignment score; slightly beats parasail_aligner at matched costs.
+
+**Beats:** parasail (C) parasail_aligner, striped semi-global (sg_dx_striped sse41_128 and avx2_256, 8- and 16-bit variants) — In the Sassy paper's evals README, Sassy's authors timed one 23 bp DNA pattern searched single-threaded across T2T CHM13 v2.0: ish (commit 92f4fad, 16-bit striped semi-global, match 2, mismatch -2, gap open 3, extend 1) took 69 s with an SSE build and 110 s with AVX2, against 81-198 s for parasail_aligner's four sg_dx striped variants (SSE4.1 and AVX2, 8- and 16-bit) at the same costs (best against best 1.17x, derived from page data) and 53-69 s at parasail's default costs. Wall times come from 'time' and include FASTA parsing for both tools; CPU model, compiler flags, repetition count and the per-variant split of the parasail range are not given, and the ish paper's own GCUPS numbers were not reachable.
+
+**Known shortcoming:** Raised from C to B on the independent Sassy evals README (artifact of the Sassy paper): at ish's costs ish 69 s SSE and 110 s AVX2 against parasail 81-198 s, best against best about 1.17x (derived from page data), but at parasail's default costs parasail ties or wins (53-69 s); no CPU or flags. The ish paper (Bioinformatics Advances 2025) was seen as a snippet only.
+
+**Known shortcoming:** Enricher: ish's own bench.py runs parasail_aligner with non-profile function names, so parasail rebuilds the query profile per pair and includes output writes in its time, while ish builds profiles before the timer and reports a mean of 3 runs against parasail's single run; no stored results. The catalogued B rests on the Sassy evals instead (same algorithm at 16-bit: ish 69 s SSE vs parasail 81-198 s; parasail at its defaults 53-69 s). The CLI prints only the best hit per record and loses lowercase and non-ACGT letters; Mojo thread cap (#54); AVX-512 segfault fixed (#50).
+
+**Independent measurement:** verifier batch-111 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** The kernels are Farrar's striped SIMD alignment (query profile laid out in striped segments, SWPS3-style lazy-F correction loop), refined as in SSW and modelled on parasail, written with Mojo SIMD types and LLVM saturating add/subtract intrinsics. The CLI's semi-global path runs a 16-bit (int16) profile with saturation checks compiled out, and runs the reverse pass that locates the match start only when the forward score clears the cutoff. Vector width is a compile-time choice (ISH_SIMD_TARGET sse, avx256, avx512, or native); the lazy-F loop runs up to one pass per lane, so narrow SSE vectors suit short patterns. Both sides of the parasail comparison run the same algorithm, and no source read explains where ish's small edge comes from.
+
+**Use it when:**
+- Shell pipelines that need a fuzzy grep by affine-gap alignment score, e.g. finding a primer, barcode or guide sequence with mismatches and indels in reads or assemblies (actgn matrix, fastx mode).
+- Protein queries scored with BLOSUM62 against FASTA databases, filtering records by local or semi-global score rather than computing full alignments.
+- Single-pattern CPU scans at small gap penalties (open 3, extend 1), where Sassy's evals measured ish's SSE build at 69 s against 81-198 s for parasail_aligner's striped sg_dx variants at the same costs.
+- Many target records on a machine with a Mojo-supported GPU; the author says the GPU path pays off with many reference sequences (e.g. a protein database), not for one query against one genome.
+
+**Skip it when:**
+- Pure edit-distance pattern search in whole genomes: in issue #54 Sassy took 2 s wall for a 23 bp pattern with up to 4 errors where ish took about 60 s wall (200 s CPU) on the same 3 Gbp genome.
+- You need every hit: the CLI reports only the single best match per line or record, so a chromosome-sized FASTA record yields at most one hit.
+- Multicore scaling matters: Mojo's parallelize runtime caps ish at about half the cores (300% CPU on a 6-core machine, issue #54, still open, blocked on upstream Mojo).
+- You can use parasail at its default costs (match 1, mismatch 0, open 10, extend 1): it took 53-69 s there, as fast as or faster than ish's 69 s best.
+- You need a C/C++ library, a stable toolchain or releases: ish requires pixi or conda with a pinned Mojo (0.25.6 at HEAD), has no tagged releases, and its ish-aligner benchmark tool is marked development-only.
+
+**Integration:** CLI binary built from Mojo source (pixi run build) or a conda package from the modular-community channel; ishlib can be packaged as a Mojo module · Mojo compiler (pinned =0.25.6 at v1.4.0), extramojo 0.18.0, pixi or conda; parasail, autotools and the UniProt 2015_11 data only for the benchmark tasks · Mojo 0.25.6 at HEAD (v1.2.0 to v1.3.x used Mojo 25.4); Linux x86-64 per the issue reports; the README recommends building from source over the conda package for speed · x86-64 with SSE, AVX2 or AVX-512 (width chosen at build time; Mojo emulates wider vectors if the CPU lacks them); GPU path needs a Mojo-supported GPU; macOS and aarch64 not documented
+
+**Vs siblings:** None of the numerics-and-arrays siblings is a sequence aligner; the Mojo siblings (llama2.mojo, llm.mojo, mojo-analyze) share only the toolchain, so pick ish when the job is score-thresholded alignment filtering. The catalogued Sassy entry (wave 14) is orders of magnitude faster for edit-distance search of short patterns, so pick ish only when you need affine gaps, scoring matrices such as BLOSUM62 or local alignment.
+
+**Gotchas:**
+- Build width matters more than expected: the default 'pixi run build' uses the native width (AVX-512 where present), yet Sassy measured the AVX2 build at 110 s against 69 s for -D ISH_SIMD_TARGET=sse on a 23 bp pattern; a native-width build also segfaulted with the actgn matrix on an AVX-512 Xeon Gold 6240 until a June 2025 fix (issue #50).
+- Output is not byte-identical to input: matched records are printed after an encoding round-trip, so under actgn lowercase soft-masked bases come out uppercase and letters outside ACGTU come out as N; each FASTA sequence is written on one line, and the match is highlighted with ANSI colour codes only when stdout is a terminal.
+- The CLI semi-global path uses only the int16 profile with do_saturation_check=False and no 8-bit or 32-bit fallback, so very long patterns could clamp silently near the int16 limit (inferred from the code, not tested).
+- Harness flaw in the repo's own benchmark (benchmarking/bench_scripts/bench.py, which the paper's GCUPS comparison presumably used): parasail_aligner is called with non-profile function names, so its 'alignment time' rebuilds the query profile for every target pair and includes result output, while ish-aligner builds profiles before its timer, flushes output after it, and reports the mean of 3 iterations against parasail's single run; no results or hardware are stored, so the paper's 'meets or exceeds parasail' GCUPS claim cannot be checked from the repo.
+
+**Status:** Apache-2.0 and single-author (Bio-Rad), last commit 2025-10-31 (v1.4.0, Mojo 0.25.6) with one open issue and no releases, so it is maintained but tied to a fast-moving pinned Mojo toolchain; usable as a CLI, not as a library to vendor into C++.
+
+[repo](https://github.com/BioRadOpenSource/ish) · [benchmark](https://raw.githubusercontent.com/RagnarGrootKoerkamp/sassy/HEAD/evals/README.md)
+
 #### runtime-jit-beats-aot
 
 ##### Bun (JavaScriptCore JIT 1.3.13): benchLANG binary trees  `JavaScript`  `MIT`  `active`  `Tier A`
@@ -20962,6 +21350,49 @@ Zig zero-allocation SIMD CSV field iterator; counts fields 1.4-2.6x faster than 
 **Status:** MIT, single author, 39 stars, no tagged releases; active (last commit 2026-07-29, a Zig 0.17 upgrade) but young (first commit 2025-12-19), with the strict-validation hole above unreported in its 6 open issues, so validate untrusted input elsewhere or use the scalar path (vector_length = null) until it is fixed.
 
 [repo](https://github.com/peymanmortazavi/csv-zero) · [benchmark](https://raw.githubusercontent.com/peymanmortazavi/csv-race/HEAD/result-all.csv)
+
+##### ferromark  `Rust`  `MIT`  `active`  `Tier A`
+
+Rust CommonMark/GFM Markdown-to-HTML engine, about 3x faster than md4c and 5-6x faster than cmark in its own harness.
+
+**Beats:** md4c (C); cmark (C) in a second report — On one GitHub-hosted AMD EPYC 7763 runner (4 vCPUs, 2026-09-24), Ferromark v2 rendered the 50 documents whose HTML agreed across five engines about 3.2x faster fresh and 3.4x faster with reuse than md4c built with clang 18 -O3 and sharing mimalloc (derived from page data: md4c 0.31x and 0.29x), and about 4.2x and 5.0x on the 14 documents where all six engines agreed. A later short balanced-profile run on an unnamed AMD EPYC blacksmith runner over all 57 documents, including differing outputs, gave 2.95x and 3.06x against md4c and 5.70x and 6.25x against cmark built with GCC 13.3 -O3.
+
+**Known shortcoming:** First-party run on a shared GitHub runner (EPYC 7763; md4c built with clang 18.1.3 -O3); the held-out set is 28 documents, 24 compared with md4c; the engines' HTML differs on 7-43 of 57 documents; md4c allocations go through mimalloc; different algorithms; PGO applied to the Rust engines only; cmark's -O3 line is absent from the blacksmith build log.
+
+**Known shortcoming:** Enricher: small fresh-lifecycle asymmetry in the harness (the md4c adapter starts each call with an empty Vec grown through a per-chunk FFI callback while ferromark reserves twice the source length; reuse ratios 0.29x vs 0.31x, so the effect is small); md4c built with clang 18 -O3 without LTO against Rust on LLVM 22 with fat LTO. The numbers measure v2 commit 09e5e866da while the crate is now 3.5.0 with a breaking v3 API; the v2 core was imported from ox-content v3.2.3.
+
+**Independent measurement:** verifier batch-114 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** The document tree lives in a bumpalo arena that can be reset between documents, and the renderer reserves twice the source length for its output up front and can lend the buffer out (render_borrowed) instead of allocating a String per call. Inline scanners stop on ASCII byte classes found with a nibble-table vector lookup (pshufb on SSSE3/AVX2 detected at run time, vqtbl1q_u8 on aarch64), and the line pre-pass uses an SSE2/NEON plus SWAR newline scan because memchr's per-call setup dominated on short lines. The v2 core is an import of the OX-Content parser (ubugeeei-prod/ox-content v3.2.3, 2026-09-13) that the project then rewrote; its own report measures v2 at about 2.1x its earlier v1 engine.
+
+**Use it when:**
+- Rust or Node.js services and static-site generators rendering many Markdown documents per second, where a reused arena and output buffer can be kept per worker.
+- CommonMark or GFM documents from tens of bytes to about 100 KB (the measured corpus spans 37 to 113,609 bytes) where md4c, cmark, cmark-gfm, pulldown-cmark or Comrak is the current bottleneck.
+- Pipelines that also want JSX/MDX output, front matter, heading IDs, footnotes, callouts or a document tree to transform before rendering, from the same engine.
+- x86-64 machines with SSSE3/AVX2 or aarch64 machines with NEON, where the vector byte scans are active.
+
+**Skip it when:**
+- C or C++ codebases that embed md4c or cmark directly: there is no documented C API, so you would add a Rust toolchain (1.95+) and your own FFI shim.
+- Projects that need a stable API: v2 was re-based on an OX-Content snapshot in September 2026, v3 broke the Rust API on 2026-10-01, and crates.io shows eight releases between 2026-09-26 and 2026-10-11.
+- When you need byte-identical output to md4c or cmark: only 14 of the 57 benchmark documents render the same across all six engines, and md4c's output differs on 7 of them.
+- Untrusted input through the Rust API with default options: Rust defaults preserve raw HTML, so sanitize must be set explicitly (Node defaults escape it).
+- Workloads that enable the product defaults (heading IDs, callouts, TOC, fence metadata, tag filtering): the benchmarks switch these off, and extra syntax adds parsing work, so the measured margin is an upper bound.
+
+**Integration:** crate (Rust, edition 2024) plus a native Node.js package (npm ferromark) · bumpalo, compact_str, smallvec, memchr, rustc-hash, thiserror, serde_json; optional ferriki (syntax highlighting) and oxc_* crates for the jsx feature · Rust 1.95 (rust-version in Cargo.toml); Node.js 22.12+ for the bindings; the published benchmarks used nightly-2026-07-20 · any Rust target; SSSE3/AVX2 vector scans on x86-64 detected at run time with a table-walk fallback, NEON scans on aarch64, SWAR elsewhere
+
+**Vs siblings:** Pick it over rushdown or zigmark when you need GFM and JSX/MDX output and want the evidence with the widest baseline set (md4c, cmark, cmark-gfm, pulldown-cmark, Comrak and Bun's engine in one preserved harness); rushdown and zigmark are measured only against cmark/cmark-gfm. For non-Markdown text work (regex, CSV, word counting) the other siblings in this category apply instead.
+
+**Gotchas:**
+- The measured engine is Ferromark v2 at commit 09e5e866da (2026-09-24) and the blacksmith run used source 9af95fc3; the current crate is 3.5.0 with a breaking Rust API, so the numbers describe an earlier revision.
+- Harness asymmetry in the fresh lifecycle: the md4c adapter (worker.rs) starts each call with an empty Vec that grows through md4c's per-chunk output callback across FFI, while Ferromark's renderer reserves 2x the source length before rendering. The reuse lifecycle, where md4c also keeps a warm Vec, gives a similar ratio (0.29x vs 0.31x), so the effect is small but favours Ferromark.
+- Toolchains differ: Rust engines use LLVM 22.1.8 with fat LTO, codegen-units=1 and panic=abort, md4c uses Ubuntu clang 18.1.3 -O3 with no LTO, and md4c's malloc calls are redirected to mimalloc by a benchmark-only header; PGO rows apply profiles to the Rust engines only.
+- Earlier releases had super-linear paths on untrusted input (reference-link resolution #142, angle autolinks #244, footnote numbering #44) and a Node binding that aborted the process on any panic (#140); all are closed, but they were filed against the v1 code base before the OX-Content import, and no fuzzing or limit guarantee for v2 is documented in the README.
+
+**Status:** Very active (963 commits, releases almost daily, last crates.io release 3.5.0 on 2026-10-11) but young and small (9 stars, about 5,700 crate downloads), MIT-licensed with preserved OX-Content attribution, and the API is still changing between major versions.
+
+[repo](https://github.com/sebastian-software/ferromark) · [benchmark](https://github.com/sebastian-software/ferromark/blob/main/docs/reports/2026-09-24-native-linux-x86-64/README.md)
 
 ##### Ferroni (Rust port of the Oniguruma regex engine)  `Rust`  `BSD-2-Clause`  `active`  `Tier A`
 
@@ -22218,6 +22649,48 @@ Koka (functional language compiled to C with Perceus reference counting): deriv 
 
 [repo](https://github.com/koka-lang/koka) · [benchmark](https://microsoft.com/en-us/research/uploads/prod/2020/11/perceus-tr-v4.pdf)
 
+##### noodles (noodles-fasta FAI indexer)  `Rust`  `MIT`  `active`  `Tier B`
+
+Rust bioinformatics format libraries; noodles-fasta builds samtools-compatible .fai indexes about 6x faster than samtools faidx.
+
+**Beats:** samtools faidx (samtools 1.24 with HTSlib 1.24, C) — An independent benchmark in the z-fasta repository (zebrac v0.6.2, 5 samples after 3 warmups, warm cache, AMD Ryzen 9 3950X per the z-fasta README) timed 'rm -f x.fai; tool index x' for a noodles-fasta 0.66.0 wrapper (cargo release profile, rustc version not stated) and samtools 1.24 faidx (HTSlib 1.24, default -O2, compiler not stated): GRCh38 primary assembly 1.364 s against 8.161 s (about 6.0x), GENCODE v46 transcripts 0.411 s against 1.711 s (about 4.2x), UniProt human proteome 0.018 s against 0.065 s (about 3.7x).
+
+**Known shortcoming:** Downgraded from A to B: the z-fasta REPORT numbers (1.364 s vs samtools 8.161 s on GRCh38, about 6.0x) state the CPU (Ryzen 9 3950X) but no rustc or C compiler version, and samtools was built at HTSlib's default -O2. The win comes from a memchr line scan against byte-at-a-time bgzf_getc, not the language, and noodles' .fai output was never checked against samtools'. Peak RSS is 3.59 vs 9.31 MiB, not equal.
+
+**Known shortcoming:** Enricher: harness symmetric and no correctness bug found, but noodles' .fai is never byte-checked against samtools', and edge semantics differ (HTSlib counts only isgraph bases and drops duplicate names; noodles counts all bytes except a trailing CR and has no duplicate check). Small-file ratios are mostly samtools start-up (about 15 ms vs 3.5 ms). No bgzip FASTA indexing; issue #146 showed bgzip region queries far slower than samtools.
+
+**Independent measurement:** verifier batch-116 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** The indexer reads through a BufReader and finds line ends with memchr (SIMD-accelerated byte search) on each buffered chunk, counting a whole line's bases at once and only checking the first byte of each line for '>'. HTSlib 1.24's fai_build_core, which samtools faidx uses, instead pulls every byte through bgzf_getc into a per-character state machine that also tests each byte with isgraph/isspace and inserts names into a hash table to reject duplicates. The samtools build in the comparison is the upstream default -O2 with a shared libhts, and the scaling table suggests roughly 15 ms of fixed samtools startup against about 3.5 ms for the noodles wrapper (derived from page data).
+
+**Use it when:**
+- Rust pipelines that need to build or read .fai indexes of large, uniformly wrapped FASTA (genomes, transcriptomes) without shelling out to samtools.
+- Batch indexing of many reference or assembly files where samtools' per-file start-up and byte-at-a-time scan dominate (about 2.2 GB/s against 0.37 GB/s on GRCh38, warm cache).
+- Projects that already use noodles for BAM, CRAM or VCF and want one consistent, MIT-licensed Rust dependency for reference handling.
+- Low-memory environments: peak RSS was 3.6 MiB on the genome against 9.3 MiB for samtools.
+
+**Skip it when:**
+- FASTA with ragged line widths, trailing whitespace or mixed LF/CRLF endings: the indexer rejects them (as samtools does); a lenient tool such as z-fasta's .zfi mode is needed.
+- bgzip-compressed FASTA: fs::index opens the file as plain text and writes no .gzi, while samtools faidx indexes BGZF FASTA directly; region queries on bgzipped FASTA were also far slower than samtools in issue #146 (12.8 s against 0.024 s before PR #147 in 2023, still about 10x slower after it).
+- You need a command-line tool: noodles ships examples, not a supported faidx binary, and its README calls the API experimental.
+- Maximum indexing speed: in the same benchmark the Zig z-fasta indexer is about 3.6x faster than noodles on the genome.
+
+**Integration:** crate (noodles-fasta 0.67.0, or the noodles meta crate with the fasta feature) · bstr, memchr, noodles-bgzf, noodles-core; tokio only with the async feature · Rust 1.91.0 (workspace rust-version), edition 2024 · any platform Rust supports (pure Rust; memchr picks SIMD paths at run time)
+
+**Vs siblings:** Among the bioinformatics siblings (mosdepth for depth, sambamba and mako against samtools view/sort, rasusa for subsampling), noodles is the one to pick when you need a Rust library rather than a finished command-line tool, here for FASTA indexing; pick z-fasta instead when raw indexing speed or tolerance of messy FASTA matters more than a broad format library.
+
+**Gotchas:**
+- Output parity with samtools was never checked for noodles: the z-fasta report's byte comparison of .fai files covers only z-fasta, and its messy-FASTA table records exit codes, not output.
+- Semantics differ at the edges: HTSlib counts only isgraph characters as bases, warns and keeps the first of duplicate sequence names, and skips whitespace after '>'; noodles counts every byte of a line except a trailing CR and has no duplicate-name check in the indexer code read.
+- The small-file ratios are mostly process start-up (1 MiB: 3.7 ms against 17.5 ms); the asymptotic gap is about 7x per MiB.
+- noodles' API is versioned 0.x and changes often (fasta 0.66.0 was measured, 0.67.0 is current), so pin versions.
+
+**Status:** Actively maintained (last commit 2026-10-08), MIT-licensed and widely used (727 stars, about 485k noodles-fasta downloads), but still a 0.x API that its author calls experimental.
+
+[repo](https://github.com/zaeleus/noodles) · [benchmark](https://github.com/eneskemalergin/z-fasta/blob/main/bench/index/REPORT.md)
+
 ##### skani  `Rust`  `MIT`  `active`  `Tier B`
 
 Rust ANI and aligned-fraction calculator for genomes and MAGs; 20-50x faster than FastANI (C++), slower than Mash at querying.
@@ -22995,92 +23468,6 @@ Java NIO/epoll network framework whose stripped 'http-lite' TechEmpower entry ti
 
 [repo](https://github.com/firenio/firenio) · [benchmark](https://raw.githubusercontent.com/panjf2000/illustrations/master/benchmark/techempower-plaintext-top50-light.jpg)
 
-##### grpc-dotnet (gRPC for .NET)  `C#`  `Apache-2.0`  `active`  `Tier B`
-
-Managed gRPC for ASP.NET Core; outran stock gRPC C++ async servers 1.48-1.67x on grpc_bench's 2026 unary test.
-
-**Beats:** gRPC C++ (grpc/grpc) servers cpp_grpc_st, cpp_grpc_mt and cpp_asio_grpc in the grpc_bench suite — In grpc_bench run #559 (posted by the maintainer on 2026-04-22, Xeon Gold 6548N, server Docker-limited to 1-4 CPUs and 4 GiB, ghz client on 11 CPUs, 50 connections x 1000 concurrent unary complex_proto calls, 120 s after 30 s warm-up, one run per setting), the .NET 9 / Grpc.AspNetCore 2.66.0 server served 1.48-1.67x the req/s of the cpp_grpc_mt, cpp_grpc_st and cpp_asio_grpc servers, built with g++ -O3 -flto against Debian's prebuilt libgrpc++. The 2022 wiki run (.NET 6, Xeon E5-1650 v3) led only at 1 CPU and trailed by 2-4 percent at 2-3 CPUs, and a client-bound third-party run (#547, Ryzen 9 5900X) was a tie.
-
-**Known shortcoming:** grpc_bench discussion 559 (2026-04): 1.48-1.67x over all C++ servers at 1-4 CPUs in the newest run, but the 2022 run led at 1 CPU only and #547 was a client-bound tie; memory 4-6x higher and worse 1-CPU p99; the HTTP/2 work is Kestrel's (dotnet/aspnetcore, separate record). Shared C++ baseline flaw: unpinned distro libgrpc++, helloworld async pattern, poor scaling (85,485 req/s at 4 CPUs).
-
-**Known shortcoming:** Harness asymmetry: the .NET bench server has been maintained by grpc-dotnet's author (JamesNK, 2020-2026) and uses ServiceProvidersMiddleware to skip per-request DI scopes plus a singleton service, which is unsafe to copy into apps with scoped services; the C++ servers are the stock helloworld async completion-queue pattern with one pre-posted request per queue, linking libgrpc++ from Debian trixie (probably 1.51.1, late 2022; version from search snippets only). The memory column likely includes the resident dotnet run SDK process; the 3-4 CPU rows are likely capped by the client (.NET at 256-279% CPU). In #547 cpp_grpc_mt used 14.4 us CPU per request against .NET's 32.4 at 1 CPU. Open issue #2033: throughput falls from 494 to 116 kops/s when handlers fault.
-
-**Independent measurement:** verifier batch-42 (wave 14)
-
-**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
-
-**How:** The whole stack is managed code with no native gRPC core: Kestrel's HTTP/2 implementation over System.IO.Pipelines with pooled buffers; the unary handler deserializes the request straight from the request body's PipeReader and, when the message length is known and compression is off, Google.Protobuf serializes the reply straight into the response PipeWriter after writing the 5-byte gRPC frame header (HttpContextSerializationContext's direct-serialization path) instead of an intermediate array. The .NET tiered JIT recompiles the hot path after the 30 s warm-up (grpc_bench set DOTNET_TieredPGO=1 for .NET 6 in Dec 2021; the 2026 .NET 9 image sets no runtime flags and builds without ReadyToRun or Native AOT). The benchmark server adds two tuning steps of its own, a singleton service and a middleware that skips per-request DI scope creation, while the C++ baseline is the untuned helloworld async completion-queue server on Debian's prebuilt libgrpc++.
-
-**Use it when:**
-- A .NET service exposing unary gRPC APIs where a C++ gRPC server was considered for throughput: at 1-4 server CPUs it served 84,809-136,452 req/s versus 56,669-85,485 for the three C++ servers in grpc_bench #559.
-- Small CPU-limited containers (1-2 CPUs) where requests per core matter more than resident memory: about 12.0 us of server CPU per request at 1 CPU versus 18.0 us for cpp_grpc_mt, and 20.5 us versus 47.4 us at 4 CPUs (derived from page data).
-- Teams already on ASP.NET Core that want gRPC to share its middleware, DI, authentication, logging and Kestrel configuration.
-- Replacing the deprecated Grpc.Core package; Grpc.Net.Client also targets net462, netstandard2.0 and netstandard2.1, so older clients can talk to the same services.
-
-**Skip it when:**
-- Memory-tight deployments: 122-135 MiB per server in #559 versus 9-32 MiB for the C++ servers and 13-15 MiB for tonic and Thruster (part of that is probably the dotnet run host process, see gotchas).
-- Strict tail-latency budgets on one core: p99 at 1 CPU was 54.20 ms versus 21.81 ms for cpp_grpc_mt.
-- You want the fastest gRPC server regardless of language: in the same run rust_tonic_st (102,754), java_vertx_grpc (100,308) and rust_thruster_st (98,464) beat it at 1 CPU, and Vert.x, thruster_mt and tonic_mt at 2 CPUs.
-- Handlers that fail often: issue #2033 (open since Feb 2023) measured grpc-dotnet falling from 494 to 116 kops/s when unary handlers fault, below the old Grpc.Core server's 223 kops/s failure case (.NET 7).
-- Hosting a server outside ASP.NET Core or on .NET Framework: Grpc.AspNetCore.Server targets only net8.0, net9.0 and net10.0, and a standalone non-ASP.NET server is still an open request (#2543).
-
-**Integration:** module (NuGet packages: Grpc.AspNetCore for servers, Grpc.Net.Client and Grpc.Net.ClientFactory for clients) · ASP.NET Core (Kestrel) for the server, Google.Protobuf, Grpc.Tools for build-time code generation from .proto files · Server: .NET 8 (Grpc.AspNetCore.Server targets net8.0, net9.0, net10.0); client: .NET Framework 4.6.2 or netstandard2.0; the repo itself builds with .NET SDK 10.0.100 · wherever ASP.NET Core runs; the README lists no platform restrictions
-
-**Vs siblings:** Pick it over tonic or Thruster (Rust), which are faster at 1 CPU and use about a tenth of the memory, when the codebase is already .NET; it beats grpc-go at every CPU count in #559 (84,809 vs 55,667 req/s at 1 CPU, 135,948 vs 117,082 at 4). The Kestrel sibling entry is the HTTP/2 server it runs on, so much of the measured advantage belongs to Kestrel.
-
-**Gotchas:**
-- Harness asymmetry: the .NET server in grpc_bench has been maintained by grpc-dotnet's own author (JamesNK, commits 2020-2026) and uses ServiceProvidersMiddleware to bypass per-request DI scopes. Copied into an app with scoped services (an EF Core DbContext, for example), that resolves them from the root provider and shares them across concurrent calls. The C++ servers are the stock helloworld async example with one pre-posted request per completion queue on the older async API, not the callback API.
-- Baseline age: the C++ servers link the libgrpc++-dev of the gcc:15.2.0 image, which is Debian trixie; packages.debian.org lists 1.51.1 in bookworm and sid (search snippets only, trixie page not reachable), so the 2026 run probably compared .NET 9 with Grpc.AspNetCore 2.66.0 (2024) against a late-2022 gRPC C++ core built with distro flags.
-- The memory column comes from docker stats, and the image's ENTRYPOINT is 'dotnet run -c Release -p GreeterServer --no-build', which likely keeps the SDK CLI process resident next to the server, so the 122-135 MiB probably overstates the server itself.
-- At 3-4 CPUs the .NET server used only 256-279 percent CPU while the top seven servers cluster at 136-153k req/s, which suggests the 11-CPU ghz client caps those rows, whereas the C++ servers saturate 306-406 percent. In the client-bound third-party run (#547, 1 CPU) cpp_grpc_mt needed 14.4 us of CPU per request versus 32.4 us for dotnet_grpc (derived from page data), so the CPU-efficiency lead flips between runs.
-
-**Status:** Actively maintained by the gRPC project and Microsoft (Grpc.AspNetCore 2.84.0 on NuGet 2026-09-21, last commit 2026-09-17), Apache-2.0, and the recommended C# gRPC implementation; copyable as NuGet packages, with the grpc_bench image already moved to .NET 10 (PR #560) after the measured run.
-
-[repo](https://github.com/grpc/grpc-dotnet) · [benchmark](https://github.com/LesnyRumcajs/grpc_bench/discussions/559)
-
-##### grpc-go  `Go`  `Apache-2.0`  `active`  `Tier B`
-
-Google's pure-Go gRPC; beat a stock gRPC C++ async server at 2-4 CPUs in one grpc_bench run, lost in another.
-
-**Beats:** gRPC C++ (grpc/grpc) servers cpp_grpc_st, cpp_grpc_mt and cpp_asio_grpc in the grpc_bench suite — grpc_bench discussion #559 (maintainer run, 2026-04-22, commit c4c93b3, Xeon Gold 6548N, Ubuntu 24.04, ghz client on 11 CPUs, 50 connections, 1,000 concurrent requests, 120 s after 30 s warmup, one run per setting): go_grpc (grpc-go v1.79.3 built with Go 1.26.2, default options) served 55,667 / 88,531 / 109,481 / 117,082 req/s at 1-4 server CPUs against the best C++ server (cpp_grpc_mt or cpp_asio_grpc, app code built with g++ 15.2 -O3 -flto over Debian's prebuilt libgrpc++) at 57,403 / 74,869 / 81,581 / 85,485, i.e. 0.97x, 1.18x, 1.34x and 1.37x (derived from page data). The 2022 wiki run (Xeon E5-1650 v3, grpc-go v1.36.0, Go 1.17) reversed this: 1.28x at 1 CPU, 0.73x and 0.85x at 2-3 CPUs.
-
-**Known shortcoming:** Result flips between grpc_bench runs: 2022 wins at 1 CPU only; 2026 (discussion 559) loses at 1 CPU (0.97x) and wins at 2-4 CPUs (1.18-1.37x). Shared C++ baseline flaw: unpinned distro libgrpc++, helloworld async pattern, poor scaling (85,485 req/s at 4 CPUs).
-
-**Known shortcoming:** Harness flaw: the C++ baseline is the untuned helloworld async server (one completion-queue thread per CPU, one pre-posted request per queue) on unpinned Debian libgrpc++, most likely the 1.51.1 series (version from a search snippet; packages.debian.org blocked); its per-CPU throughput falls from 55,600 to 21,100 req/s between 1 and 4 CPUs (Go 55,200 to 35,100), so the 2-4 CPU win measures C++ scaling. docker --cpus is a quota, not a cpuset: Go matches it via automaxprocs while C++ sees 16 cores. The benchmarked v1.79.3 predates the 2026 advisories GHSA-hrxh-6v49-42gf, GHSA-vp52-pcj8-j9qc (CVE-2026-84304) and GHSA-2v4p-qf9q-27wj and was never re-measured; tonic, Thruster and grpc-dotnet beat go_grpc at every CPU count in #559.
-
-**Independent measurement:** verifier batch-42 (wave 14)
-
-**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
-
-**How:** Each connection has a reader goroutine and a 'loopy writer' goroutine that drains a control buffer, interleaves DATA frames from active streams within flow-control quota, and batches frames into a 32 KB write buffer that it flushes only when nothing is queued; if fewer than 1,000 bytes are pending it yields once (runtime.Gosched) so stream goroutines can add to the batch (internal/transport/controlbuf.go). Every RPC runs in its own goroutine on Go's netpoller-backed M:N scheduler, so all GOMAXPROCS threads share incoming calls instead of being bound to one completion queue each as in the C++ async example used as the baseline. A BDP estimator sizes flow-control windows dynamically, and buffers come from a mem.BufferPool. The measured lead is a scaling effect, not per-core speed: at 1 server CPU it is 0.97x of C++.
-
-**Use it when:**
-- Any Go service that needs gRPC: it is the reference Go implementation and is wire-compatible with C++, Java, Rust and .NET peers.
-- Small unary RPCs on 2-4 core containers, where the 2026 grpc_bench run put it at 88,531-117,082 req/s against 74,869-85,485 for the stock gRPC C++ async servers (1.18-1.37x).
-- Memory-constrained deployments: 21-31 MiB average memory in grpc_bench #559, similar to the C++ servers (9-32 MiB) and far below grpc-dotnet (122-135 MiB) or Java Vert.x (108-333 MiB).
-- Services that need xDS, ALTS, interceptors or OpenTelemetry stats in the same library (all live in this module and its go.mod).
-
-**Skip it when:**
-- If you need a stable speed advantage over C++ gRPC: the 2022 run of the same harness reversed the order (1.28x at 1 CPU, 0.73x and 0.85x at 2-3 CPUs), a 2025 third-party run (#547) is a tie, and a tuned C++ server (many pre-posted requests per completion queue, callback API, a current gRPC core) was never measured.
-- Single-core servers with tight tail latency: at 1 CPU it serves 0.97x of cpp_grpc_mt with a p99 of 37.04 ms versus 21.81 ms.
-- If you want the fastest gRPC server outright: in the same 2026 run rust_tonic_st (102,754 req/s at 1 CPU, 1.85x), grpc-dotnet, rust_thruster and java_vertx_grpc (130,000-153,000 req/s at 2-4 CPUs) all beat go_grpc at every CPU count.
-- GC-sensitive hot paths: the server path still allocates per RPC (performance issue #3305, 'reduce garbage allocations in server path', open since 2020) and the default server starts one goroutine per stream.
-- C or C++ codebases: there is no C/C++ API; the only route is a separate Go process.
-
-**Integration:** module (Go module google.golang.org/grpc; code generation with protoc-gen-go and protoc-gen-go-grpc) · golang.org/x/net (HTTP/2 framer, HPACK), google.golang.org/protobuf, genproto rpc status; go.mod also pulls Envoy go-control-plane, cncf/xds, OpenTelemetry and go-spiffe for the xDS and stats packages · Go 1.26 at HEAD (go.mod 'go 1.26.0'; the benchmarked v1.79.3 needed Go 1.24); the README supports only the two latest Go major releases · any Go target; the README installs it with a plain import and go build, no C toolchain step
-
-**Vs siblings:** Pick grpc-go when the service is written in Go; tonic and Thruster (Rust) and grpc-dotnet out-served it at every CPU count of the same 2026 run (rust_tonic_st 102,754 vs 55,667 req/s at 1 CPU; grpc-dotnet 123,609-136,452 vs 88,531-117,082 at 2-4 CPUs). Against grpc-dotnet it uses a quarter to a sixth of the memory (21-31 MiB vs 122-135 MiB).
-
-**Gotchas:**
-- Baseline asymmetry in the measured win: the C++ servers link Debian's prebuilt libgrpc++-dev (unpinned; Debian stable ships the 1.51.1 series per Debian package listings seen in a search snippet, so most likely a late-2022 gRPC core) while go_grpc used grpc-go v1.79.3 from 2026. cpp_grpc_mt is the helloworld async pattern with one completion-queue thread per GRPC_SERVER_CPUS and a single pre-posted RequestSayHello per queue, so under 1,000 concurrent requests each queue accepts new calls one at a time. Its efficiency collapses with cores, from 57,403 req/s at 103% CPU to 85,485 at 406% (about 55,600 to 21,100 req/s per CPU, derived from page data), while go_grpc goes from 55,667 at 101% to 117,082 at 333% (about 55,200 to 35,100). The 2-4 CPU win therefore measures a poorly scaling C++ server, not faster per-core code.
-- bench.sh limits the server with docker --cpus, a CFS quota rather than a cpuset: go_grpc imports go.uber.org/automaxprocs, so GOMAXPROCS matches the quota, while the C++ process still sees all 16 host cores. Only one run per setting, the client reaches the server through Docker's published port 50051, and the workload is a single unary complex_proto echo.
-- The benchmarked v1.79.3 predates three 2026 advisories: GHSA-hrxh-6v49-42gf (HTTP/2 Rapid Reset mitigation bypass, fixed in 1.82.1), GHSA-vp52-pcj8-j9qc / CVE-2026-84304 (heap exhaustion from millions of tiny DATA frames, fixed in 1.83.1 with receive-buffer compaction) and GHSA-2v4p-qf9q-27wj (xDS server crash on missing :authority and Host, fixed in 1.82.2 and 1.83.2). The fixes add per-frame accounting, and HEAD also turns on the shared write buffer by default (off in v1.79.3); nobody has re-measured throughput on these versions.
-- Defaults matter: the harness uses grpc.NewServer() with no options, so NumStreamWorkers (experimental, reuses goroutines instead of one per stream), WriteBufferSize/ReadBufferSize and window sizes were not tuned on the Go side either. The faster go_vtgrpc rows (4-8% above go_grpc) come from the vtprotobuf codec, listed separately in wave 2.
-
-**Status:** Actively maintained by the gRPC team (latest release v1.84.0 dated 17 Sep on the releases page, 23.1k stars, 120 open issues, Apache-2.0) and the standard choice for Go; the speed edge over C++ gRPC is run-dependent and rests on an untuned, probably 1.51-era C++ baseline, and production users should run 1.84.0 or later because the benchmarked v1.79.3 is affected by 2026 DoS advisories.
-
-[repo](https://github.com/grpc/grpc-go) · [benchmark](https://github.com/LesnyRumcajs/grpc_bench/discussions/559)
-
 ##### jet_server  `Dart`  `MIT`  `active`  `Tier B`
 
 Experimental pure-Dart HTTP/1.1 server driving epoll through dart:ffi; 1.36-1.46x Drogon's req/s in the-benchmarker.
@@ -23207,49 +23594,6 @@ Rust multi-transport web framework on hyper; its thread-per-core HTTP/1.1 server
 **Status:** Actively developed by a single maintainer (all recent commits by dancixx, 2.4.1 released 2026-10-11), MIT, 163 stars and about 5,200 crates.io downloads; usable for HTTP/1.1-heavy Linux services, but young and churning fast, so pin the minor version.
 
 [repo](https://github.com/rust-dd/tako) · [benchmark](https://raw.githubusercontent.com/the-benchmarker/web-frameworks/HEAD/data.json)
-
-##### tonic (Rust gRPC)  `Rust`  `MIT`  `active`  `Tier B`
-
-Rust async gRPC (tokio, hyper, prost) that out-served the stock C++ gRPC async servers in grpc_bench's small unary echo test.
-
-**Beats:** gRPC C++ (grpc/grpc) servers cpp_grpc_st, cpp_grpc_mt and cpp_asio_grpc in the grpc_bench suite — In grpc_bench's complex_proto unary echo test (commit 14a8435, 2022-04-23 wiki page, Xeon E5-1650 v3, 50 connections, 1000 in-flight requests, 120 s after a 30 s warm-up), rust_tonic_st (tonic 0.7, Rust 1.59, LTO, jemalloc) served 41,546 req/s at 1 CPU. The C++ servers, built with g++ 11 -O3 -flto against the distro libgrpc++, served 26,700 (cpp_grpc_st), 26,376 (cpp_grpc_mt) and 24,926 (cpp_asio_grpc), so tonic was 1.56-1.67x faster, but cpp_grpc_mt led at 2 and 3 CPUs. All three C++ servers register only one pending request per completion queue, which gRPC's performance guide warns serialises request handling.
-
-**Known shortcoming:** grpc_bench discussion 559: wins only at 1 CPU (41,546 vs cpp_grpc_st 26,700 req/s); cpp_grpc_mt leads at 2-3 CPUs; the C++ side links the distro libgrpc++ (probably 1.30.2 on bullseye, snippet only) rather than a benchmark-flag build; rust_grpcio (C core) also beat the C++ rows.
-
-**Known shortcoming:** Harness flaw: all three grpc_bench C++ servers (cpp_grpc_st, cpp_grpc_mt, cpp_asio_grpc) post exactly one RequestSayHello per completion queue against 1,000 in-flight requests, which gRPC's performance guide calls essentially serial request processing (grpc_bench issue #490, open since 2024-11-04; same code at the 2026 commit c4c93b3), so the C++ baseline is untuned. The record's 'win only at 1 CPU' caveat is outdated: discussion #559 (2026-04-23, Xeon Gold 6548N) has rust_tonic_mt beating the best C++ at 2/3/4 CPUs (130,370 vs 74,869; 139,886 vs 81,581; 136,638 vs 85,485). The repo is now grpc/grpc-rust (hyperium/tonic redirects).
-
-**Independent measurement:** verifier batch-44 (wave 14)
-
-**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
-
-**How:** The README describes three layers: a generic gRPC core, the hyper/h2 HTTP/2 implementation on tokio, and prost codegen, all compiled together, so the grpc_bench build gets whole-program opt-level 3, LTO and codegen-units 1 plus jemalloc. The winning 1-CPU variant, rust_tonic_st, runs tokio's current_thread runtime: one event loop with no cross-thread wake-ups or work stealing. That last point is the benchmark's setup rather than a documented tonic technique. Part of the measured gap comes from the C++ side, not from tonic (see gotchas).
-
-**Use it when:**
-- New gRPC services or clients written in Rust: async/await on tokio, prost-generated types, streaming, rustls TLS, health and reflection services.
-- Small unary RPCs at high concurrency in CPU-capped containers. In grpc_bench's 1-CPU complex_proto test, rust_tonic_st served 41,546 req/s against 24,926-26,700 for the three C++ servers in 2022, and 102,754 against 56,669-57,403 in the 2026-04-23 run.
-- One process per core with predictable tails: the current_thread variant held p99 at 33.24 ms (2022) and 14.47 ms (2026) at 1 CPU, while the multi-thread runtime's p99 was 668.38 ms and 98.22 ms.
-- Memory-tight sidecars: 12-18 MiB average memory in grpc_bench, close to the C++ servers (about 9-37 MiB) and far below dotnet_grpc (114-176 MiB).
-
-**Skip it when:**
-- In-process use from C++. Tuning grpc++ (more pre-registered requests per completion queue, or the callback API) is likely cheaper than adding a Rust process, and the grpc_bench C++ baseline never did that tuning.
-- Multi-core servers judged on the 2022 data alone. At 2 and 3 CPUs, cpp_grpc_mt (69,882 and 71,806 req/s) and cpp_asio_grpc beat rust_tonic_mt (53,832 and 64,091). tonic_mt led C++ at 2-4 CPUs only in the 2026 run.
-- The multi-thread runtime under a 1-CPU quota when tail latency matters: p99 was about 20x (2022) and 7x (2026) worse than the current_thread variant.
-- When you need a stable API: the crate is still 0.x, master is preparing breaking changes (the README points to the 0.14.x branch), and the repository now lives at grpc/grpc-rust next to a new grpc crate.
-- Tail-latency-critical clients on aarch64: issue #1606 (elevated p99 and above on a master client compared with v0.10.2) is still open and has no root cause.
-
-**Integration:** crate · tokio, hyper 1 and h2 0.4, hyper-util, tower 0.5, axum 0.8 (default router feature), bytes, tokio-stream, tokio-util; prost through tonic-prost; optional rustls (tls-ring or tls-aws-lc), flate2 (gzip/deflate), zstd; codegen in tonic-build/tonic-prost-build needs protoc · Rust 1.88 (MSRV in the README and the workspace rust-version); the 2022 benchmark used Rust 1.59 with tonic 0.7 · not documented in the README (any target tokio supports); grpc_bench measured only x86-64 Linux in Docker
-
-**Vs siblings:** Pick tonic over Thruster (thruster-grpc) when you want the mainstream Rust gRPC stack with prost codegen, TLS, health, reflection and xDS work; rust_thruster_st was within 0.5-4.2% of rust_tonic_st in both grpc_bench runs (41,334 vs 41,546 and 98,464 vs 102,754). Pick it over grpc-dotnet or grpc-go when the service is in Rust or memory is tight (about 13-15 MiB vs 120-135 MiB for dotnet_grpc in 2026); grpc-dotnet was close in multi-core throughput (136,452 vs 139,886 at 3 CPUs).
-
-**Gotchas:**
-- Harness flaw in the baseline: all three grpc_bench C++ servers (cpp_grpc_st, cpp_grpc_mt and cpp_asio_grpc) post exactly one RequestSayHello per completion queue, while the client keeps 1000 requests in flight. In the CallData servers, each call registers its successor only on reaching PROCESS. The asio-grpc server runs one accept-loop coroutine per GrpcContext and awaits one agrpc::request at a time. gRPC's own performance guide says to 'register enough server requests for the desired level of concurrency' to avoid 'a slow path that results in essentially serial request processing'. grpc_bench issue #490 (opened 2024-11-04, still open) reports this for cpp_grpc_mt; the maintainer replied that the code came from the gRPC examples. The server code is unchanged at the 2026 run's commit c4c93b3. The C++ servers also link the distro libgrpc++ package, asio-grpc is pinned to 1.0.0, and cpp_grpc_mt runs one thread per completion queue, where the guide (as of gRPC 1.41) suggests two. So the C++ numbers are a lower bound for grpc++, which is consistent with rust_grpcio (C core) also beating them at 1 CPU (31,035 req/s in 2022).
-- The record's caveat that the win appears only at 1 CPU is outdated. In the 2026-04-23 run (discussion #559, Xeon Gold 6548N, 4096m server RAM, tonic 0.14 on Rust 1.94), rust_tonic_mt beat the best C++ server at 2, 3 and 4 CPUs: 130,370 vs 74,869 (1.74x), 139,886 vs 81,581 (1.71x) and 136,638 vs 85,485 (1.60x), derived from page data. The same under-registered C++ harness was used.
-- Results depend on the runtime flavour. At 1 CPU, current_thread beat multi-thread by 17-25% in throughput and by 7-20x at p99. A current_thread server uses one core per process, so scaling out means several processes behind SO_REUSEPORT or a load balancer.
-- Tonic was not alone. At 1 CPU in 2022, go_vtgrpc (44,074) and rust_thruster_st (41,334) matched or beat rust_tonic_st, and in 2026 dotnet_grpc reached 84,809 against 57,403 for the best C++ server. The lead over C++ is a property of this harness as much as of tonic.
-
-**Status:** Actively maintained: last commit 2026-10-07, MIT, 12.5k stars. The project now lives at github.com/grpc/grpc-rust (hyperium/tonic redirects there), and the latest release is the 0.14.x line, with breaking changes pending on master. It is a copyable crate, but the measured advantage over C++ rests on an untuned grpc++ harness: one outstanding request per completion queue, the open grpc_bench issue #490.
-
-[repo](https://github.com/hyperium/tonic) · [benchmark](https://github.com/LesnyRumcajs/grpc_bench/wiki/2022-04-23-bench-results)
 
 ### parsing-and-text
 
@@ -25743,6 +26087,49 @@ Research C runtime for wait-free continuation-stealing fork/join, reported faste
 **Status:** Abandoned research artifact (mirror last touched 2022-10-01, 276 commits, MIT); small enough to vendor on x86-64 Linux with GCC, but treat it as a reference design rather than a dependency.
 
 [repo](https://github.com/black7375/nowa) · [benchmark](https://www4.cs.fau.de/Publications/2021/schmaus2021nowa.pdf)
+
+##### OpenCilk (opencilk-project)  `C++`  `Apache-2.0 WITH LLVM-exception`  `active`  `Tier B`
+
+LLVM/Clang fork compiling Cilk fork-join C/C++ onto a work-stealing runtime; paper reports beating oneTBB, OpenMP and Cilk Plus runtimes.
+
+**Beats:** Intel oneTBB, OpenMP and the Intel Cilk Plus runtime, each reached by OpenCilk's own compiler lowering the same Cilk programs to that runtime (the PMAM 2023 program, seen as a search snippet, says OpenCilk was extended to support Cilk Plus, OpenMP and oneTBB with fewer than 2000 new lines each; the abstract itself says only 'the other runtimes') — The PPoPP 2023 paper by the project's authors reports the OpenCilk runtime faster than the Cilk Plus, OpenMP and oneTBB runtimes by a geometric mean of 4%-26% on 1 core and 10%-120% on 48 cores across 15 Cilk benchmark programs, all compiled by OpenCilk and lowered to each runtime; the paper was unreachable here (DSpace, ACM, scispace, NSF PAR and the conference site all failed DNS), so the per-runtime split, CPU model and flags remain unseen, and the only independent data opened (issue #135) shows OpenCilk slower than ParlayLib on a fine-grained 2^20 sum.
+
+**Known shortcoming:** Numbers seen only as PPoPP 2023 abstract snippets (geomean 4-26% at 1 core, 10-120% at 48 cores), per-baseline margins unknown; the baselines are Cilk programs compiled by OpenCilk's own compiler onto the oneTBB, OpenMP and Cilk Plus runtimes, not native TBB or OpenMP code. The measured runtime lives in OpenCilk/cheetah, not this repo. Paper hosts (dspace.mit.edu and others) unreachable here.
+
+**Known shortcoming:** Enricher: the paper is still unreachable, so the evidence stays snippet-only; dev/21.x has no oneTBB Tapir target and the generic LambdaABI needs an external bitcode file, so the oneTBB comparison cannot be rerun from the repo. Open issue #135 shows OpenCilk about 600 us vs ParlayLib par_do about 120 us on a 2^20 sum (2x Xeon 8375C); open bugs #347 (exceptions may call std::terminate), #476 (pedigree memory corruption), #337 and #313 (LTO); cheetah's standalone CMake build defaults to Debug.
+
+**Independent measurement:** verifier batch-63 (wave 11 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** The compiler keeps spawns and syncs visible in the IR (Tapir), so ordinary LLVM optimizations work across parallel control flow, and it lowers them to Cheetah calls whose fast paths ship as an LLVM bitcode ABI file that is linked and inlined into user code. Cheetah is a work-first, continuation-stealing scheduler in the Cilk-5 tradition: a per-worker deque guarded by the THE protocol, randomized victim selection, provably-good steals, per-worker fiber pools for the cactus stack, and adaptive thief sleep based on steal-success history (worker_sleep.cpp). cilk_for is lowered to recursive divide-and-conquer spawning (requires -O1 or higher).
+
+**Use it when:**
+- Recursive or nested fork-join C/C++ code (divide-and-conquer, parallel loops nested inside parallel loops) where you control the compiler and can build with OpenCilk's clang.
+- You want a deterministic-by-construction programming model with tools: Cilksan to prove a run free of determinacy races and Cilkscale to measure work, span and parallelism before tuning.
+- Parallel reductions that must be deterministic (reducer hyperobjects) or repeatable parallel random numbers (DotMix DPRNG via -lopencilk-pedigrees).
+- Linux, macOS or FreeBSD on x86-64 or 64-bit ARM, including teaching and research settings (MIT 6.106 uses it).
+
+**Skip it when:**
+- You must build with GCC, MSVC or a stock Clang, or ship a library to users who do: Cilk keywords need the OpenCilk compiler, and Windows is not listed among supported systems.
+- Very fine-grained or low-parallelism workloads where little is stolen: in open issue #135 a 2^20-element recursive sum took about 600 us under OpenCilk versus about 120 us with ParlayLib par_do on two Xeon Platinum 8375C sockets (maintainers attribute it to scheduling overhead, NUMA and hyperthreading).
+- Projects relying on LTO or LLD LTO: open bugs #337 (LTO linker errors) and #313 (LLD LTO crash), plus #331 (cyclic dependency building shared libraries).
+- Job-queue or asynchronous task submission (fire-and-forget, futures, I/O-bound tasks): the model is strict fork-join, so a pool such as BS::thread_pool or concurrencpp fits better.
+- Code that needs the pedigree runtime: open issue #476 reports memory corruption on return from a steal with pedigrees.
+
+**Integration:** compiler toolchain (LLVM/Clang fork) plus runtime library (OpenCilk/cheetah); prebuilt release binaries for select systems · the OpenCilk compiler and its bundled Cheetah runtime; building from source needs a full LLVM build (infrastructure scripts provided) · OpenCilk clang with -fopencilk (OpenCilk 3.0 is based on LLVM 19.1.7; the dev/21.x branch carries the 4.0 release candidates); cilk_for needs -O1 or higher · x86-64 and 64-bit ARM on Linux, macOS (via xcrun) and FreeBSD per the README; Android beta in 3.0; Windows not listed
+
+**Vs siblings:** Pick OpenCilk over library schedulers such as citor, Lace or Fork Union when you can adopt its compiler and want language-level fork-join with race detection, scalability analysis and deterministic reducers; prefer a library sibling (citor, Fork Union, Taskflow-style pools) when you must stay on a stock GCC, Clang or MSVC toolchain or need non-fork-join task graphs.
+
+**Gotchas:**
+- The paper's oneTBB and OpenMP baselines are not native TBB or OpenMP programs: the same Cilk source is lowered by OpenCilk's Tapir back ends to each runtime, so the comparison measures schedulers under OpenCilk's own front end. In dev/21.x the Tapir targets are Serial, Cheetah, CilkPlus, Lambda, OMPTask, OpenCilk and Qthreads; no oneTBB target ships, and the generic Lambda ABI needs an external bitcode ABI file, so the oneTBB comparison cannot be rerun from this repository alone.
+- A standalone CMake build of OpenCilk/cheetah defaults to CMAKE_BUILD_TYPE=Debug with all assertions enabled (cheetah README); benchmark against a Release build.
+- C++ exceptions are supported, but open issue #347 says out-of-order exceptions may call std::terminate, and several compiler crashes in Cilk exception handling and taskframe logic were fixed only recently (#483, #484, Aug 2026 commits).
+- Maintainers note in issue #135 that cilk_for with a reducer currently vectorizes poorly, so a reducer-based loop can be slower than a hand-written spawn tree.
+
+**Status:** Actively maintained (last commit 2026-08-17 on dev/21.x, OpenCilk 3.0 released on LLVM 19.1.7, 4.0 release candidates out) with 22 open issues; the compiler is an LLVM fork under Apache-2.0 with LLVM exception plus MIT for OpenCilk changes, so usable but only as a whole toolchain, not as code to vendor.
+
+[repo](https://github.com/OpenCilk/opencilk-project) · [benchmark](https://doi.org/10.1145/3572848.3577509)
 
 ### serialization-and-formats
 
@@ -30870,6 +31257,50 @@ Schubfach-derived shortest double/float-to-string converter, about 2.4x faster t
 **Status:** Active (last commit 2026-08-10, v1.5.0 charts from April 2026) but a single-maintainer project; Apache-2.0 per LICENSE and source headers despite the README's MIT line, so vendor src/ftoa.cpp and ftoa.h at a pinned commit after the PR #22 buffer fix.
 
 [repo](https://github.com/xjb714/xjb) · [benchmark](https://raw.githubusercontent.com/xjb714/xjb/HEAD/bench/result/bench_double_AMD_Ryzen_7_7840H_w__Radeon_780M_Graphics_GCC_13_3_0.html)
+
+##### yy_itoa (itoa_yy.c in ibireme/c_numconv_benchmark)  `C`  `MIT`  `active`  `Tier A`
+
+yy_itoa: a 200-byte-table ANSI C integer-to-decimal routine (yyjson's) that formats u32/u64/i32/i64 about 1.7-2.5x faster than fmt's compiled format_to.
+
+**Beats:** fmt::format_to(buf, FMT_COMPILE("{}"), val) from fmtlib (the baseline the repo's own itoa report uses); the repo does not time std::to_chars, fmt::format_int or sprintf — The author's own harness (10000 samples, best of 32 runs, average CPU cycles per call through a function pointer) on a Core i5-13600KF with GCC 13.2 Release builds measured random-length conversion at 20.69 vs 40.37 cycles (u32), 33.55 vs 56.88 (u64), 21.33 vs 53.62 (i32) and 33.47 vs 65.65 (i64) against fmt::format_to with FMT_COMPILE("{}") from a vendored fmt commit; Clang 18.1, MSVC 1940 and Apple M1 runs show the same direction. std::to_chars is not in the repo; a rival project's third-party run on a Xeon 8481C (compiler unstated) put itoa_i64_yy at 2.18x std::to_chars and 1.64x fmt::format_int by geometric mean.
+
+**Known shortcoming:** First-party report; the baseline is fmt's FMT_COMPILE format_to, not std::to_chars or sprintf, and yy_itoa is beaten by yy_largelut, an and jeaiii in some columns; turbo apparently on. Third-party corroboration (simditoa/benchmarks mean rows): yy 136.1M vs std::to_chars 62.4M and fmt::format_int 83.2M ints/s, but yy loses to format_int on 1-4 digit values, and that repo's summary table contradicts its raw rows.
+
+**Known shortcoming:** Enricher: harness flaw in src/itoa/benchmark.c: fill_rand_i32_len and fill_rand_i64_len push the negative half past the type's maximum, so those samples carry one extra digit, and at 10-digit i32 and 19-digit i64 the out-of-range double-to-int cast is undefined behaviour that collapses about half the samples to INT32_MIN or INT64_MIN; this affects only the fixed-length signed charts, not the random-length headline. The 1-digit result writes 2 bytes, signed variants always write '-' at buf[0], and the verify step covers only boundary values and powers. Net-of-null ratios on GCC (derived from page data): u32 2.31x, u64 1.79x, i32 2.86x, i64 2.09x.
+
+**Independent measurement:** verifier batch-75 (wave 1 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** It branches once on value magnitude (1-2, 3-4, 5-6, 7-8, 9-10 digits for 32-bit; 1-8, 9-16, 17-20 for 64-bit, splitting into 8-digit chunks) so the digit count is known before writing, then emits two digits at a time from a 200-byte 00-99 lookup table with 2-byte memcpy stores. Division by 100 and 10000 is replaced by hand-picked reciprocal multiply-and-shift constants (val*5243>>19, val*429497>>32, val*109951163>>40, val*3518437209>>45), which let several digit pairs be computed in parallel instead of in a serial divide-by-10 chain. An odd leading digit is handled branchlessly by copying from table offset +1 and moving the output pointer back one byte.
+
+**Use it when:**
+- Serializers (JSON, CSV, logs, metrics) that emit many integers into a buffer they already size, where an 8-20 byte write without bounds checks is acceptable.
+- Mixed-magnitude or full-range 32-bit and 64-bit values: on the GCC 13.2 / i5-13600KF random-length chart it took 20.7 cycles (u32) and 33.5 cycles (u64) per call against fmt's 40.4 and 56.9.
+- Signed integers in particular: i32 random length 21.3 vs 53.6 cycles for fmt, second only to the 50 KB-table yy_largelut variant in that chart.
+- C codebases or freestanding builds that cannot pull in {fmt} or C++17 <charconv>; the code is plain ANSI C with stdint.h, stddef.h and string.h only.
+- Code that must stay small in cache: one 200-byte table, no SIMD and no 128-bit integers.
+
+**Skip it when:**
+- When you need the fastest possible routine on these charts: yy_largelut (50 KB tables), an and jeaiii beat yy in several random-length columns (GCC u64: yy_largelut 22.0, an 29.4, jeaiii 33.3, yy 33.5 cycles; GCC u32: an 20.6 vs yy 20.7).
+- Mostly 1-4 digit values: in a third-party run (simditoa/benchmarks) fmt::format_int beat itoa_i64_yy on 1-digit (983.9M vs 522.4M ints/s) and 4-digit (454.1M vs 399.0M ints/s) numbers.
+- When you need bounds checking, an error code, other bases, padding or locale handling; it is decimal only and trusts the buffer size.
+- When you want a maintained, packaged API: it lives as a benchmark contestant file with no header, versioning or tests beyond the harness's spot checks.
+- 32-bit targets: the u64 path divides 64-bit values by 1e8, and no 32-bit run is published.
+
+**Integration:** source-drop · none (stdint.h, stddef.h, string.h) · ANSI C / C99 (repo builds as C11 and C++17 with CMake 3.14+); force_inline and table_align macros cover GCC, Clang and MSVC · any; published runs on x86-64 Linux (GCC 13.2, Clang 18.1), x86-64 Windows (MSVC 1940) and Apple M1 (Apple Clang 15)
+
+**Vs siblings:** Pick yy over jeaiii/itoa when you need plain C rather than C++ templates (the two are within 1 percent on GCC u64 random length), and over {fmt} or Boost.Charconv when you want a dependency-free 100-line function; pick simditoa if you can use SIMD and want the largest margin over std::to_chars, and fmt::format_int if your integers are mostly 1-4 digits.
+
+**Gotchas:**
+- Output is not NUL-terminated, and the function writes scratch bytes outside the returned string: a 1-digit result still stores two bytes (the byte after the returned end is clobbered), and the signed variants always store '-' at buf[0] before writing digits. Never pass a buffer that ends exactly at the digits.
+- Harness flaw (does not affect the headline random-length numbers): fill_rand_i32_len and fill_rand_i64_len in src/itoa/benchmark.c fill the negative half of each fixed-length signed sweep with min + i*step for i from count/2 to count, which runs past max, so those samples have one more digit than the chart's x-axis label; at the top length (10-digit i32, 19-digit i64) the out-of-range double-to-integer cast is undefined behaviour and on x86-64 collapses about half the samples to the single value INT32_MIN or INT64_MIN. The fixed-length i32 and i64 charts therefore mix two digit counts per point.
+- The harness checks each contestant against sprintf only on boundary values and powers of 2-10, not on random samples; the reciprocal constants themselves hold over their documented ranges (each satisfies m*d - 2^k below 2^(k - input bits), checked by hand this session).
+- Cycle counts are tick counts scaled by a frequency measured at startup and include call-through-pointer loop overhead (null group 5.66 cycles on GCC u32, about 4.0 elsewhere); subtracting it widens the gap (GCC random length, derived from page data: u32 2.31x, u64 1.79x, i32 2.86x, i64 2.09x). The run apparently had turbo on (5090 MHz) although the README says to disable it.
+
+**Status:** Active benchmark repo (last commit 2025-12-05, MIT, 75 stars) whose yy routine is used inside yyjson; small enough to vendor, but it is a benchmark file rather than a packaged library, so you own the copy.
+
+[repo](https://github.com/ibireme/c_numconv_benchmark) · [benchmark](https://raw.githubusercontent.com/ibireme/c_numconv_benchmark/HEAD/docs/reports/gcc_intel_i5_13600/itoa.html)
 
 ##### {fmt}  `C++`  `MIT`  `active`  `Tier A`
 
@@ -37488,6 +37919,49 @@ Single-file C Z80 cross-assembler (Amstrad CPC, ZX Spectrum) claiming tens of mi
 
 [repo](https://github.com/EdouardBERGE/rasm) · [benchmark](https://github.com/EdouardBERGE/rasm)
 
+##### Souper (LLVM IR superoptimizer)  `C++`  `Apache-2.0`  `abandoned`  `Tier C`
+
+SMT-backed superoptimizer for LLVM IR that finds peephole rewrites stock LLVM misses; its published win is code size, not speed.
+
+**Beats:** stock LLVM optimisation pipeline output (clang -O2/-O3 without Souper) — The only figure is from arXiv 1711.04422, seen through search snippets because arxiv.org and its mirrors are unreachable here: an automatic Souper pass produced a Clang 3.9 binary about 3 MB (4.4%, 64.3 versus 67.2 MB) smaller than the stock LLVM build. The same paper reportedly found that binary about 2% slower when compiling C++. No hardware, flags or SPEC runtime results were read, and the SPEC CPU 2017 figure in later work (2.32x) measures Souper's own speed after dataflow pruning, not faster output code.
+
+**Known shortcoming:** The only number is a code-size result (Clang binary 4.4% smaller) from an arXiv abstract snippet; no speed claim; archived 2025-10-30.
+
+**Known shortcoming:** Enricher: the only number is still code size (Clang binary 64.3 vs 67.2 MB, 4.4%, arXiv 1711.04422, snippet only), and the same paper reports the Souper-built Clang about 2% slower; the SPEC CPU 2017 2.32x is Souper's own tool speed after dataflow pruning, not output code. Open wrong-code bugs #311 (UB select), #562 and #166 were left at archive; the pass swallows solver errors; it harvests integer types only. Lead: a TU Delft bachelor thesis 'Evaluating Souper' (fork ebdemir/souper) reproduces the paper (repository.tudelft.nl blocked).
+
+**Independent measurement:** verifier batch-122 (wave 13 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** It does not speed up code by itself; it finds missing peephole optimisations. Candidate expressions (plus path conditions and LLVM's known-bits and demanded-bits facts) are translated to SMT queries, and a synthesiser (enumerative synthesis or CEGIS, with optional Alive2 verification) searches for a shorter refinement; the pass then rewrites the IR and cleans up with DCE. Results are cached in RAM or Redis so repeated expressions skip the solver.
+
+**Use it when:**
+- Compiler engineers hunting missed InstCombine-style rewrites in LLVM: harvest real code, let Souper propose shorter integer expressions, then implement the good ones by hand in LLVM.
+- Comparing LLVM's dataflow facts (known bits, demanded bits) against solver-derived ones; sclang exposes the harvesting switches.
+- Research on superoptimisation, where Souper is the reference baseline (Minotaur and the dataflow-pruning work build on it).
+- Experimental code-size reduction of a build already tied to LLVM 18 when a strong test suite can catch miscompiles.
+
+**Skip it when:**
+- Production builds aimed at runtime speed: the only published headline number is binary size, and the same paper reports (per search snippet) that the Souper-built Clang is about 2% slower.
+- Any toolchain other than its pinned patched LLVM (regehr/llvm-project branch disable-peepholes-llvmorg-18.1.6): GCC, MSVC and newer LLVM releases are unsupported and the repository was archived on 2025-10-30.
+- Floating-point or SIMD-heavy code: candidate harvesting skips every instruction whose type is not an integer (lib/Extractor/Candidates.cpp), so vector and FP code is untouched; Minotaur targets that gap.
+- Large builds without a Redis cache: each candidate costs SMT queries, and sclang sets a 15-second solver timeout per query.
+- Code where a UB-related miscompile is unacceptable: issue #311 (select turned into logic that introduces UB) has been open since 2018.
+
+**Integration:** LLVM pass plugin (libsouperPass.so) plus standalone tools (souper, sclang/sclang++ wrappers) built from source · patched LLVM/Clang 18.1.6 fork (regehr/llvm-project, branch disable-peepholes-llvmorg-18.1.6), KLEE fork (klee-for-souper-17-2), Alive2 fork (manasij7479, tag v7), Z3 4.13.0, hiredis (plus a Redis server for the external cache), zstd; build_deps.sh fetches and builds all of them · C++20 (CMakeLists adds -std=c++20), CMake and Ninja; the README's GCC 4.9+ note predates that and is stale · Linux and macOS hosts per the README; it rewrites target-independent LLVM IR, so output targets are whatever the bundled Clang supports
+
+**Vs siblings:** Pick Souper over Minotaur when the target is scalar integer LLVM IR peepholes and you want the mature harvesting, caching and sclang build integration; Minotaur is its successor for SIMD/vector code and is the one with published runtime speedups. STOKE works on x86-64 assembly and K2 on BPF, so choose those for their respective targets.
+
+**Gotchas:**
+- Known wrong-code and crash bugs were never fixed before archiving: #311 (Souper treats a select whose untaken arm has an undefined shift as a no-op, printing -128 where Clang and GCC print 0; Regehr called it likely a showstopper), #562 (a missing break in Pass.cpp getValue falls through to an out-of-bounds operand access), #166 (blockpc is unsound; blockpc exploitation is opt-in via SOUPER_EXPLOIT_BLOCKPCS). sclang ships a SOUPER_SKIP_FILES list 'for example because they trigger known bugs' and enables -souper-double-check by default.
+- Solver failures other than timeouts are printed as '[FIXME: Crash commented out] Unable to query solver' and skipped; the comment says this works around a protocol error seen once in SPEC 2017, so failed queries silently lose optimisations.
+- The Redis cache is unversioned: the README says to stop Redis and delete its dump file after every Souper upgrade, otherwise stale results from an older build can be reused.
+- The README's usage lines use the legacy pass manager ('-Xclang -load', 'opt -load ... -souper'); the current pass is a new-pass-manager plugin, and sclang passes both -Xclang -load and -fpass-plugin.
+
+**Status:** Archived by Google on 2025-10-30 (last commit 2024-08-28) and pinned to a patched LLVM 18.1.6, with several wrong-code, crash and unsoundness issues left open (#311, #562, #166, #631); Apache-2.0 and usable as a research and LLVM-development tool, not as a production optimiser.
+
+[repo](https://github.com/google/souper) · [benchmark](https://arxiv.org/abs/1711.04422)
+
 ##### svc-hook (ARM64 system call hook by binary rewriting)  `C`  `Apache-2.0`  `active`  `Tier C`
 
 LD_PRELOAD library that rewrites every ARM64 svc into a branch to a trampoline, hooking system calls in-process instead of via ptrace.
@@ -37703,6 +38177,49 @@ Small freestanding C table-driven x86-32/x86-64 decoder plus x86-64 encoder; cla
 **Status:** Actively maintained (commits through 2026-06-01, canonical CI on git.sr.ht/~aengelke/fadec), BSD-3-Clause and reused by the TPDE back-end and Android's external/lfi tree, so it is a credible small dependency, but its speed claim is unmeasured (tier D).
 
 [repo](https://github.com/aengelke/fadec) · [benchmark](https://github.com/aengelke/fadec)
+
+##### lazypoline (hybrid SUD plus binary-rewriting syscall interposer)  `C++`  `MIT`  `active`  `Tier D`
+
+x86-64 Linux syscall interposer: traps each syscall site once via Syscall User Dispatch, then rewrites it zpoline-style; exhaustive, near-zpoline steady state.
+
+**Beats:** zpoline (binary rewriting) and pure Syscall User Dispatch (SUD) interposition; the paper also discusses ptrace and seccomp-based interposition but the artifact scripts opened here only run baseline, zpoline, lazypoline and SUD variants — No numbers could be read: Table II and Figures 4-5 of the DSN 2024 paper are egress-blocked here (repository.tudelft.nl failed DNS, adriaanjacobs.github.io blocked), and neither repository prints results. The artifact's microbenchmark times 1e8 invocations of invalid syscall 500 with rdtsc on one pinned core, subtracts an empty-loop noise run, and reports the geometric mean of 10 runs as a ratio to a plain syscall loop for zpoline (with its rewritten-address check disabled by zpoline.patch), lazypoline, lazypoline with xstate preservation, SUD enabled without interposition, and pure SUD interposition. Everything is built with clang -O3 -flto -march=native (Ubuntu 22.04 apt clang) and run on a 48-core Xeon Gold 5318S, Linux 5.15.0-83, with hyperthreading off.
+
+**Known shortcoming:** No reachable numbers: the DSN 2024 paper is blocked (the author's github.io source repo returns 404) and the artifact repo has no results, compiler or flags; peer reviewed, 32 stars; paper-access retier candidate.
+
+**Known shortcoming:** Enricher: in lazypoline/benchmarks bench_micro.sh the xstate run never resets the microbench from mb_config_sud_disable.h, so the app disables SUD before timing, and plot_micro.py subtracts the SUD overhead from the xstate segment, so Figure 4's full-configuration bar is understated by about that overhead; the headline row uses SAVE_VECTOR_REGS 0 (non-default); the microbench is invalid syscall 500 through a pre-rewritten call, steady state only. Default config.h has PRINT_SYSCALLS 1; the artifact pins src aed8164, before the 2025 redzone and xsave fixes. Successor: lazypoline/secpoline (USENIX Security 2026, no README numbers).
+
+**Independent measurement:** verifier batch-122 (wave 13 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Hybrid interposition: SUD (prctl PR_SET_SYSCALL_USER_DISPATCH, Linux 5.11+) delivers SIGSYS the first time a syscall site runs, and the handler overwrites that 2-byte `syscall` (0f 05) with `callq *%rax` (ff d0). Later executions jump into a nop sled mapped at virtual address 0 (the zpoline trampoline) and on to an assembly hook, with no signal and no kernel round trip for the redirect. A per-thread selector byte at %gs:0 is flipped to ALLOW while the interposer runs and back to BLOCK on return. xsave/xrstor of vector state (SAVE_VECTOR_REGS) is a compile-time option.
+
+**Use it when:**
+- Tracing, sandboxing or emulating every syscall of an unmodified x86-64 Linux binary where ptrace or pure-SUD cost (one SIGSYS per call) is too high, e.g. syscall-heavy servers such as nginx or lighttpd, which the DSN 2024 artifact benchmarks
+- Programs that generate or load code at run time (JITs, tcc, dlopen'd plugins) where zpoline's load-time scan would miss sites; the artifact's exhaustiveness test shows zpoline missing getpid from tcc-generated code
+- Research or prototyping of syscall-level tools where you can edit and rebuild one C++ dispatch function
+- Kernels 5.11 or newer on hosts where you are allowed to set vm.mmap_min_addr=0
+
+**Skip it when:**
+- Security monitoring against a hostile application: the interposer shares the address space and its selector byte and is not isolated; the authors' Secpoline (github.com/lazypoline/secpoline, USENIX Security 2026) adds isolation and says it supersedes lazypoline
+- Non-x86-64 targets (the call *%rax trampoline is x86-specific; see svc-hook for ARM64) or kernels older than 5.11
+- Hosts where mapping page 0 is forbidden (vm.mmap_min_addr must be 0, a hardening regression), or apps that use the %gs base themselves
+- Applications that call unshare, use clone with CLONE_VM but without CLONE_THREAD or CLONE_VFORK, or need clone3: unshare and unsupported clone flags hit asserts, and clone3 is answered with -ENOSYS so glibc falls back to clone
+- Short-lived processes with many distinct syscall sites: each site pays one SIGSYS trap plus two mprotect calls before it is rewritten, and syscalls made before or during loading of the preload library are missed
+
+**Integration:** shared lib · CMake 3.16+, clang/clang++ (hard-coded in CMakeLists.txt), libpthread, libdl; glibc-specific sysdeps/ headers and SIGSETSIZE in util.h must match the running glibc · C++20 with clang (CMakeLists sets clang explicitly); built with -O3 -flto -march=native · x86-64 Linux 5.11+ only; tested on Ubuntu 20.04 and 22.04 (glibc 2.35); -march=native output is not portable to other CPUs
+
+**Vs siblings:** Pick lazypoline over zpoline when the target generates or loads code after startup and you need every syscall caught; zpoline rewrites everything at load time, has a hook-library API and no first-hit trap, so prefer it for static binaries. svc-hook is the ARM64 counterpart of zpoline, and the disassembler and assembler siblings solve unrelated problems.
+
+**Gotchas:**
+- Harness flaw in the DSN artifact (github.com/lazypoline/benchmarks, bench/bench_micro.sh): the xstate-preserving 'lazypoline*' run comes straight after the 'SUD disable' step and never switches the microbenchmark back from mb_config_sud_disable.h, so the app turns SUD off before timing. That row therefore leaves out the kernel's SUD slow-path cost, and plot_micro.py also subtracts the SUD* overhead from the xstate segment, so the Figure 4 bar for the full configuration (SUD on, vector state saved) is understated by roughly the SUD* overhead.
+- The headline 'lazypoline' microbenchmark row uses config_rw_zpoline.h with SAVE_VECTOR_REGS 0, so the interposer does not preserve vector registers. The repository default is SAVE_VECTOR_REGS 1, the slower 'lazypoline*' row. The loop calls invalid syscall 500 (-ENOSYS) via a pre-written `callq *%rax`, so it measures steady-state hook cost on a near-empty kernel body, not the first-hit SIGSYS-and-rewrite path.
+- The default config.h has PRINT_SYSCALLS 1 (commit 'print syscalls by default', 2024-03-27), so an out-of-the-box build fprintf's every syscall to stderr; set it to 0 before measuring anything. asserts stay on in the -O3 build because NDEBUG is not defined.
+- rewrite_syscall_inst mprotects only the page holding the first byte of the 2-byte syscall (an instruction straddling a page boundary is not handled), makes the page write+exec without read while it patches, and then sets it to read+exec whatever it was before (JIT pages that need RWX need COMPAT_NONDEP_APP). The vDSO is assumed to be one page ('check whether your vdso is larger than a page'). Bugs fixed after the paper: red-zone clobbering on the signal-return trampoline (2025-04-21) and xsave across setup_new_thread (2025-01-12); the artifact pins src at aed8164, which predates both.
+
+**Status:** Research artifact with occasional maintenance (last code change 'redzone fix' 2025-04-21, README edit 2026-06-15, one closed build issue); MIT-licensed and small enough to vendor, but the authors point new users to Secpoline, which says it supersedes lazypoline. The published artifact's xstate microbenchmark row runs with SUD disabled, so its full-configuration overhead is understated.
+
+[repo](https://github.com/lazypoline/lazypoline) · [benchmark](https://github.com/lazypoline/benchmarks)
 
 ##### minias  `C`  `ISC`  `active`  `Tier D`
 
@@ -39421,6 +39938,49 @@ Public-domain x86-64 SSE and AVX assembly zero-fill routines that beat 2017-era 
 
 [repo](https://github.com/ademakov/bzero) · [benchmark](https://raw.githubusercontent.com/ademakov/bzero/HEAD/README.md)
 
+##### aes-armcortexm (Schwabe and Stoffelen, Cortex-M3/M4 AES assembly)  `Assembly (ARM Thumb-2) with C wrappers`  `CC0-1.0`  `abandoned`  `Tier C`
+
+Hand-scheduled Thumb-2 AES-128/192/256 (T-table CTR, bitsliced and masked) for Cortex-M3/M4; about 33 cycles/byte AES-128-CTR.
+
+**Beats:** RIOT OS default C AES implementation (third-party forum report); the SAC 2016 paper compares against unnamed prior Cortex-M AES implementations; the repo README names no baseline — The repo README reports cycle counts only: AES-128-CTR 531.8 cycles per block on a Cortex-M3 (STM32L100C, 16 MHz, 0 wait states) and 527.9 on a Cortex-M4 (STM32F407, 24 MHz, 0 wait states), single-block AES-128 encryption 637.5/634.7 cycles, built with arm-none-eabi-gcc -O3 and libopencm3, with no baseline on the page. The only baseline comparisons, a RIOT forum post (45/87 us encrypt/decrypt against 74/131 us for RIOT's default C AES on an STM32L151) and the SAC 2016 abstract's 'about twice as fast as existing implementations', were seen as search snippets only.
+
+**Known shortcoming:** README gives only cycle counts with no baseline; the RIOT forum numbers (45 vs 74 us) and the SAC 2016 paper's 'about twice as fast' are snippet only (forum, eprint and sacworkshop hosts blocked); paper-access retier could lift it to B. CC0; abandoned since 2020-07-12.
+
+**Known shortcoming:** Enricher: AES_128_encrypt_ctr writes the counter back to its const-declared parameter but not past the last block, so the next call reuses the last keystream block and a 16-byte call never advances (fix in open PR #6, aes256ctr only); the counter is the first word in little-endian, so output does not match SP 800-38A vectors (#1); whole 16-byte blocks and word-aligned buffers required. Harness: one timed call with a fixed key and input, no known-answer check, the README's '10000 random runs' loop is not in the repo; 16/24 MHz clocks, 0 wait states, T-table in flash.
+
+**Independent measurement:** verifier batch-123 (wave 13 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** The fast variants use a single 1 KB T-table (Te0) and fold the other three table rotations into the barrel shifter of the EOR instructions, with fully unrolled rounds, hand register allocation and instruction scheduling produced by the authors' own scheduler tool (scheduler/). The CTR code adds counter-mode caching (based on Hongjun Wu's eSTREAM implementation, per the maintainer in issue #1): the parts of rounds 1 and 2 that depend only on the nonce and upper counter bytes are computed once per 256 blocks and only the changing low counter byte is processed per block. The constant-time variant uses a bitsliced representation (the SAC slides call it bytesliced) and the masked variant adds first-order masking with randomness from the STM32F407 hardware RNG.
+
+**Use it when:**
+- Bulk AES-128/192/256-CTR on Cortex-M3 or M4 where timing side channels are outside the threat model: README measures 531.8 (M3) and 527.9 (M4) cycles per 16-byte block for AES-128-CTR, 651 and 767 cycles for AES-192/256.
+- Low-clock MCUs running flash at zero wait states (the README numbers were taken at 16 MHz on an STM32L100C and 24 MHz on an STM32F407), where the measured cycle counts carry over.
+- Research or evaluation that needs a first-order masked AES-128-CTR on an STM32F4-class Cortex-M4.
+- Firmware that wants public-domain (CC0) AES assembly to vendor without licence obligations, or a reference for counter-mode caching and T-table scheduling on ARMv7-M.
+
+**Skip it when:**
+- You need output that interoperates with standard AES-CTR or GCM: the counter is the first 32-bit word of the block, incremented little-endian, followed by the nonce, so results differ from NIST SP 800-38A vectors from the second block on (maintainer, issue #1).
+- Constant time matters: the T-table variants are explicitly not constant-time, and for constant-time AES on Cortex-M the fixsliced aadomn/aes (84.3 cycles/byte AES-128 on M3) is faster than this repo's bitsliced CTR (1618.6 cycles per block, about 101 cycles/byte, derived from page data).
+- Full-speed clocks with flash wait states (e.g. STM32F4 at 168 MHz): the T-table sits in flash next to the code and no measurement at those settings is published; jnk0le/cortexm-AES warns that unrolled code can lose to looped code under STM32F4 ART cache pressure and wait states.
+- Cores other than Cortex-M3/M4 (M0/M0+ lack Thumb-2; M7 has caches and different timing), or anyone needing a maintained library with tests and CBC/GCM modes: the repo is abandoned since 2020, while jnk0le/cortexm-AES (derived from this code) offers SP 800-38A-compliant big-endian CTR and GCM.
+- Streaming encryption across several calls unless you manage the counter yourself (see gotchas).
+
+**Integration:** source-drop (GNU as Thumb-2 .s files with C example harnesses) · none for the .s files; the example harnesses need libopencm3 (git submodule) and the arm-none-eabi toolchain; the masked variant needs the STM32F407 hardware RNG · arm-none-eabi-gcc/GNU as with unified Thumb-2 syntax (version not documented); Makefiles use -O3 -mthumb -mcpu=cortex-m3 or cortex-m4 · ARMv7-M only: Cortex-M3 (measured on STM32L100C) and Cortex-M4 (measured on STM32F407); masked variant M4/STM32F407 only
+
+**Vs siblings:** Pick this over aadomn/aes when raw speed matters more than constant time (T-table CTR at about 33 cycles/byte against about 84 cycles/byte for fixsliced AES-128 on M3), and over pqm4-style portable C or CRYPTOGAMS when you are on a Cortex-M3/M4 and want CC0 code; pick aadomn/aes whenever side-channel resistance is required.
+
+**Gotchas:**
+- Counter not advanced past the last block: AES_128_encrypt_ctr (prototype says param const *) stores the incremented counter back into param, but exits before incrementing after the final block, so a second call continues with the counter of the previous call's last block and reuses that keystream block; a 16-byte call does not advance it at all. Open PR #6 (2023, unmerged, aes256ctr only) moves the increment before the exit. Set param.ctr = start + number_of_blocks yourself between calls.
+- Whole blocks only, word-aligned buffers: the loop always loads and stores 16 bytes with LDM/STM, so a length that is not a multiple of 16 reads past the end of the input and writes up to 15 bytes past the output (the example sizes its output buffer with LEN_ROUNDED), and in/out must be 4-byte aligned on ARMv7-M.
+- Benchmark conditions: the README's cycle counts were taken at 16 MHz (STM32L100C) and 24 MHz (STM32F407, PLL chosen 'low to have 0WS') with zero flash wait states, and the T-table lives in flash with the code; at production clocks with wait states and the F4 ART data cache enabled, cycles per block rise and table lookups may become timing-dependent.
+- Harness gap: the in-repo examples time one call with a fixed key, nonce and input (cycles read from DWT_CYCCNT) and have their ciphertext printing commented out with no known-answer check; the README's '10000 runs with random inputs, nonces, and keys' averaging loop is not in the repository, so the published averages cannot be re-run from the repo as shipped. Issue #1 (2017) found the bitsliced CTR producing wrong output, fixed in commit 45103cb; issue #3 (2018) found the bitsliced and masked code storing temporaries below the stack pointer (interrupt-unsafe), fixed July 2018, after the 2016 measurements.
+
+**Status:** Abandoned (last commit 2020-07-12; open PRs #5 from 2020 and #6 from 2023 unreviewed) but CC0 and small enough to vendor, so copyable, provided you fix the counter handoff, keep buffers padded and aligned, and accept the non-standard counter layout.
+
+[repo](https://github.com/Ko-/aes-armcortexm) · [benchmark](https://forum.riot-os.org/t/aes-crypto-optimizations-speed-and-size/2140)
+
 ##### asmjson  `Rust crate with hand-written x86-64 AVX-512BW assembly`  `MIT`  `active`  `Tier C`
 
 Experimental Rust JSON parser with a hand-written AVX-512BW assembly inner loop; about 1.6x sonic-rs on string-heavy synthetic JSON.
@@ -39935,6 +40495,49 @@ NASM AVX2 kernels with a C API for float reductions, dot products and batched ve
 **Status:** Active (238 commits, last 2026-10-07) and MIT-licensed, small enough to vendor, but a 1-star single-author project whose hot kernels had several correctness and ABI bugs fixed only in October 2026 (including a lost-lanes tail bug in fp_fold_dotp_f32 present when the README table was published, though not exercised at its n = 100,000), and whose microbenchmark never checks results.
 
 [repo](https://github.com/TACITVS/FP_ASM_LIB_DEV) · [benchmark](https://raw.githubusercontent.com/TACITVS/FP_ASM_LIB_DEV/HEAD/README.md)
+
+##### FreeBSD libmd md5block.S (amd64 baseline, BMI1 and AVX-512 MD5 kernels)  `Assembly (x86-64, with C ifunc dispatch)`  `BSD-2-Clause`  `active`  `Tier C`
+
+FreeBSD libmd's hand-written amd64 MD5 block kernels (scalar, BMI1, AVX-512), 1.2-1.6x faster than libmd's C MD5.
+
+**Beats:** libmd's C MD5 block function: the 'orig' build (previous md5c.c) and the new 'generic' C build measured in the same review — Robert Clausecker's own runs in Phabricator review D45670, known here only from search snippets: MD5 throughput over a large input with unknown compiler, flags and command, on a Ryzen 7 PRO 7840U (old C 774.6, new C 758.5, scalar asm 945.5, BMI1 1062.4, AVX-512 936.0 MB/s) and a Core i7-1165G7 (old C 605.9, new C 587.8, scalar asm 765.3, BMI1 854.0, AVX-512 965.1 MB/s). The dispatched kernel is 1.40x (Zen 4) and 1.64x (Tiger Lake) faster than the new C fallback and 1.37x and 1.59x faster than the previous md5c.c (derived from snippet data); the C rewrite's commit message itself says it is slightly slower than the original C.
+
+**Known shortcoming:** Numbers come only from search snippets of reviews.freebsd.org/D45670 (blocked here): Zen 4 bmi1 1.40x over the generic kernel, Tiger Lake avx512 1.64x (orig 605.9 MB/s); no harness, compiler or flags; the baseline is libmd's own C code, not OpenSSL; the numbers may predate later revisions of the review (opened 2024-06-21); the dispatcher skips AVX-512 on AMD.
+
+**Known shortcoming:** Enricher: the three kernels' round tricks check out (ANDN rewrite of G and I, vpternlogd 0xca, 0xe4, 0x96, 0x39) and the D45670 numbers recur in snippets (Zen 4 orig 774.6 vs bmi1 1062.4 MB/s), but no harness is in the tree; the AVX-512 kernel is slower than bmi1 on Zen 4 (936.0 vs 1062.4), hence the AMD exclusion; in-tree tests run only the RFC 1321 vectors through whichever kernel ifunc picks; the kernels are SysV-only. Defect shipped with them (C rewrite 90fa789, same review, still on main): MD5Final does explicit_bzero(ctx, sizeof(ctx)), clearing 8 of 88 bytes of MD5_CTX (a context-wipe regression; digest and speed unaffected). The rewrite's own commit message says the new C is slightly slower than the old C.
+
+**Independent measurement:** verifier batch-124 (wave 13 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** MD5 is one serial dependency chain, so the gain comes from shortening each round's critical path rather than from parallelism: the baseline kernel keeps a, b, c, d in registers, folds the round constant and message word into the add chain before the round function result arrives, and unrolls all 64 rounds through GAS macros. The BMI1 kernel rewrites round function G as (d & b) + (~d & c) and I as -1 - (c ^ (~b & d)) using ANDN, which removes a dependent mov/xor step. The AVX-512 kernel is not vectorised across messages: it uses single-lane XMM registers so that VPTERNLOGD computes each round function in one instruction and VPROLD does the rotate, with the constant added through an embedded-broadcast load.
+
+**Use it when:**
+- You hash large files or streams with MD5 on FreeBSD amd64 (checksums, legacy protocol fields, dedup keys) and want the fastest single-stream libmd path for free.
+- You need a small, BSD-2-Clause, dependency-free single-buffer MD5 kernel to vendor into C or C++ code on x86-64 SysV, with a ready CPU dispatch policy (AVX-512VL on Intel, BMI1 elsewhere, scalar fallback).
+- Intel parts with AVX-512F and AVX-512VL (Ice Lake, Tiger Lake, Xeon Scalable): the AVX-512 kernel was the fastest variant there in the author's runs (965.1 MB/s vs 587.8 MB/s for the new C code on a Core i7-1165G7).
+- AMD Zen and other BMI1 CPUs: the BMI1 kernel (1062.4 MB/s vs 758.5 MB/s for the new C code on a Ryzen 7 PRO 7840U).
+
+**Skip it when:**
+- Many independent messages at once: a multi-buffer SIMD MD5 (minio/md5-simd, or the md5x8 kernel in gocrack) runs several streams per core and gets far higher aggregate throughput.
+- Anything security-relevant: MD5 is broken for collisions; use SHA-256 or BLAKE3.
+- You already link OpenSSL: its MD5 is also hand-written x86-64 assembly, and no comparison of these kernels against OpenSSL (or animetosho/md5-optimisation) was published; the measured baseline is only libmd's own C code.
+- Windows x64 or other non-SysV ABIs, and non-amd64 targets (aarch64 has a separate kernel in lib/libmd/aarch64): the kernels take arguments in rdi/rsi/rdx and clobber xmm8-xmm15 without saving them.
+- Kernel, bootloader or bootstrap builds: the FreeBSD kernel, libsa and libcrypt use the C md5c.c, and the asm is skipped when BOOTSTRAPPING or WITHOUT_MACHDEP_OPTIMIZATIONS is set.
+
+**Integration:** shared lib (part of FreeBSD base libmd on amd64) or source-drop of md5block.S plus a small dispatcher · none at run time; in tree it uses FreeBSD headers <machine/asm.h> (ENTRY/END), <x86/ifunc.h> (DEFINE_UIFUNC), <machine/cpufunc.h> and <machine/specialreg.h>, which an out-of-tree copy replaces with plain .globl symbols and its own CPUID check · not documented; needs an assembler that understands BMI1 and AVX-512VL with EVEX embedded broadcast (FreeBSD base builds it with clang); the companion C fallback uses clang's _Pragma("unroll") · x86-64 only (SysV ABI); scalar kernel on any x86-64, BMI1 kernel needs BMI1, AVX-512 kernel needs AVX-512F and AVX-512VL and is never selected on AMD
+
+**Vs siblings:** Pick it over animetosho/md5-optimisation when you want a short, already-integrated BSD-2-Clause kernel set with a tested dispatch policy rather than the widest menu of single-buffer variants (animetosho's work is the one actually measured against OpenSSL's assembly); pick minio/md5-simd or gocrack instead when you hash many independent streams and can use multi-buffer SIMD.
+
+**Gotchas:**
+- Context-wipe regression in the code that ships with the kernels: the C rewrite imported under the same review (commit 90fa789, sys/crypto/md5c.c on main) ends MD5Final with explicit_bzero(ctx, sizeof(ctx)), which clears only 8 bytes (pointer size) of the 88-byte MD5_CTX; state[2..3], the bit count and the 64-byte buffer holding the message tail stay in memory, whereas the pre-rewrite code cleared sizeof(*context). Digests and speed are unaffected.
+- The AVX-512 kernel is slower than the BMI1 kernel on AMD Zen 4 in the author's own numbers (936.0 vs 1062.4 MB/s, even below the scalar asm at 945.5), so md5dispatch.c excludes AMD by vendor string; a copy that dispatches on feature bits alone picks the slower kernel on Zen 4. A Zen 4 performance regression the author mentioned in the related review D52909 is probably this, but the resolution is snippet-only.
+- lib/libmd/tests checks only the seven RFC 1321 vectors through whichever kernel the ifunc picks on the test host, so the two kernels not selected on that machine are not exercised by the in-tree tests.
+- The kernels process only whole 64-byte blocks (len is masked with ~63) and never touch MD5_CTX.count or buffer; padding, length and partial blocks stay in the C MD5Update/MD5Final, whose length parameter is unsigned int (split inputs over 4 GiB).
+
+**Status:** Active: committed to FreeBSD main on 2025-10-24 (d92e987, with an aarch64 SIMD kernel in c1135b2 whose only later change is a GNU-as build fix), BSD-2-Clause and small enough to vendor; evidence stays first-party and snippet-only, and the C MD5Final shipped alongside wipes only 8 bytes of the context (explicit_bzero(ctx, sizeof(ctx))).
+
+[repo](https://github.com/freebsd/freebsd-src) · [benchmark](https://reviews.freebsd.org/D45670)
 
 ##### go-byte-test (tmthrgd)  `Go (x86-64 SSE assembly, test_amd64.s)`  `BSD-3-Clause`  `abandoned`  `Tier C`
 
@@ -41018,6 +41621,50 @@ Single-header AVX2, multithreaded FAST-9 corner detector matching Rosten's outpu
 
 [repo](https://github.com/komrad36/KFAST) · [benchmark](https://github.com/komrad36/KFAST)
 
+##### ksw2  `C`  `MIT`  `abandoned`  `Tier C`
+
+SSE2/SSE4.1 global and extension DNA alignment (minimap2's kernel) using Suzuki-Kasahara 8-bit difference DP; beats parasail's 32-bit striped global aligners.
+
+**Beats:** parasail (global Needleman-Wunsch, striped/scan/diagonal SIMD variants) and ksw2's own scalar Green-formulation DP (ksw2_gg) — README table, one run each, wall time in seconds. On the 50 kb phage pair (test/t2.fa.gz against test/q2.fa.gz, phage50k_ref and phage50k_mut90 per issue #3), global score only: ksw_extz2_sse with -sg takes 0.84 s (SSE4.1) and 0.96 s (SSE2), against 2.2 s for parasail nw_striped_32 (2.6x, derived from page data) and 7.3 s for ksw2's scalar Green DP (8.7x). On the 16.5 kb mitochondrial pair with CIGAR: 0.40 s against 1.6 s scalar, and 0.18 s with -g. CPU, compiler, parasail version and scoring parameters are not stated; the CLI defaults are match 2, mismatch -4, gap open 4, extend 2, and the Makefile builds with gcc -O2 -march=native.
+
+**Known shortcoming:** The README table (0.84 s vs parasail 2.2 s) gives no CPU or compiler, only the global score-only mode beats parasail and with a simpler scoring model; abandoned since 2023-06-27; the minimap2 paper's about 3x over parasail (snippet only) could move it to B.
+
+**Known shortcoming:** Enricher: no timer in the harness (whole-process, one run, CPU unnamed); parasail's N scoring differs (TODO in cli.c), harmless on N-free test data. Code gotchas: extz2_sse returns silently when -min_sc > 2*(q+e); N is scored -e when the matrix wildcard is 0 (#11); open issues #28 (banded extd2_sse score above the optimum), #25, #19, #15; a 50 kbp pair with CIGAR segfaults (#3, wontfix).
+
+**Independent measurement:** verifier batch-126 (wave 13 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Suzuki and Kasahara's difference recurrence stores the differences between neighbouring DP cells instead of absolute scores. The differences are bounded by the match and gap scores, so they fit in int8 lanes and one 128-bit register holds 16 cells whatever the total alignment score; parasail needs 32-bit lanes (4 per register) on 50 kb inputs. Cells are processed along anti-diagonals so the lanes in a vector have no dependency on each other, and SSE4.1 blendv/max replace the SSE2 emulation. Global score-only mode (-g, approximate max) stays 16-way through the whole inner loop; tracking the exact maximum for extension needs a 32-bit H array updated 4-way, which is why -s rows are about 3x slower than -sg.
+
+**Use it when:**
+- Long DNA or nucleotide pairs (kilobases to tens of kilobases) with simple match/mismatch scoring where you need a global score or a Z-drop extension, e.g. read-to-reference extension as in minimap2
+- Score-only global alignment of long pairs on x86 SSE4.1: the README's 50 kb pair runs in 0.84 s against 2.2 s for parasail's best SSE4 row
+- Banded alignment with CIGAR (left- or right-aligned gaps) when you can bound the band width, which keeps traceback memory proportional to sequence length times band
+- Two-piece affine gaps (ksw_extd2_sse) to keep long indels from being split, or splice-aware alignment (ksw_exts2_sse)
+- Projects that want to vendor two files (ksw2.h plus one ksw2_*.c, MIT) with no dependencies
+
+**Skip it when:**
+- Local (Smith-Waterman) alignment or protein alignment with a full substitution matrix: no local mode, and the SSE kernels assume one match and one mismatch score (KSW_EZ_GENERIC_SC exists but the README says diagonal vectorisation is harder with generic matrices); use parasail or SSW
+- Traceback on long unbanded pairs: the direction matrix takes about (qlen+tlen) x min(qlen,tlen) bytes, so a 50 kb pair with CIGAR needs gigabytes; in issue #3 that run segfaulted from an integer overflow and the maintainer declined to fix it ('not worth increasing the peak memory')
+- Highly similar long sequences, where edit-distance or wavefront methods with dynamic banding (edlib, WFA2-lib) do far less work; the README itself points to edlib's dynamic banding
+- Targets without x86 SSE2: there are no AVX2, AVX-512 or NEON kernels here (avx2=1 only adds -mavx2), and only ksw2_extd2_sse.c has a USE_SIMDE switch
+- Code that needs a maintained upstream: this repository has had no commits since 2023-06-27, and correctness issues are open (#28 banded extd2_sse reports a score above the unbanded optimum, 1084 against 1078; #19 ksw_extd with tlen > qlen + w; #15 segfault in ksw_exts2_sse)
+
+**Integration:** source-drop · none (optional kalloc memory pool via HAVE_KALLOC; the ksw2-test CLI needs zlib; parasail and gaba only for the comparison build) · C compiler with SSE2 intrinsics (Makefile: gcc -O2 -march=native, -Wc++-compat so it also builds as C++); SSE4.1 optional at compile time, KSW_SSE2_ONLY forces SSE2 · x86 and x86-64 with SSE2 (SSE4.1 faster); KSW_CPU_DISPATCH hooks exist but the dispatcher file is not in this repo
+
+**Vs siblings:** Pick ksw2 over parasail for long DNA with match/mismatch scoring when you need global or Z-drop extension alignment with a CIGAR; parasail wins on scoring generality, local and semi-global modes and wider SIMD. SSW covers local alignment with CIGAR, and WFA2-lib (which uses ksw2_extz2_sse as its baseline) is the better choice when the sequences are highly similar.
+
+**Gotchas:**
+- ksw_extz2_sse returns without computing anything when -min_sc > 2*(q+e) (ksw2_extz2_sse.c line 82), i.e. when the mismatch penalty exceeds twice the gap-open-plus-extend cost, so ez keeps whatever it held before; initialise ez and keep mismatch penalties modest. Scores and penalties are int8 and mat[0] + 2*(q+e) must fit in an int8 lane.
+- When the wildcard (last) matrix entry is 0, as ksw_gen_simple_mat and the README example produce, the SSE kernel scores N as -e, not 0 (line 68 sets sc_N_ to -e), so ksw_extz2_sse and the scalar ksw_extz give different scores on sequences containing N (issue #11). Issue #25 (open) reports ez->mte_q set from en where en0 was meant.
+- The fastest README rows use -g (KSW_EZ_APPROX_MAX | KSW_EZ_APPROX_DROP): the global end score is built by summing exact cell differences along a path to the corner, and the code comment says only the tracked maximum and Z-drop become approximate, so extension callers that need the exact max must drop -g and pay about 3x (2.7 s against 0.84 s on the 50 kb pair).
+- Benchmark harness (cli.c): there is no internal timer, so the table is presumably whole-process wall time of one run, including gzip parsing, encoding and per-call calloc. parasail gets parasail_matrix_create("ACGTN", match, mismatch), which scores N against N as a match where ksw2 gives 0 (a TODO in the code); that does not matter for the N-free test pairs. parasail's nw_striped_32 is a dispatcher that would pick AVX2 on an AVX2 machine, and the CPU is not named.
+
+**Status:** Abandoned upstream since 2023-06-27 (last change: an int-overflow fix in gg2_sse allocation), with 2022 commits syncing it from minimap2, whose copy is the maintained one; MIT and two files to vendor, but check the open banded-score and segfault issues before relying on ksw_extd/ksw_exts2.
+
+[repo](https://github.com/lh3/ksw2) · [benchmark](https://github.com/lh3/ksw2/blob/master/README.md)
+
 ##### Leftpack (komrad36)  `C++`  `MIT`  `abandoned`  `Tier C`
 
 Single-header AVX2+BMI2 left-pack (compress) of one 32-byte register; author claims 1.6-5.3x over a branchless scalar loop.
@@ -41104,6 +41751,49 @@ Header-only x86 C library: SIMD popcount, positional popcount and AND/OR/XOR bit
 **Status:** Abandoned since 2019-12-16 (45 stars, no releases) and Apache-2.0, so it is easy to vendor as one header, but fix the three remainder bugs (cnt64 = vs +=, the AVX2 SSE-tail pointer, the AVX-512 tail index) and test non-power-of-two lengths before trusting its counts.
 
 [repo](https://github.com/mklarqvist/libalgebra) · [benchmark](https://github.com/mklarqvist/libalgebra)
+
+##### libstats  `C++`  `MIT`  `active`  `Tier C`
+
+C++20 statistical-distributions library with runtime-dispatched SSE2/AVX/AVX2/AVX-512/NEON exp, log, erf and cos kernels that beat scalar libm loops.
+
+**Beats:** scalar loops over std::exp, std::log, std::erf and std::cos (platform libm); corvus v1.0.1 SIMD kernels on M1 as a second baseline — First-party tools/simd_verification runs (Release, 1,024 doubles, mean of 5 calls) report v1.5.x speedups over a scalar platform-libm loop of 3.4x/1.7x/2.5x/4.9x (exp/log/erf/cos, AVX2+FMA), 2.1x/1.8x/8.0x/3.0x (NEON) and 5.0x/3.9x/1.3x/8.5x (AVX-512), without saying which machine produced each row; the current NEON exp kernel measures 2.5-2.6x on a Mac Mini M1. In the author's corvus issue #43 (M1, AppleClang 21, n = 1e6) libstats v2.4.1 took 1.0/1.7/2.5/1.4 ns per element for exp/log/cos/erf against corvus 2.4/3.9/2.6/1.8 after its fixes.
+
+**Known shortcoming:** The benchmark is a 1,024-element, 5-iteration mean with no compiler or flags and an unnamed libm; cos is looser than libm (1e-9 tolerance); the corvus baseline is a project of the same owner and is already listed.
+
+**Known shortcoming:** Enricher: the v1.5.x VectorCos rows (4.9x, 3.0x, 8.5x) were measured on cos kernels later replaced for accuracy bugs (the NEON v1.4.0 Taylor kernel had about 6e8 ULP error and sign errors near k*pi/2, x86 about 3e5 ULP, issue #95); simd_verification tests only [-4pi, 4pi] at 1e-9 absolute tolerance, so both passed. All NEON v1.5.x kernels were replaced on 2026-07-19; only the NEON exp 2.5-2.6x is current.
+
+**Independent measurement:** verifier batch-127 (wave 13 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Each kernel processes 2 (NEON), 4 (AVX2) or 8 (AVX-512) doubles per instruction with FMA Horner evaluation: a SLEEF-derived 10-term polynomial exp and SLEEF xlog_u1 log on x86, a musl-derived rational erf, and a quadrant-reduction cos with a 4-part pi/2 split and degree-6 minimax cores. On NEON, exp is a 128-entry table plus order-5 polynomial derived from ARM optimized-routines (software gather via vld1q), and log and erf use clean-room table-plus-series kernels. Edge cases (overflow, infinities, |x| above 2^23 for cos) fall back to scalar std:: calls lane by lane.
+
+**Use it when:**
+- You evaluate densities, log-densities or CDFs of standard distributions over arrays of thousands to millions of doubles and want SIMD plus parallel dispatch without writing kernels
+- You need vectorised double-precision exp/log/erf/cos at roughly 0.5-1 ULP on both x86-64 (AVX2 or AVX-512) and Apple Silicon NEON from one code base
+- Batch statistical workloads replacing scipy.stats loops: the project's own N = 100k runs show 6-35x for several log-PDF and PDF paths (first-party)
+- MIT-licensed code you can read and vendor kernels from: the derivation and divergence-audit documents explain each kernel's accuracy
+
+**Skip it when:**
+- You need correctly rounded results: the kernels are about 0.52-1 ULP; the same author's corvus keeps 0-ULP exp and log gates on NEON
+- Single-precision (float) or scalar one-at-a-time calls: kernels are double-only array calls, and arrays shorter than one vector go through the scalar tail loop
+- Distributions the doc lists as structural ceilings: Cauchy CDF 0.2x and von Mises CDF 0.1x of scipy on Zen 4, and Beta PDF/log-PDF lose under a parallel fork on every tier
+- Streaming arrays far larger than cache: the doc's Zen 4 data show exp at 0.55 ns per element is memory-bound at 256K elements, so the 1,024-element speedups shrink
+- You need a widely used dependency: one maintainer, 1 star, frequent releases (v2.4.1 current) and an open M1 throughput regression on the v2.5.0 work (issue #156)
+
+**Integration:** static lib · none required; optional TBB (Linux/Windows) or GCD (macOS) for the parallel paths · C++20, CMake 3.25+; validated with AppleClang, MSVC, clang-cl and GCC · x86-64 (SSE2 baseline, AVX, AVX2+FMA, AVX-512 with runtime dispatch), aarch64 NEON; Windows, macOS, Linux
+
+**Vs siblings:** Pick libstats over corvus (same author, standalone correctly rounded elementary functions built on Highway) when you want distribution-level batch PDF/CDF code and can accept about 1 ULP for faster NEON exp and log (1.0 vs 2.4 and 1.7 vs 3.9 ns per element on M1). Pick it over math_intrinsics or SIMD-math-prims when you need double precision with near-libm accuracy instead of float approximations.
+
+**Gotchas:**
+- Harness flaw behind the v1.5.x VectorCos rows (AVX2 4.9x, NEON 3.0x, AVX-512 8.5x): those numbers were measured on cos kernels later replaced for accuracy bugs. The NEON source says the v1.4.0 Taylor kernel had about 6e8 ULP error inside [-2pi, 2pi] and sign errors near k*pi/2 for |x| in the thousands, and issue #95 says x86 vector_cos was about 3e5 ULP. tools/simd_verification only tests [-4pi, 4pi] at a 1e-9 absolute tolerance, so it passed them. No current cos speedup over libm is published; the record's '7-term Horner cos' description is out of date.
+- The NEON exp, log, erf and cos kernels were all replaced on or after 2026-07-19, so the whole v1.5.x NEON row (2.1x, 1.8x, 8.0x, 3.0x) describes earlier code; only NEON exp has a current figure (2.5-2.6x).
+- Benchmark method: 1,024 cache-resident doubles, one warm-up, then the mean of 5 timed calls, scalar timed before SIMD, against whatever libm the platform ships (Apple libm, MSVC UCRT, glibc), with no compiler version in the table.
+- Windows MSVC and clang-cl builds apply /arch:AVX512 or /arch:AVX2 (or -mavx512f/-mavx2) globally from the build machine unless LIBSTATS_PORTABLE=ON, so default Windows binaries are not portable to older CPUs.
+
+**Status:** Actively developed (commits through 2026-10-11, v2.4.1 current release, CI and mpmath accuracy tests) and MIT-licensed, but a one-author, 1-star project whose published primitive speedups mostly predate the current kernels.
+
+[repo](https://github.com/OldCrow/libstats) · [benchmark](https://github.com/OldCrow/libstats/blob/main/docs/SIMD_BENCHMARK_RESULTS.md)
 
 ##### LinqFaster  `C#`  `MIT`  `stale`  `Tier C`
 
@@ -42099,6 +42789,49 @@ Single C header of branchless AVX2 (8-lane) and NEON (4-lane) float32 sin, cos, 
 **Status:** No code changes since 2024-02-05 (later commits touch only the README and LICENSE), no issues filed, 38 stars, 0 forks; MIT and a single header, so easy to vendor for x86 AVX2 and Apple NEON float32 work after checking the ranges you need.
 
 [repo](https://github.com/Geolm/math_intrinsics) · [benchmark](https://github.com/Geolm/math_intrinsics)
+
+##### space-pruner  `C`  `LicenseRef-public-domain`  `abandoned`  `Tier D`
+
+Two table-free ARM NEON in-place whitespace strippers, built as alternatives to Lemire's scalar and lookup-table NEON despacers; no published timings.
+
+**Beats:** scalar despace loop (despacer.h despace) and Lemire's neontbl_despace in the same app — Nothing was measured in public: the repository holds an iOS app that times scalar despace, Lemire's AArch64 neontbl_despace and the two new NEON kernels on a 32 KiB random ASCII buffer with about 3% whitespace, but no results, device, compiler flags or screenshots are committed, and the Lemire blog posts that discuss NEON despacing could not be opened here.
+
+**Known shortcoming:** No results recorded anywhere; the benchmark is an iOS-only app with a microsecond timer; public domain stated only in README.txt; abandoned since 2017. Adds its own NEON kernels, so it is not a copy of lemire/despacer.
+
+**Known shortcoming:** Enricher: signed-char bug: the vector bodies keep bytes 0x80-0xFF but the scalar tails of neon_interleaved_despace and neon_unzipping_despace use `const char c` with `c > 32`, so on Apple arm64 they delete non-ASCII bytes in the last 128 or 256 bytes, and the scalar baseline deletes all non-ASCII bytes; the correctness check is blind because the generated text is pure ASCII. Apple-only include, microsecond timer, 'ns per operation' label is actually ns per byte, and 3% whitespace keeps the 1 MiB table hot.
+
+**Independent measurement:** verifier batch-127 (wave 13 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Both kernels de-interleave 64 bytes with vld4q_u8, compare against 0x20 and pack the keep flags into one byte per 8 input bytes, then turn each flag byte into an 8-lane shuffle index vector computed in registers, so the 1 MiB shufmask table that neontbl_despace indexes with a 16-bit movemask is gone. The interleaved kernel finds set bits by repeated lowest-set-bit isolation (x & (x-1) with vcntq_u8 on the trailing ones); the unzipping kernel splits alternating set bits with a carry-less multiply by all ones (vmulq_p8 prefix XOR) applied three times, reading the last two bit positions with vcntq_u8 and vclzq_u8. Each 8-byte group is then gathered with vtbl1_u8 (or vqtbl1q_u8 on AArch64) and stored with an overlapping 8-byte vst1_u8, advancing the output pointer by the popcount.
+
+**Use it when:**
+- In-place stripping of whitespace and control bytes from ASCII buffers on ARMv7 NEON or AArch64 (phones, Apple silicon, Graviton-class servers) when a 1 MiB lookup table is unwelcome.
+- As a reference for table-free NEON stream compaction (bit-isolation or polynomial-multiply index generation) to adapt to other byte filters.
+- Buffers of at least a few hundred bytes: the vector loops need 128 bytes (interleaved) or 256 bytes (unzipping) before they run; shorter inputs fall to the scalar tail.
+- Codebases that can take public-domain source drops and will run their own benchmark, since the repository gives no numbers.
+
+**Skip it when:**
+- x86 or any non-NEON target: the functions are not even declared without __ARM_NEON; use lemire/despacer, which also has SSE/AVX variants and published cycle counts.
+- Non-ASCII (UTF-8) text on Apple platforms or any target where char is signed: the scalar tails delete bytes 0x80-0xFF while the vector body keeps them (see gotchas).
+- When only space, LF and CR should go: tabs, NUL and all other control bytes are removed too.
+- Anyone needing measured evidence or maintenance: no timings were ever published and the code has been untouched since 2017-07-20.
+- Out-of-place use without adaptation: the kernels are written for in-place operation and store 8 bytes at a time past the logical end of the output.
+
+**Integration:** source-drop · none beyond arm_neon.h; the headers include the Apple SDK header <ConditionalMacros.h>, which must be removed to build outside Xcode · C99 with clang (Xcode 8 era); relies on clang-specific _Pragma("unroll") (GCC ignores it with a warning) and on clang accepting a uint8x16_t initialiser for a poly8x16_t in the unzipping kernel; the benchmark harness folds a const-sized initialised array, a clang extension · ARMv7 with NEON (vtbl1_u8 path) and AArch64 (vqtbl1q_u8 path in the interleaved kernel); no scalar fallback for other targets
+
+**Vs siblings:** Pick lemire/despacer (Despacer) in nearly every case: it covers x86 and ARM, has published cycle-per-byte results and a maintained repository. Pick space-pruner only when you specifically want a table-free NEON compaction kernel to study or adapt, and test it yourself on non-ASCII input first.
+
+**Gotchas:**
+- Signed-char correctness bug, untested by the harness: the vector body keeps bytes 0x80-0xFF (unsigned vcgtq_u8 compare against 32), but the scalar tail of both kernels does 'const char c = *source++; if (c > space)', so on Apple arm64 and other signed-char targets any UTF-8 byte in the last 1-127 (interleaved) or 1-255 (unzipping) bytes is deleted. The scalar baseline despace() in despacer.h also uses signed char and deletes every non-ASCII byte there, while Lemire's neontbl_despace tail uses unsigned char. The benchmark cannot see this because fillwithtext() loops 'while (buffer[i] <= 32)', which rejects every negative char, so the test data on iOS is pure 7-bit ASCII.
+- Harness timer: gettimeofday with microsecond resolution over a 32 KiB buffer, best of 100 runs, printed under 'ns per operation' though the figure is nanoseconds per input byte; at sub-nanosecond-per-byte speeds one run lasts only tens of microseconds, so each figure carries several percent of quantisation.
+- The workload has only about 3% whitespace (1% each of space, LF and CR), far below prose; that keeps the baseline neontbl_despace's 1 MiB table mostly on a few hot entries, so the harness does not exercise the table-cache pressure the table-free kernels are designed to avoid.
+- Every vst1_u8 writes a full 8 bytes and advances by the popcount, so the output region needs 8 bytes of slack; in place this stays inside already-consumed input, but a copying variant must allocate extra room. The 2.87 MB bigtable.h defines a non-const, non-static 1 MiB global in a header, so despacer.h can be included in only one translation unit.
+
+**Status:** Abandoned since 2017-07-20 after a two-week burst of 35 commits; the README declares the project public domain (no LICENSE file, no patent grant, copyright notices on the Lemire-derived code removed), and the two kernels are small enough to vendor once the Apple header and the signed-char tail are fixed.
+
+[repo](https://github.com/DerekScottLedbetter/space-pruner)
 
 ##### UltraSIMD  `C++`  `MIT`  `stale`  `Tier D`
 
@@ -47713,6 +48446,49 @@ Archived Go BLAKE2b with AVX2/AVX/SSSE3 assembly, about 4x its pure-Go fallback 
 
 [repo](https://github.com/minio/blake2b-simd) · [benchmark](http://web.archive.org/web/20181010233948/https://blog.minio.io/accelerating-blake2b-by-4x-using-simd-in-go-assembly-33ef16c8a56b)
 
+##### Firedancer fd_sha256 batch (AVX-512 / AVX2 / SHA-NI)  `C`  `Apache-2.0`  `active`  `Tier C`
+
+Firedancer's 8- and 16-lane multi-buffer SHA-256 kernels in C; about 2x the Rust sha2 crate on AVX-512 x86.
+
+**Beats:** single-buffer SHA-256: Rust sha2 crate (serial, hardware-accelerated) in the only numeric comparison found; no OpenSSL comparison found — In tape-sha256's merkle_leaves bench (64 messages of about 1.05 KiB, one pinned core, best of 15 rounds of 50 iterations), Firedancer's 16-lane AVX-512 kernel ran 12.55 vs 27.71 us per batch on Zen 5, 22.51 vs 43.71 on EPYC 9B14, 21.82 vs 49.18 on Xeon 8581C and 16.89 vs 36.87 on Xeon 6985P-C against the Rust sha2 0.10.9 crate hashing one message at a time with SHA-NI (about 1.9-2.25x, derived from page data), while the 8-lane AVX2 kernel lost on EPYC 7B13 (45.87 vs 42.66 us). Firedancer was built by the rival crate's author from source with unstated compiler version and flags, and no OpenSSL comparison exists.
+
+**Known shortcoming:** The only numbers come from the rival tape-sha256 BENCHMARKS.md, against the Rust sha2 crate rather than OpenSSL; the batch kernel is slower than serial SHA-NI on Zen 3 (0.93x).
+
+**Known shortcoming:** Enricher: the tape-sha256 harness calls the internal kernels fd_sha256_private_batch_avx and _avx512 directly, skipping the header dispatch; fd_sha256.h turns the AVX batch path off under -mtune=znver1/2/3, so the Zen 3 0.93x row times a kernel Firedancer never picks on that CPU, and the harness checks isa-l digests against sha2 but never Firedancer's. The measured build predates Firedancer PR #11442 (2026-09-13), which reports Zen 4 FEC-set leaf hashing going from 2.92 to 3.53 GB/s. The batch API needs one contiguous (ptr, sz) per message.
+
+**Independent measurement:** verifier batch-56 (wave 7 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Multi-buffer (lane-per-message) SHA-256: up to 8 messages run in the AVX2 lanes (fd_sha256_batch_avx.c) or 16 in the AVX-512 lanes (fd_sha256_batch_avx512.c), so one SIMD instruction advances the compression function of every message at once. Message blocks are loaded in place and transposed (transpose_16x16 / 2x8x8), the padded tail blocks are prepared in a scratch area up front, and the AVX-512 kernel uses vprold rotates and, since PR #11442 (merged 2026-09-13), vpternlogd to fold each round's boolean functions into 4 instead of 12 logic ops. Batches below 5 (AVX-512) or 6 (AVX2) messages fall back to narrower kernels or per-message SHA-NI.
+
+**Use it when:**
+- Hashing many independent, similar-sized messages per call on an AVX-512 x86 server, such as Merkle-tree leaves (Solana's 64-shred erasure sets of about 1 KiB each), where it measured about 1.9-2.25x the serial Rust sha2 crate on Zen 4, Zen 5, Emerald Rapids and Granite Rapids.
+- Advancing 16 or more independent SHA-256 chains (Proof of History style) with fd_sha256_hash_32_repeated_batch, which the header says has higher throughput than the scalar path at fd_sha256_simd_lane_min lanes and above.
+- C or C++ codebases on Linux x86-64 that can vendor Apache-2.0 code and want a batch hasher without pulling in isa-l_crypto's job-manager API.
+- Throughput-bound pipelines where per-message latency does not matter (the header warns individual latency can be about 8x worse in the SIMD repeated-hash path).
+
+**Skip it when:**
+- Single messages or small batches: batches under 5-6 messages fall back to SHA-NI or scalar code, so there is no gain over OpenSSL or any SHA-NI hasher.
+- Zen 1-3 (AVX2 only): the 8-lane AVX path measured 0.93x the serial sha2 crate on an EPYC 7B13, and Firedancer's own header disables the AVX batch implementation when built with -mtune=znver1/2/3.
+- Non-x86 targets: there is no AArch64 or RISC-V batch kernel; those builds use the per-message reference batch path.
+- Messages split across buffers (prefix plus payload): each message must be one contiguous (pointer, size) region, so a domain-separation prefix forces a copy that tape-sha256's prefixed API avoids.
+- Projects that cannot take on Firedancer's build: the code depends on fd_util and the util/simd headers and is selected by Firedancer machine profiles, not a standalone package.
+
+**Integration:** source-drop · Firedancer's fd_util (logging, bit helpers) and util/simd/fd_avx.h and fd_avx512.h headers; built with Firedancer's GNU make machine profiles (config/machine/*.mk) · GCC 8 is Firedancer's stated minimum (config/machine/linux_gcc_zen2.mk); clang profiles also exist; Linux only, kernel 4.18 or newer to build the project · x86-64 with AVX2 (8-lane) or AVX-512 (16-lane) for the batch kernels; SHA-NI, Arm SHA2 and RISC-V scalar-crypto cores for single-message hashing; generic C elsewhere
+
+**Vs siblings:** Pick it over tape-sha256 on Intel AVX-512 parts, where the rival's own runs show Firedancer 2-12% faster, and over isa-l_crypto sha256_mb when you want a synchronous batch call in plain C rather than a job manager; pick tape-sha256 on Zen 3-5 and Apple silicon, and hashtree when the workload is a fixed-shape 64-byte-pair Merkle tree.
+
+**Gotchas:**
+- Harness flaw in the only comparison: tape-sha256's merkle_leaves bench calls the internal kernels fd_sha256_private_batch_avx and fd_sha256_private_batch_avx512 directly, bypassing the header dispatch that disables the AVX batch path under -mtune=znver1/2/3; the Zen 3 0.93x row therefore times a kernel Firedancer itself does not select on that CPU (its real API would hash per message with SHA-NI there).
+- The same harness gates isa-l_crypto's output against sha2 before timing but never checks the Firedancer kernel's digests, so a mis-wired FFI would go unnoticed; Firedancer's own test_sha256.c (extended in PR #11442) checks the batch path against fd_sha256_hash at every size up to 4096 in every lane.
+- The measured Firedancer build predates PR #11442 (merged 2026-09-13; the Zen 5 run is dated 2026-08-08): that PR reports Zen 4 leaf hashing of a 64-shred FEC set going from 2.92 to 3.53 GB/s, so current Firedancer is likely faster than the published rows (first-party, cross-run figure).
+- fd_sha256_batch_add does no input validation; output regions must not overlap each other or any message, inputs must stay valid until fini or abort, and abort leaves the outputs in an unspecified state.
+
+**Status:** Actively developed (batch kernel and bmtree changes merged in September 2026) and Apache-2.0, but the SHA-256 kernels live inside a large validator tree, so reuse means vendoring src/ballet/sha256 plus parts of src/util.
+
+[repo](https://github.com/firedancer-io/firedancer) · [benchmark](https://github.com/spool-labs/sha256/blob/main/BENCHMARKS.md)
+
 ##### hashtree  `C`  `MIT`  `active`  `Tier C`
 
 Batched SHA-256 of many fixed 64-byte inputs for Merkle trees; ~4.7x OpenSSL's per-message SHA256() on AVX2.
@@ -47873,6 +48649,50 @@ Go SHA-256 using SHA-NI, ARMv8 SHA2 and 16-lane AVX-512; once beat crypto/sha256
 
 [repo](https://github.com/minio/sha256-simd) · [benchmark](https://github.com/minio/sha256-simd/blob/master/README.md)
 
+##### tape-sha256  `Rust`  `Apache-2.0`  `active`  `Tier C`
+
+Pure-Rust multi-buffer SHA-256 for batches and hash chains; 2-3.5x the serial sha2 crate on x86 batch hashing.
+
+**Beats:** sha2 crate (serial SHA-256); also OpenSSL SHA-256 via Node.js node:crypto, and C batch hashers Firedancer fd_sha256 and isa-l_crypto sha256_mb — First-party cargo bench merkle_leaves: 64 Solana-style leaves (26-byte prefix plus 1019 or 1044 bytes, 67,680 bytes per batch) on one pinned core, best of 15x50 iterations; the dispatched kernel beat serial sha2 0.10.9 (which uses SHA-NI on x86) by 3.5x on an unidentified Zen 5 (7.82 vs 27.71 us), 2.1x on EPYC 9B14 and 7B13, and 2.0-2.1x on Xeon 8581C and 6985P-C. The Apple 6.8x is against sha2's software path, because sha2 0.10.9 only uses ARMv8 SHA2 on aarch64 with its asm feature (confirmed in its src/sha256.rs); against hardware sha2 the Apple chain gain is about 1.9x (14.5 vs 27.7 ns/link). rustc version and RUSTFLAGS were not recorded.
+
+**Known shortcoming:** First-party with rustc version and RUSTFLAGS unstated; the Apple 6.8x is against sha2's software path (hardware-to-hardware about 1.9x on chains); the OpenSSL comparison through node:crypto is cross-run; 2-12% slower than Firedancer on Intel. The listed repository URL returns 404; the code lives at spool-labs/sha256 (same commit 5e72f67).
+
+**Known shortcoming:** Enricher: BENCHMARKS.md says every reference entry point is checked against sha2 before timing, but only the isa-l_crypto rows are gated in the benches; the Firedancer rows are timed unchecked (tape's own kernels are checked by tests/differential.rs). Best-case framing: 64 equal-block-count messages, cache-hot batch, best of 15x50; the Zen 5 7.82 us is the best of three runs on an unidentified CPU (src/lib.rs gives 12.7 us for the same kernel on an EPYC 9B45); the driver does not sort by length, so mixed-length batches leave lanes idle. sha2 0.10.9 uses its aarch64 hardware path only with the asm feature, so the Apple 6.8x is against software sha2. CI runs on GitHub-hosted runners only with no guaranteed AVX-512 coverage and no miri or sanitizers.
+
+**Independent measurement:** verifier batch-56 (wave 7 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Multi-buffer SIMD: messages are transposed so each SIMD lane runs one message's SHA-256 compression in lockstep (8 lanes AVX2, 16 lanes AVX-512, 4 lanes NEON or wasm simd128); on Zen 5 the avx512-2x16 kernel interleaves two 16-lane compressions so one fills the other's dependency stalls. Where hardware SHA units exist (x86 SHA-NI, ARMv8 SHA2) it instead keeps four independent hardware streams in flight (shani-x4, neon-sha2-x4) to hide sha256rnds2 latency. Per-family dispatch picks the kernel by measurement (Zen 5 interlace, Zen 4 and Zen 3 SHA-NI x4, Intel single-wave AVX-512), prefixes are read in place rather than copied, and a batch remainder of 1-12 messages is routed to SHA-NI instead of a mostly empty 16-lane group.
+
+**Use it when:**
+- Merkle leaf levels in Rust where dozens of similar-length messages (about 1 KiB Solana shreds, 4 KiB blob slices) are hashed at once: 64 leaves took 7.82 us vs 27.71 us for sha2 on Zen 5, about 2.1x on Zen 4/Zen 3 and Intel Xeon.
+- Domain-separated leaves (prefix || body) where avoiding the concatenation copy matters; hash_many_prefixed reads prefix and body from separate slices.
+- Verifying or replaying many independent hash chains (proof-of-history entries): 32 chains reached 7.3 ns/link vs 45.4 ns for sha2 on Zen 5.
+- Pure-Rust builds that cannot link C batch hashers (Firedancer fd_sha256, isa-l_crypto) but want comparable or better throughput on AMD, and an aarch64 batch path (neon-sha2-x4) that Firedancer lacks.
+- Throughput-oriented services that can split a batch across the two idle SMT siblings of one core (1.15-1.48x measured; caller pins the threads).
+
+**Skip it when:**
+- One large message or streaming input: no incremental API and a single message gets no multi-buffer speedup; use sha2, rscrypto or OpenSSL.
+- Few messages per call or widely mixed lengths: lanes idle until the longest message in a group finishes and the driver does not sort by length, while the benchmark workload was chosen so all 64 messages have the same block count.
+- Intel Emerald Rapids / Granite Rapids when Firedancer's batch hasher is already available: Firedancer was 2-12% faster in wall time there.
+- Browser WebAssembly with batched messages of about 1 KiB: the project's own measurements show WebCrypto slightly faster than the simd128 backend.
+- Where a mature, audited hash implementation is required: pre-1.0, first commit 2026-07-26, 13 commits, 1 GitHub star, every SIMD backend is unsafe code, and no fuzzing, miri or sanitizer runs are documented.
+
+**Integration:** crate · none (sha2, rand and ed25519-dalek are dev-dependencies only; Firedancer and isa-l_crypto are linked only under benchmark features) · Rust 1.89 (rust-version), edition 2021, stable · x86-64 with runtime dispatch over AVX-512F+BW, SHA-NI and AVX2; aarch64 with ARMv8 SHA2 extensions or NEON; wasm32 with simd128 (selected at build time, -C target-feature=+simd128); portable scalar fallback elsewhere
+
+**Vs siblings:** Pick it over Firedancer fd_sha256 batch or Intel ISA-L Crypto when you are in Rust and want no C build, need aarch64 or wasm, hash prefixed leaves without copying, or run on AMD (it measured 60% faster than Firedancer and 39% faster than isa-l_crypto on Zen 5); keep Firedancer on Intel Xeon where it led by 2-12%. Pick hashtree instead for fixed 64-byte Merkle pair hashing from C, and rscrypto or sha2 for single-message or streaming SHA-256.
+
+**Gotchas:**
+- The scalar, avx2, avx512 and neon Cargo features pin a kernel at build time and fault on CPUs lacking it; -C target-cpu=native made the Zen 5 interlaced kernel 8-14% slower, so re-benchmark before adding it.
+- Output slices must have exactly one digest per message or the call panics; a batch is processed in input order in groups of the lane width, so mixed lengths waste lanes until the longest message in each group finishes.
+- Harness gap: BENCHMARKS.md says every reference entry point is checked against sha2 before timing, but in benches/merkle_leaves.rs and benches/blob_group.rs only the isa-l_crypto rows are gated; the Firedancer rows are timed without a digest check (a wiring error there would affect the Firedancer comparison, not tape's own numbers, which tests/differential.rs checks against sha2).
+- Headline numbers are best-case: best of 15 rounds of 50 iterations over the same cache-resident 67,680-byte batch, and the Zen 5 7.82 us is the best of three pinned invocations (7.82, 8.30, 8.34 us); the Zen 5 machine is unidentified, and the dispatch comment in src/lib.rs cites 12.7 us for the same kernel on an EPYC 9B45. AVX-512 kernels are not guaranteed to run in CI (GitHub-hosted ubuntu and macOS runners only).
+
+**Status:** Active but very young (13 commits from 2026-07-26 to 2026-08-11, crate 0.2.1 with 470 downloads, no issues filed), Apache-2.0 pure Rust with no dependencies and copyable; the code lives at github.com/spool-labs/sha256 because the crate's repository link 404s, SECURITY.md still names 0.1.x as the supported line, and the benchmark harness times Firedancer rows without the sha2 check its documentation claims.
+
+[repo](https://github.com/spool-labs/sha256) · [benchmark](https://github.com/spool-labs/sha256/blob/main/BENCHMARKS.md)
+
 ##### Intel Cryptography Primitives Library  `C`  `Apache-2.0`  `active`  `Tier D`
 
 Intel's C crypto-primitives library (ex-IPP Crypto) with SHA-NI/AVX2/AVX-512 SHA-1/2/3 kernels; claimed but unbenchmarked alternative to OpenSSL.
@@ -47911,6 +48731,49 @@ Intel's C crypto-primitives library (ex-IPP Crypto) with SHA-NI/AVX2/AVX-512 SHA
 **Status:** Actively maintained by Intel (last commit 2026-09-25, v2.4.0 changelog, 3.0.0 API cleanup under discussion) under Apache-2.0, so usable in proprietary code. It is a large build, not something to vendor as a snippet.
 
 [repo](https://github.com/intel/cryptography-primitives)
+
+##### SHA-Intrinsics (noloader)  `C`  `LicenseRef-Public-Domain`  `active`  `Tier D`
+
+Public-domain SHA-1/SHA-256 block functions on Intel SHA-NI and ARMv8 crypto intrinsics, plus POWER8 SHA-256/512; no measured baseline.
+
+**Beats:** portable C SHA-256 (the repo's own sha256.c reference) and OpenSSL SHA-256: neither is measured in the README — The README only quotes Botan 'speed --msec=3000' runs on 1024-byte buffers with Botan using these code paths: SHA-256 at 445.7 MiB/s (3.64 cycles/byte, GCC 7.3.1) and 447.7 MiB/s (Clang 5.0.1) on a Celeron J3455 (Goldmont), 599.5 MiB/s on a Kirin 620 Cortex-A53 at 1.2 GHz (GCC 4.9.2), and 250.4 MiB/s (12.95 cycles/byte) on POWER8 at 3.4 GHz (GCC 7.2.0). No portable-C, OpenSSL or software-Botan row was measured, so no speedup can be stated.
+
+**Known shortcoming:** README numbers have no baseline row (no portable C, OpenSSL or software Botan) and the README never says Botan ran this repo's code. No LICENSE file, only public-domain headers with no patent grant; code effectively unchanged since 2018 (PR #14 merged 2026-01-07 and reverted the next day).
+
+**Known shortcoming:** Enricher: the README numbers time Botan's copies (Botan's ARMv8 SHA-256 file is contributed by the same author; its x86 file credits Gulley's code), not these files. No SHA-512 hardware path on x86 or ARM (the SHA-384/512 rows are Botan software), a trailing partial block is silently dropped, the length is uint32_t, there is no runtime dispatch, ARM always byte-swaps (big-endian broken), and the test checks only the first 8 bytes of the empty-message digest.
+
+**Independent measurement:** verifier batch-57 (wave 7 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** The x86 files drive the Intel SHA extensions (_mm_sha256rnds2_epu32 and _mm_sha256msg1/msg2, two rounds per instruction) with the state kept in ABEF/CDGH register order, following Intel's and Sean Gulley's miTLS layout. The ARM files use the ARMv8 crypto instructions (vsha256hq_u32 and friends, four rounds per instruction) after a vrev32q_u8 byte swap. The POWER8 files only accelerate the sigma functions with __builtin_crypto_vshasigmaw/d and still run the rounds in vector code, which is why the README calls the POWER8 result flat.
+
+**Use it when:**
+- You maintain your own SHA-1 or SHA-256 (hashing loop, padding, API) and want to swap in a hardware block function for CPUs with SHA-NI (AMD Zen, Intel Goldmont and later Atoms, newer Intel Core) or ARMv8 crypto extensions.
+- You need public-domain code that can be vendored without a licence notice and without a build system: one .c file per algorithm and architecture.
+- Embedded or bootloader code on AArch64 (Cortex-A53 class) where pulling in OpenSSL or Botan is too heavy; the README's Botan run on a Cortex-A53 at 1.2 GHz reports about 599 MiB/s for SHA-256 on 1 KiB buffers.
+- As a readable reference for how SHA-NI and ARMv8 SHA intrinsics are sequenced when writing or reviewing your own implementation.
+
+**Skip it when:**
+- You want a complete hash API: OpenSSL, Botan, Crypto++ or libsodium already ship these same code paths with runtime CPU dispatch, padding and test vectors.
+- SHA-384/SHA-512 on x86 or ARM: there is no hardware path here (only sha512.c in portable C and sha512-p8.cxx for POWER8); the x86 and ARM SHA-384/512 rows in the README are Botan's software code.
+- POWER8: the README calls its own numbers 'not that impressive' (SHA-256 250 MiB/s at 12.95 cycles/byte) and issue #5 on load/store overhead is still open.
+- Many messages at once (Merkle trees, proof-of-work, batch verification): multi-buffer AVX2/AVX-512 hashers process several independent messages in parallel and are not covered here.
+- Any CPU without the extension: the code has no fallback and executes illegal instructions there; issue #9 shows an Intel i7-10510U lacking SHA-NI.
+
+**Integration:** source-drop · none (compiler intrinsic headers only: x86intrin.h/immintrin.h, arm_neon.h/arm_acle.h, altivec.h) · Not documented as a minimum; README results use GCC 7.3.1 and Clang 5.0.1 (x86), GCC 4.9.2 (ARM), GCC 7.2.0 (POWER8); source comments mention Visual Studio 2015 for the x86 SHA intrinsics, IBM XL C/C++ for POWER8, and g++ being needed for the ARM intrinsics with GCC 4.8.5. Flags: -msse4.1 -msha (x86), -march=armv8-a+crc+crypto (ARM), -mcpu=power8 (POWER8). · x86 / x86-64 with SHA extensions (SHA-1, SHA-224, SHA-256); ARMv8 AArch32/AArch64 with crypto extensions, little-endian (SHA-1, SHA-224, SHA-256); POWER8 or later (SHA-256, SHA-512); portable C reference for SHA-256 and SHA-512.
+
+**Vs siblings:** Pick it over sha2-with-c-intrinsic (AWS) when you want public-domain single files with an ARMv8 path and no build system; pick AWS's code when you need measured numbers against OpenSSL or AVX/AVX2 SHA-512. For many independent messages, Intel ISA-L Crypto multi-buffer or hashtree are the better fit.
+
+**Gotchas:**
+- Only whole 64-byte blocks are processed: a trailing partial block is silently ignored, and length is a uint32_t, so inputs over 4 GiB must be chunked by the caller.
+- No runtime dispatch: cpuid.c is a stand-alone sample that tests CPUID leaf 7 EBX bit 29; you must wire the check in yourself or the binary faults on CPUs without SHA-NI.
+- The built-in tests are thin: the sha256-x86.c test main hashes one padded empty block and checks only the first 8 bytes of the digest (e3b0c44298fc1c14); there are no multi-block or NIST known-answer vectors, and issue #12 asked whether SHA-1 padding is missing (closed without an answer).
+- The ARM code always byte-swaps with vrev32q_u8 ('Reverse for little endian'), so big-endian AArch64 is not handled; the README numbers come from Botan's adaptations (Botan's sha2_32_armv8.cpp is 'Contributed by Jeffrey Walton', its x86 file credits Sean Gulley's code), not from timing these files directly.
+
+**Status:** Effectively frozen since April 2018 (the January 2026 commits merged and then reverted a variable rename), with 2 open issues and 1 open PR; it is small, dependency-free and public domain by file-header dedication (no LICENSE file, no patent grant, derived from Intel, miTLS, ARM and mbedTLS code), so it is easy to vendor but you own the testing.
+
+[repo](https://github.com/noloader/SHA-Intrinsics) · [benchmark](https://github.com/noloader/SHA-Intrinsics)
 
 #### encoding
 
@@ -60621,6 +61484,49 @@ Rust stackful-coroutine runtime with Go-style go! and blocking-style I/O; its ma
 
 [repo](https://github.com/Xudong-Huang/may) · [benchmark](https://github.com/Xudong-Huang/may_minihttp)
 
+##### mrloop  `C`  `MIT`  `stale`  `Tier C`
+
+Tiny single-threaded C event loop on io_uring; README echo test shows 1.51x an unnamed epoll server.
+
+**Beats:** unnamed epoll-based echo server (README row 'epoll'; neither libuv nor libev is named) — The 1.51x row (288,169 vs 191,011 responses/s) dates from the 2019-11-20 README: examples/echo_server.c on io_uring against an epoll echo server that is not named or published, driven by haraldh/rust_echo_bench (one client thread per connection, ping-pong, length check only) with connection count, message size, kernel, compiler version and CPU unstated (the tool defaults are 50 connections, 512 bytes, 60 s). The gnet row (mrloop 2,128,669 vs gnet 2,438,766 R/s, 0.87x) was added on 2024-03-26 with a different harness (gnet-benchmarks: tcpkali, Go servers in multi-threaded mode, 1,000 to 10,000 connections) and an unstated configuration, so the two rows are separate runs more than four years apart.
+
+**Known shortcoming:** First-party README only: the epoll baseline is unnamed and not in the repo, no hardware is stated, the README's own row has gnet faster (2,438,766 vs 2,128,669), and the repo is stale (last commit 2024-04-13).
+
+**Known shortcoming:** Enricher (code reading): per-fd event slots are arrays of MAX_CONN 1024 indexed by raw fd with no bounds check (memory corruption at fd 1024 and above); write completions are discarded, so short writes and errors are never seen; writes reach the kernel only after more than 64 are queued or on the next poll re-arm (issues #4, #6, #7); global statics make it not thread-safe. The 1.51x epoll row dates from 2019-11-20 and the gnet row from 2024-03-26 with a different harness (gnet-benchmarks, tcpkali, content unchecked), so the rows are separate runs; the echo example shares one buffer for read and write (issue #5).
+
+**Independent measurement:** verifier batch-82 (wave 5 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Completion-based I/O through io_uring: a readiness POLL_ADD is re-armed per connection, then a readv is submitted into the connection's buffer, and reply writevs are queued without a syscall and sent in the same io_uring_enter that re-arms the next poll (or once more than 64 SQEs are pending). The saving over a classic epoll_wait/read/write loop comes from coalescing the write and the poll re-arm into one submission. It does not use later io_uring features such as multishot poll or recv, provided buffers, registered files or SQPOLL, and it handles one completion per loop iteration.
+
+**Use it when:**
+- A small single-threaded Linux (kernel 5.4.1+) C server with a strict request/response (ping-pong) protocol and well under 1,000 concurrent connections.
+- Learning or prototyping how an io_uring readiness-plus-readv event loop is structured; the whole library is one ~570-line C file and one header.
+- Programs that want socket I/O, file readv/writev at an offset and timers driven by one ring without pulling in libuv or Boost.Asio.
+- Vendoring a starting point for your own io_uring loop that you are prepared to harden yourself.
+
+**Skip it when:**
+- More than about 1,018 open file descriptors: per-connection event slots are fixed arrays of MAX_CONN 1024 indexed by fd with no bounds check.
+- Pipelined or streaming protocols, or anything that must handle short writes or write errors: completions of mr_writev are discarded unread.
+- Multi-threaded or multi-loop programs: the submit counter, the last-accepted fd and the client read buffer are file-level statics shared by every loop.
+- Portable code (non-Linux), IPv6 servers (mr_tcp_server and mr_connect are AF_INET only) or production use: the todo file still lists 'Add tests' and notes completion-queue drops on overflow.
+- Workloads where io_uring is known to tie or lose to epoll at high connection counts; the README's own gnet row shows mrloop at 0.87x of a Go epoll loop.
+
+**Integration:** static lib · liburing (the Makefile unpacks /usr/lib/liburing.a into libmrloop.a) · C99 (for-loop declarations); built with gcc -O3; Linux kernel 5.4.1+ per README; header has extern "C" guards for C++ · Linux only (io_uring, timerfd); IPv4 TCP only
+
+**Vs siblings:** Pick mrloop over the Asio io_uring backend, Condy or uring_exec only when you want a tiny dependency-light C loop to read or vendor; those siblings are maintained and C++, and frevib/io_uring-echo-server is the better-documented io_uring-vs-epoll echo comparison. For portable production use, libhv or libev remain the safer choices.
+
+**Gotchas:**
+- Memory-safety bug: loop->read_events[fd] and loop->read_data_events[fd] are arrays of MAX_CONN 1024 inside mr_loop_t, indexed by the raw accepted or connected fd with no bounds check (the 2019 source even has the check '//if (cfd >= MAX_CONN) { close(cfd); break; }' commented out), so fd 1024 and above aliases or overruns neighbouring fields.
+- mr_writev, mr_writevcb and mr_readvcb only call io_uring_submit once more than 64 SQEs are queued; a lone write leaves the process only when something else submits (the next poll re-arm in the read path) or the caller uses mr_flush or mr_writevf. Issue #4 ('echo_server does not echo') and issues #6 and #7 trace back to this; the owner closed them in April 2024 saying the need to flush 'has been documented', but neither the README nor mrloop.h says so. io_uring_get_sqe results are not NULL-checked on the write paths of a 128-entry ring.
+- Harness caveat behind the numbers: the echo example reads into and writes from the same 64 KB buffer and ignores short reads, short writes and nread < 0 (issue #5). That is safe only because rust_echo_bench is strict ping-pong (one message in flight per connection, length-only check). The gnet row was produced with gnet-benchmarks, whose echo load generator is tcpkali (streaming, content not verified), where a pending writev can be overwritten by the next readv into the same buffer; whether that run echoed correct bytes was not shown.
+- _accept calls exit() on any accept or fcntl error (EAGAIN, EMFILE) and accepts one connection per POLLIN with a listen backlog of 32; the fcntl uses F_GETFD instead of F_GETFL; mr_add_timer truncates fractional seconds at or above 1 s (1.5 becomes 1).
+
+**Status:** Stale since 2024-04-13 (27 commits, 48 stars, all five issues closed without code changes in April 2024) but MIT-licensed and small enough to vendor; fix the fd-table bounds, write-completion handling and submission flushing before production use.
+
+[repo](https://github.com/MarkReedZ/mrloop) · [benchmark](https://github.com/MarkReedZ/mrloop)
+
 ##### PcapPlusPlus  `C++`  `Unlicense`  `active`  `Tier C`
 
 C++ packet capture, parsing and crafting library; parses pcap TCP/DNS traffic 1.06-1.26x faster than libtins in its maintainers' run.
@@ -60779,6 +61685,49 @@ Small header-only C++23 coroutine runtime for Linux: per-thread epoll loops with
 **Status:** Single-author and MIT-licensed, small enough to vendor; last commit 2026-06-25 (about three months ago) with no tags, releases or outside issues, though CI runs the tests under ASan/UBSan and TSan plus a libFuzzer job and a nightly TSan soak.
 
 [repo](https://github.com/wzxzhuxi/Rain) · [benchmark](https://github.com/wzxzhuxi/Rain/blob/main/README_EN.md)
+
+##### redcon.c  `C`  `MIT`  `active`  `Tier C`
+
+Small C framework for Redis-protocol (RESP) servers on epoll/kqueue; its toy clone outruns Redis 6.0.6 under deep pipelining.
+
+**Beats:** Redis 6.0.6 (the README writes 'Redis 6.06'), single-threaded stock redis-server — The author's July 2020 run on one AWS c5.2xlarge (Intel Xeon 3.6 GHz, model not named) drove both the single-threaded example clone and stock Redis 6.0.6 with redis-benchmark -t set,get -r 1000000 -n 10000000 at pipeline depths 1 to 128 on the same host. The clone matched Redis at pipeline 1 and reached 2,122,295 vs 990,307 SET/s (2.14x) and 2,230,151 vs 1,208,751 GET/s (1.85x) at pipeline 128, which measures a minimal key/value command path against full Redis, not the event loop on equal work; compiler, flags and the Redis configuration are not given.
+
+**Known shortcoming:** First-party README; the example server is a minimal clone compared against full Redis 6.0.6, so much of the gain is skipped work; parity at pipeline 1; build flags unstated (cc *.c, no -O); the client runs on the same host (the clone binds localhost:6380).
+
+**Known shortcoming:** Enricher: the benchmark table dates from the first commit (2020-07-27, evio.c v0.3.2) and was never re-run. The clone's tick() deletes expired keys from the shared hashmap without the rwlock in the -DUSEMT build (data race) and never frees them (leak in every build); the README quick-start passes int* where size_t* is expected (8-byte write into a 4-byte int); the clone's 29-bit length bitfields overflow below MAXARGSZ 512 MB.
+
+**Independent measurement:** verifier batch-82 (wave 5 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** The event loop is tidwall/evio.c: level-triggered epoll (kqueue on macOS/BSD), each readable socket drained into a 16 KB stack buffer until EAGAIN, commands parsed in place when no partial packet is pending, and argument buffers reused per connection so steady-state parsing does not allocate. Replies are appended to a per-connection buffer and flushed with one write() after the batch of events, so a 128-command pipeline costs a few syscalls. The big pipelined gains in the README come mostly from the example clone doing far less per command than Redis (a Robin Hood hashmap of single-allocation key/value pairs, no command-table ACL checks, stats, keyspace notifications or persistence).
+
+**Use it when:**
+- Building a custom service that speaks the Redis protocol (cache front, proxy, embedded store, test double) so existing Redis clients and redis-cli can talk to it.
+- Pipelined workloads (pipeline depth 8 and up) where a minimal command path should beat a general-purpose server; the README shows 1.4x to 2.1x over Redis 6.0.6 at depths 8 to 128.
+- Single-threaded C servers on Linux or macOS that want RESP parsing and reply encoding without writing them by hand.
+- Prototyping a multi-threaded RESP server with redcon_main_mt, provided you bring your own locking.
+
+**Skip it when:**
+- As a Redis replacement: the example clone only does SET/GET/DEL/KEYS/TTL/PING/FLUSHDB/DBSIZE/QUIT with no persistence, replication, other data types, ACLs, pub/sub or scripting.
+- Unpipelined request/response traffic: at pipeline 1 the README shows parity with Redis (about 114.5k req/s each), so there is no speedup to collect.
+- Windows (evio.c has only epoll and kqueue back ends) or TLS-terminated endpoints (no TLS support in the library).
+- Untrusted clients without review: a negative bulk length crash path was only fixed on 2026-06-29, there is no test suite in the repo and the library has 58 stars.
+- When you only need an event loop: libev, libhv or picoev give the loop without RESP framing.
+
+**Integration:** source-drop · evio.c v0.5.3 and buf.c (imported with tidwall's pkg.sh from the .package manifest); the example clone also uses tidwall/hashmap.c; pthreads for redcon_main_mt · C99-compatible C compiler (README builds with plain 'cc *.c'); not otherwise documented · Linux (epoll), macOS and BSD (kqueue); no Windows
+
+**Vs siblings:** Pick redcon.c over a bare loop such as libev, libhv, picoev or mrloop when the wire protocol is RESP and you want parsing, reply encoding and write coalescing done for you; pick tidwall's Go redcon or redcon.rs when the rest of the service is in those languages.
+
+**Gotchas:**
+- The benchmark table dates from the first commit (2020-07-27, evio.c v0.3.2) and was never re-run: the args move to the connection, multithread support, five evio.c updates and the 2026 parser fix all came later, Redis 6.0.6 was the only Redis tested, the build line has no -O flag, Redis's persistence settings are not stated (its default save points can trigger BGSAVE during the 87-second pipeline-1 run), and redis-benchmark with default 3-byte values ran on the same 8-vCPU c5.2xlarge as the server.
+- Race in the optional -DUSEMT clone build (PR #2, merged 2026-06-29): evio runs the tick hook on one thread, and the clone's tick() deletes expired keys from the shared hashmap and writes server->now without taking the rwlock while other threads run GET and SET; it also drops expired pairs without pair_free, which leaks them in every build.
+- The README's quick-start clone declares 'int vallen' and passes &vallen to redcon_args_at, whose length parameter has been size_t * since 2021-01-26; that writes 8 bytes into a 4-byte int (GCC 14 rejects the incompatible pointer by default) and the sample also stores keys as NUL-terminated strings, so keys are not binary safe. example/clone.c handles both correctly.
+- MAXARGSZ allows 512 MB bulk arguments, but the clone stores key and value lengths in 29-bit signed bitfields (maximum 268,435,455), so values between 256 MB and 512 MB overflow the stored length.
+
+**Status:** Light maintenance (25 commits, last on 2026-06-29 with a parser fix and a merged multithreaded clone build), MIT-licensed and two small C files plus evio.c, so easy to vendor, but the benchmark is six years old and untested against current Redis or Valkey.
+
+[repo](https://github.com/tidwall/redcon.c) · [benchmark](https://github.com/tidwall/redcon.c)
 
 ##### ringline  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier C`
 
@@ -69315,6 +70264,50 @@ Static C++17 k-d tree that indexes boxes as well as points; out-queries Boost.Ge
 
 [repo](https://github.com/ikolev21/GeoToolbox) · [benchmark](https://github.com/ikolev21/GeoToolbox)
 
+##### hilbert_curves (rawrunprotected)  `C++`  `public domain (README statement, no LICENSE file)`  `abandoned`  `Tier C`
+
+Branchless public-domain 2D/3D Hilbert index encode/decode; a Rust port encodes about 5.4x faster than the classic rotation loop.
+
+**Beats:** classic iterative xy2d Hilbert index loop with per-level quadrant rotation (Wikipedia-style loop; measured as loop_rotation in the Rust port benchmark), not literally the Hacker's Delight code — The repo has no numbers. The only measurement is of Filyus/packed_spatial_index's magic_bits, a line-for-line Rust port of hilbertXYToIndex fixed at order 16. It encoded 100,000 random (u16, u16) points in 185 us, against 998 us for the classic loop_rotation encoder (about 5.4x, derived from page data) and 644 us for fast_hilbert 2.1.0. The run used Criterion with LTO and codegen-units = 1, on a Ryzen AI 7 350 with the thread pinned to one core; the rustc version and target-cpu are not stated. The harness looks fair: all encoders run the same loop with black_box only on the buffers, and their outputs are identical. But the ratio mixes the algorithm with auto-vectorization, which the branchy baseline cannot get.
+
+**Known shortcoming:** No numbers in the repo; the only evidence is a Rust port (Filyus packed_spatial_index magic_bits, attributed in src/hilbert2d.rs): 185 us vs loop_rotation 998 us per 100k, about 5.4x, rustc version unstated. Informal public-domain dedication with no patent grant; abandoned since 2016.
+
+**Known shortcoming:** Enricher: no correctness bug in the transcribed algorithm (2D orders 1-8 and 3D levels 1-5 exhaustive, plus random points), but no input checks: n=0 is undefined behaviour (32-bit shift by 32) and coordinates at or above 2^n silently give a wrong in-range index; global external-linkage names with no header clash in multi-TU links; 3D takes Morton codes (max 10 levels); decode and 3D were never benchmarked. The Rust port harness is fair but states no rustc version or target-cpu, and the 5.4x mixes the algorithm with auto-vectorisation the branchy baseline cannot get.
+
+**Independent measurement:** verifier batch-180 (wave 8 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** The 2D encoder runs the per-level quadrant-rotation state machine as a parallel prefix scan over all 16 levels at once, using log2(16) = 4 rounds of XOR/AND/shift on bit-sliced state words, then bit-interleaves the result. The decoder uses the same prefix-scan idea, so both directions run in constant time with no branches and no memory lookups. Because nothing depends on the data, a compiler can auto-vectorize a loop over many points. The 3D path is different: it walks multiplication tables of the alternating group A4 (pre-combined with the Morton-to-Hilbert mapping), one 3-bit digit per step.
+
+**Use it when:**
+- Bulk-loading a packed Hilbert R-tree or sorting items by Hilbert key, with coordinates quantized to 16 bits per axis (the Flatbush and static_aabb2d_index approach; both embed ports of this exact function).
+- Encoding large arrays of independent points, where the branchless body auto-vectorizes. In the port's benchmark this was 5.4x faster than the rotation loop and 3.5x faster than the fast_hilbert crate.
+- When you need decode (index to x, y) as well as encode, with run time that does not depend on the data.
+- 3D Hilbert ordering when you already have Morton codes of up to 30 bits (10 levels per axis), for example from a pdep- or magic-bits interleaver.
+- When you want public-domain code to vendor; JS and Rust ports already exist.
+
+**Skip it when:**
+- Coordinates wider than 16 bits per axis in 2D, or 10 bits in 3D: every index is 32-bit, and nothing here produces 64-bit codes.
+- Single calls in a dependent latency chain: the port's notes say its table-driven LUT encoder wins there. The 5.4x figure is batch throughput only.
+- When Z-order is good enough: in the same port benchmark, Morton encoding took 47 us per 100k points against 185 us for this encoder.
+- When you need a maintained, packaged library with tests, or more than three dimensions, or other curve variants: this is four commits from 2016 with none of these.
+- 3D throughput-critical code: the 3D functions are a serial table walk, take Morton codes rather than x/y/z, and no one has benchmarked them.
+
+**Integration:** source-drop · none (only <cstdint>) · C++11 (uses <cstdint> fixed-width types; no intrinsics or other language features) · any (portable 32-bit unsigned integer arithmetic, no SIMD intrinsics or platform code)
+
+**Vs siblings:** Flatbush already contains a JS port of this exact function, credited in its index.js, for its packed Hilbert R-tree. Pick this repo when you want the raw encoder/decoder in C++ to build your own packed index or sort keys, not a finished spatial index such as Flatbush, KDBush or nanoflann.
+
+**Gotchas:**
+- No input checking. n must be 1 to 16: n = 0 shifts a uint32_t by 32, which is undefined behavior, and n > 16 gives a negative shift count. Coordinates must also be below 2^n. They are not masked, so an out-of-range coordinate silently returns a different, in-range index. In a Python transcription at n = 4, (x=17, y=3) gave index 12, while (x=1, y=3) gave 6.
+- The file defines external-linkage free functions with generic names (interleave, deinterleave, prefixScan, descan, transformCurve) in the global namespace, and there is no header. Compiling it into more than one translation unit, or next to other bit-twiddling helpers, causes duplicate-symbol link errors. Wrap it in a namespace and mark the functions inline or static when vendoring.
+- The 3D functions convert between Morton and Hilbert codes, not x/y/z, so you need your own 3D bit interleaver. Use bits of 10 or less: at 11, the code needs 33 bits and the top digit is truncated.
+- No correctness bug was found. A Python transcription of the C++ was checked exhaustively for 2D orders 1 to 8 and 3D levels 1 to 5, plus 200,000 random 2D points at order 16 and 100,000 random 3D codes at 10 levels. Results: bijective, consecutive indices are unit steps apart, encode/decode round-trips, and 2D output equals the classic rotation loop. The decoder and the 3D functions have never been benchmarked by anyone.
+
+**Status:** Abandoned since 2016-09-18 (4 commits, no pull requests, two closed 2018 issues), and the author's explanation posts on threadlocalmutex.com no longer resolve. Still copyable: about 150 lines released into the public domain by an informal README statement (no LICENSE file, no patent grant), with no correctness bug found and widely re-ported (Flatbush, static_aabb2d_index, packed_spatial_index).
+
+[repo](https://github.com/rawrunprotected/hilbert_curves) · [benchmark](https://raw.githubusercontent.com/Filyus/packed_spatial_index/HEAD/docs/performance.md)
+
 ##### Indexicon R-tree  `C++`  `MIT`  `active`  `Tier C`
 
 Single-header C++17 dynamic N-D R*-tree for points or boxes; matches or beats Boost.Geometry's R-tree, by up to about 35%.
@@ -69528,6 +70521,49 @@ Rust k-d tree for low-dimensional exact/approximate NN; 1.2-1.5x faster queries 
 **Status:** Actively maintained (v6.3.0 on 2026-09-06, CI, fuzzing, 176 stars), dual MIT/Apache-2.0 licensed; a strong choice in Rust, but outside the C/C++ scope with no C ABI.
 
 [repo](https://github.com/sdd/kiddo) · [benchmark](https://raw.githubusercontent.com/sdd/kd-tree-comparison/HEAD/all-benchmarks.json)
+
+##### libmorton (Forceflow)  `C++`  `MIT`  `active`  `Tier C`
+
+Header-only C++ 2D/3D Morton (Z-order) encode/decode; its BMI2 pdep/pext path beats its own lookup-table and magic-bits code.
+
+**Beats:** libmorton's shipped non-BMI default (LUT Shifted) and its other LUT methods, as measured in morton-nd's fork of the libmorton test harness — Third-party numbers only: the morton-nd README (Intel Core i9-9980HK, GCC 11.1.0, macOS 11.1, -O3 -DNDEBUG plus -mbmi2 from the fork's test CMakeLists.txt, 512^3 codes, 5-run average) shows libmorton's BMI2 path ahead of its own shifted LUT, which is the actual non-BMI default in morton.h: 32-bit 3D encode 530 vs 630 ms (about 1.19x), 64-bit 3D encode 524 vs 829 ms (about 1.58x), 32-bit 3D decode 560 vs 871 ms (about 1.55x) and 64-bit 3D decode 560 vs 1300 ms (about 2.32x) on linear input (derived from page data); the plain-LUT ratios in the record (1.14x to 1.84x) are against a non-default method. No external incumbent, loop or magic-bits baseline is measured, morton-nd's own BMI2 and 1-chunk LUT rows tie libmorton, the harness timer overhead described under gotchas distorts the random columns, and PR #40's release-mode run on an i7-1065G7 shows the AVX-512 path about 10 to 20 percent slower than BMI2 (64-bit 1.060 vs 0.915 ms), not equal.
+
+**Known shortcoming:** The only numbers are morton-nd's README comparing libmorton's BMI2 path against its own LUT (1.14-1.84x, i9-9980HK, GCC 11.1.0 -O3, -mbmi2), and morton-nd matches it; no external loop or magic-bits baseline. The author's own numbers are in blocked blog posts.
+
+**Known shortcoming:** Enricher: harness flaw in the kevinhartman/libmorton fork behind every morton-nd number: calls go through function pointers and two clock_gettime(CLOCK_REALTIME) calls wrap every 8-code block and every single code in random decode, so the random-decode rows (3.1-4.5 s for every method) mostly time about 268M clock reads and their 1.14x is meaningless. The shipped non-BMI default is LUT Shifted, against which BMI2 gives 1.19x and 1.58x encode and 1.55x and 2.32x decode (32/64-bit, linear). morton.h picks BMI2 before AVX512, so the AVX512 path is unreachable with -march=icelake-client (PR #40 shows it 10-20% slower than BMI2); the README advises -march=znver2 although pdep/pext are slow on Zen 1 and 2; glibc's uint_fast16_t and uint_fast32_t are 8 bytes, so the '32-bit' calls run 64-bit loops on Linux; code untouched since 2023-08-26.
+
+**Independent measurement:** verifier batch-180 (wave 8 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** With __BMI2__ (or __AVX2__) defined, each coordinate is scattered into its bit lane with one PDEP and gathered back with one PEXT against fixed masks (0x9249... for 3D), so a 3D encode is three pdep plus two ORs. Without BMI2 the 3D default is a pre-shifted 256-entry lookup table per axis processed one byte at a time (encode) and a 512-entry table over 9-bit chunks (decode); 2D 32-bit uses magic-bits shift-and-mask. An experimental AVX-512 BITALG path uses _mm512_bitshuffle_epi64_mask.
+
+**Use it when:**
+- Building octrees, sparse voxel grids, BVH/LBVH sorts or Z-order point sorting where you need millions of 2D/3D Morton codes per second on Intel Haswell+ or AMD Zen 3+ compiled with -mbmi2 or -march=haswell.
+- You want a dependency-free header you can vendor (MIT, a handful of headers, vcpkg port available).
+- Coordinates fit 10 bits per axis (3D 32-bit codes) or 21 bits per axis (3D 64-bit codes), or 16/32 bits per axis in 2D.
+- Portable builds where you cannot assume BMI2: the shifted-LUT default is still a reasonable table-based baseline with a few KB of tables.
+
+**Skip it when:**
+- AMD Zen 1, Zen+ and Zen 2: PDEP/PEXT are microcoded there with data-dependent latency far above Intel's 3 cycles, so the BMI2 path the README recommends via -march=znver2 is likely slower than the LUT default; benchmark before enabling it on those CPUs.
+- More than three dimensions, or field widths other than 16/32/64-bit codes: libmorton is 2D/3D only (morton-nd covers N dimensions with BMI2 and compile-time LUTs at parity in its own table).
+- WebAssembly, 32-bit targets or Clang on Windows: open issues #86 (fails on WASM and 32-bit builds) and #87 (Clang compilation fails on Windows); the test suite build on macOS is also an open issue (#49).
+- You need range-checked input or Morton arithmetic (neighbor, add, parent): there is no bounds checking and the Morton-operations item is still on the README TODO list.
+- Batch/SIMD encoding of arrays: the API is one code per call; there is no vectorized bulk interface outside the experimental AVX-512 path.
+
+**Integration:** header-only · none (standard headers; immintrin.h for the BMI2 and AVX-512 paths) · C++11; README suggests GCC 9+ for -march=haswell / -march=icelake-client; CMake 3.15+ for the optional CMake package · any (portable LUT and magic-bits paths); x86-64 with BMI2 for the fast path (Intel Haswell+, AMD Zen 3+ for fast pdep/pext); experimental AVX-512 BITALG (Ice Lake+); known build failures on WASM, 32-bit and Clang-on-Windows
+
+**Vs siblings:** Pick libmorton when you need plain Z-order keys and want a vendorable header; choose rawrunprotected/hilbert_curves when you need Hilbert order's better locality (it is a 2D Hilbert index, not Morton), while the kd-tree and R-tree siblings (nanoflann, PH-tree, Bonxai) are whole spatial indexes rather than key encoders, so libmorton complements rather than replaces them.
+
+**Gotchas:**
+- The only published numbers (morton-nd README, i9-9980HK, GCC 11.1, macOS) come from the kevinhartman/libmorton fork harness, which calls every method through a function pointer and brackets every 8-code block (every single code in the random-decode test) with two clock_gettime(CLOCK_REALTIME) calls inside the accumulated timer. All random-decode rows sit at 3.1 to 4.5 s against 0.5 to 1.6 s linear, so that column is dominated by clock-read overhead (about 268 million clock reads for 134 million codes) and its 1.14x BMI2-vs-LUT ratio says little about decode cost; the linear rows share a floor near 516 to 540 ms that likely compresses ratios too.
+- morton.h tests __BMI2__ || __AVX2__ before __AVX512BITALG__, so a -march=icelake-client build (which defines all three) always gets the BMI2 path; the AVX-512 path is reachable only if BMI2 is not defined. Selecting the pdep path on __AVX2__ alone also means GCC/Clang builds with -mavx2 but without -mbmi2 hit the BMI2 intrinsics without the bmi2 target enabled.
+- Function types are uint_fast16_t/uint_fast32_t, which glibc on x86-64 makes 8 bytes wide (macOS and MSVC use 2 and 4). On Linux the '32-bit' calls therefore run 64-bit code: the shifted-LUT encode loops sizeof(coord) = 8 times instead of 2, the LUT decode loops 7 times instead of 4, and out-of-range coordinate bits can spill above bit 31 instead of being truncated, so the macOS benchmark numbers do not transfer to Linux.
+- No range checks: 3D codes hold 11/11/10 bits per axis in 32 bits and 22/21/21 in 64 bits under the BMI2 and LUT paths, while the 3D magic-bits helper masks to 10 or 21 bits first, so oversized inputs give method-dependent codes; mask coordinates yourself.
+
+**Status:** The record's 'active' is generous: the last code change is 2023-08-26 (MSVC lean-and-mean headers) and the 2026-06-16 commits only touch the README and badge, with build issues #86 and #87 open; still MIT, header-only and small enough to vendor, so it remains copyable.
+
+[repo](https://github.com/Forceflow/libmorton) · [benchmark](https://raw.githubusercontent.com/morton-nd/morton-nd/main/README.md)
 
 ##### libnabo  `C++`  `BSD-3-Clause`  `stale`  `Tier C`
 
@@ -71828,6 +72864,49 @@ Parallel, full-format Matrix Market (.mtx) reader/writer; about 10x single-threa
 
 [repo](https://github.com/alugowski/fast_matrix_market) · [benchmark](https://github.com/alugowski/fast_matrix_market)
 
+##### kiwi (nucleic, C++ Cassowary solver)  `C++`  `BSD-3-Clause`  `active`  `Tier C`
+
+Header-only C++11 Cassowary linear-constraint solver for UI layout, claimed 10-500x faster than the original Cassowary C++ solver.
+
+**Beats:** original Cassowary C++ solver (cassowary-0.60 assumed; the README does not give a version) — The only evidence is first-party README prose ('10x to 500x faster than the original Cassowary solver with typical use cases gaining a 40x improvement', memory savings over 5x), unchanged since the 2013-2014 0.1.x releases, with no named Cassowary version, workload, hardware, compiler or benchmark code; the repo's benchmarks measure Kiwi alone and cannot reproduce the comparison.
+
+**Known shortcoming:** The 10x-500x over Cassowary is first-party README prose unchanged since PyPI 0.1.3 (2014-07-12); the benchmarks directory times kiwi alone (g++ -O2) with no Cassowary comparison, and no independent numbers were found.
+
+**Known shortcoming:** Enricher: the repo's own enaml_like_benchmark.cpp resends the same width and height in its 'suggest value' cases, so after the first iteration the delta is 0 and no dual-simplex work is timed (the Python benchmark cycles six sizes). Non-atomic refcounts, and the maintainer says kiwisolver is not thread-safe (#230); removed constraints leave zeroed objective cells (#154); fixed 1e-8 epsilon; strengths saturate.
+
+**Independent measurement:** verifier batch-181 (wave 8 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** It implements the incremental simplex method of the Cassowary paper (primal optimize after adds, dual simplex after suggestValue on edit variables) but replaces Cassowary's lexicographic symbolic weights with single doubles (strength::create packs three tiers as a*1e6 + b*1e3 + c), so every tableau cell is one double. All solver maps (rows, variables, constraints, edits and each row's cells) are Loki AssocVector sorted vectors, which the docs credit with about 2x over std::map, and Variable/Constraint handles use a non-atomic intrusive refcount instead of std::shared_ptr.
+
+**Use it when:**
+- GUI or document layout engines that re-solve a few dozen to a few hundred linear constraints on every resize, using edit variables for window width and height.
+- Python code that needs a Cassowary solver: kiwisolver (1.5.1, Python 3.10+) ships wheels and is already installed wherever Matplotlib is (matplotlib 3.11.2 requires kiwisolver>=1.3.1).
+- C++ projects that want a dependency-free, BSD-3-Clause, header-only constraint solver consumable through CMake FetchContent as kiwi::kiwi.
+- Replacing the original Cassowary C++ toolkit or other ports where stay constraints are not needed or can be emulated with edit variables.
+
+**Skip it when:**
+- When you need general LP or QP solving with an objective you choose: Kiwi has no user objective (open issues #164 and #176 ask for one); use an LP/QP solver such as HiGHS, PIQP or OSQP.
+- Strict strength hierarchies: because strengths are summed doubles, many weak constraints can outweigh a medium one (documented in solver_internals.rst); the original Cassowary's lexicographic ordering guarantees the hierarchy.
+- Large or high-churn systems on one long-lived solver: every map is a sorted vector (O(n) insert and erase), and removed edit variables and constraints leave zeroed cells in the objective, so maintainers recommend rebuilding the solver when constraints change often (issue #154).
+- Multithreaded use of shared Variable or Constraint objects: refcounts are non-atomic and a maintainer states 'kiwisolver is not threadsafe' (issue #230).
+- Anyone who needs the 10-500x figure for a decision: no benchmark against Cassowary, workload, hardware or compiler has ever been published.
+
+**Integration:** header-only · none for C++ (Loki AssocVector is vendored in kiwi/AssocVector.h); the Python wrapper builds with cppy · C++11 (CMakeLists sets cxx_std_11, CMake 3.15+; CI tests C++11 and C++20); Python wrapper needs Python 3.10+ · any platform with a C++11 compiler; Python wheels per release notes include free-threaded CPython builds and RISC-V
+
+**Vs siblings:** No catalogued sibling solves Cassowary constraints; the category's QP solvers (PIQP, ProxQP, QPALM) handle general convex objectives, while Kiwi is the pick for incremental, strength-prioritised layout constraints re-solved on every resize. For JavaScript, use its TypeScript descendant lume/kiwi (wave 13) instead.
+
+**Gotchas:**
+- Errors are C++ exceptions (UnsatisfiableConstraint, DuplicateConstraint, UnknownEditVariable, BadRequiredStrength, InternalSolverError), and edit variables cannot have required strength.
+- Feasibility and pivoting use a fixed absolute epsilon of 1e-8 (impl::nearZero), regardless of the magnitude of coordinates or coefficients.
+- Strength components are clipped to [0, 1000] each, so custom strengths saturate (strong is 1e6, required is 1,001,001,000) and weighting tricks beyond those bounds silently do nothing.
+- The repo's own C++ benchmark (benchmarks/enaml_like_benchmark.cpp, nanobench, g++ -O2) times only Kiwi, and its 'suggest value WxH' cases resubmit the same width and height every iteration, so after the first iteration delta is 0 and no dual-simplex work is timed; the Python benchmark cycles six sizes and is the better re-solve measurement.
+
+**Status:** Actively maintained by the Nucleic team (solver 1.5.1 released 2026-08-28, commits into October 2026, 781 stars) as a Matplotlib dependency, BSD-3-Clause and header-only, though a March 2026 static-review batch of Python-wrapper bugs (issues #223-#231, refcount and lock handling) is still open.
+
+[repo](https://github.com/nucleic/kiwi) · [benchmark](https://github.com/nucleic/kiwi)
+
 ##### LAMG+ (lean algebraic multigrid for graph Laplacians)  `Julia`  `Apache-2.0`  `active`  `Tier C`
 
 Julia algebraic multigrid solver for graph-Laplacian systems; 6.6-13.6x faster than PETSc GAMG on social, web and optimization graphs.
@@ -74015,6 +75094,92 @@ Hand-vectorised Mojo Mandelbrot kernel (4 x Float64 lanes, escape mask) that run
 
 [repo](https://github.com/iinoshirozheng/mojo-analyze) · [benchmark](https://github.com/iinoshirozheng/mojo-analyze/blob/main/ANALYSIS.md)
 
+##### nam-zig  `Zig`  `MIT`  `active`  `Tier D`
+
+Zig port of Neural Amp Modeler (play, train, export .nam) on Fucina; no timing against NeuralAmpModelerCore C++.
+
+**Beats:** NeuralAmpModelerCore (C++) at -O3: no timing comparison found in the README or repo — Only absolute costs are published: standard WaveNet (13,802 weights) 72 us per 64-frame block and 480 us per 512-frame block at 48 kHz, and a 23-layer 8-channel Tone3000 profile at 57 us per 64-frame block, ReleaseFast on an Apple M1 Max (2026-09-09 snapshot); no NeuralAmpModelerCore timing was taken, so there is no ratio, only output parity with upstream render (max |diff| 2.3e-6).
+
+**Known shortcoming:** Absolute per-block costs only (72 us per 64 frames on an M1 Max) with no NeuralAmpModelerCore timing; 0 stars and one month old.
+
+**Known shortcoming:** Enricher: still no NeuralAmpModelerCore timing; the bench is the mean over one repeated 64-sample block with no worst case or percentiles; x86 releases need x86-64-v3 while linux-aarch64 is built for the baseline CPU; the 'one core' claim is unverified (Fucina worker pool, Accelerate linked).
+
+**Independent measurement:** verifier batch-111 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Every WaveNet causal convolution is a Fucina groupedCausalConv1dStreaming over its own ring-buffer state, which in inference runs as one fused kernel call (conv, bias, state carry); the per-layer accumulations are done in place and the block path is allocation-free once Fucina's buffer pool is warm. Fucina selects NEON/dotprod or AVX2/AVX-VNNI kernels at compile time for the host CPU (as if -march=native), and macOS builds link Accelerate by default; whether the conv kernels actually call BLAS is not documented. Exact tanh is the default, with a fast-tanh option.
+
+**Use it when:**
+- Playing .nam profiles standalone on macOS, Linux or Windows without a DAW or plugin host, with cabinet IRs and multi-stage chains
+- Training NAM profiles on a CPU without a PyTorch install, then using the exported .nam in any upstream-compatible player
+- Small standard-size WaveNet profiles at 64-frame blocks, where the README reports 72 us per block on one M1 Max core (about 5% of the 1333 us budget)
+- Zig projects that want a NAM inference engine with output matching upstream tools/render (max |diff| 2.3e-6, RMS 6.5e-8 on the standard example)
+
+**Skip it when:**
+- When you need evidence that it beats NeuralAmpModelerCore: no upstream timing is reported anywhere, only absolute per-block costs
+- Inside a DAW: the README describes a standalone app and documents no VST3, AU or CLAP plugin
+- Slimmable WaveNet submodels or non-WaveNet condition_dsp engines in the trainable path: they fail with a named error
+- Older x86 CPUs with the prebuilt binaries: x86-64 releases are built with -Dcpu=x86_64_v3 (AVX2 required); the Linux aarch64 release is built for the baseline CPU and so lacks the tuned kernels
+- Production rigs that need a track record: created 2026-09-09, 0 stars, one author, live audio on Linux and Windows exercised by users rather than CI
+
+**Integration:** application binary (CLI plus window) built with zig build; no library API documented · Fucina v0.5.1 (fetched by the Zig package manager, pinned by tag and hash), vendored miniaudio; optional system BLAS (Accelerate on macOS by default, -Dblas=none to drop it); GTK 3 and WebKitGTK on Linux for the window, else the browser · Zig 0.16.0 · macOS arm64 and x86_64, Linux x86_64 and aarch64, Windows x86_64; developed and tested on Apple Silicon; prebuilt x86-64 binaries need x86-64-v3 (AVX2, FMA)
+
+**Vs siblings:** No audio-model siblings are catalogued in numerics-and-arrays; next to the Zig and Mojo LLM-inference entries (llama2.zig, llama2.mojo) it is the pick only for NAM guitar-amp profiles, and its Fucina engine is the same library whose llama.cpp comparison is catalogued separately.
+
+**Gotchas:**
+- The bench command reports the mean per-block time over about 5 s of repeatedly processing one fixed 64-sample sine block after 64 warm-up blocks (src/main.zig); it gives no worst-case or percentile figure, so the 18x real-time headroom is an average, not a deadline guarantee, and 'bench standard' uses synthetic weights.
+- Builds are tuned to the compiling host: a cross-compile without -Dcpu silently loses the fast kernels (Fucina README), and Debug builds are about 20x slower and will not keep up in real time.
+- The README says the timing ran on one core, but Fucina has a bounded worker pool and macOS builds link Accelerate; the thread count used by bench is not stated, and no upstream benchmodel run on the same machine is given.
+- The parity render builds upstream as RelWithDebInfo with NAM_ENABLE_A2_FAST=OFF; that build is for correctness only and says nothing about upstream speed.
+
+**Status:** Active (v0.4.0 on 2026-09-19, 15 commits since 2026-09-09) and MIT-licensed with prebuilt releases, but a one-month-old single-author project with no baseline measurement, so it stays a usable NAM runtime rather than a demonstrated speedup over the C++ core.
+
+[repo](https://github.com/matteo-grella/nam-zig) · [benchmark](https://github.com/matteo-grella/nam-zig)
+
+##### reed-solomon-simd  `Rust`  `MIT AND BSD-3-Clause`  `active`  `Tier D`
+
+Pure-Rust O(n log n) Leopard-RS erasure coder over GF(2^16) with runtime AVX2/SSSE3/Neon kernels; no measured C/C++ win.
+
+**Beats:** catid/leopard (C++) and Intel ISA-L (C) named by the lead but never compared; examples/quick-comparison.rs times reed-solomon-16, reed-solomon-erasure (built with the simd-accel feature, whose GF(2^8) multiply kernel is C SIMD code copied from NicolasT/reedsolomon and compiled through cc), reed-solomon-novelpoly and leopard-codec, but the README publishes no numbers for that run — First-party criterion benchmark (cargo bench main) on one core of an AMD Ryzen 5 3600 with AVX2, 1024-byte shards, rustc version and flags unstated: encode 10.237 GiB/s at 32:32 falling to 1.6049 GiB/s at 32768:32768, decode with 1% loss 254 MiB/s at 32:32 and 1.30 GiB/s at 1024:1024, all counting original plus recovery bytes. No C or C++ library (Leopard-RS, ISA-L) was measured, so there is no ratio against a C/C++ baseline; the Rust-only 'fastest' claim has no published numbers.
+
+**Known shortcoming:** No C or C++ number anywhere: quick-comparison.rs runs only Rust crates and publishes no results; reed-solomon-erasure's simd-accel path calls a C SIMD kernel but uses a different algorithm. The crate is a fork of reed-solomon-16 (about 2.19M downloads, active).
+
+**Known shortcoming:** Enricher: examples/quick-comparison.rs behind the README's 'fastest in all cases' times each operation once with one Instant, no warm-up or repeats; its own table init is timed outside encode while leopard-codec's lands in its first timed encode; GF(2^8) rivals run only up to 128:128; no numbers are published. README GiB/s counts original plus recovery bytes, so 32:32 at 10.237 GiB/s is about 5.1 GiB/s of input; src/algorithm.md is stale. The maintainer expects parity with klauspost/reedsolomon's Leopard GF16 (issue #57).
+
+**Independent measurement:** verifier batch-112 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** It implements the Leopard-RS scheme by Christopher Taylor: additive FFT and inverse FFT over GF(2^16) in the Lin-Chung-Han novel polynomial basis, which makes encode and decode O(n log n) in the shard count instead of the O(n*k) matrix multiply of classic Vandermonde/Cauchy coders, with a fast Walsh-Hadamard transform for the erasure-locator step in decoding. Each 64-byte block of a shard is stored as 32 low bytes then 32 high bytes, so the GF(2^16) multiply-add maps onto PSHUFB/VPSHUFB (or Neon TBL) nibble lookups; the DefaultEngine picks AVX2, SSSE3, Neon or a plain-Rust NoSimd engine at runtime via cpufeatures. Version 3.0.1 claims up to 20% more AVX2 encode throughput from kernel tuning.
+
+**Use it when:**
+- Rust services that need wide erasure codes (hundreds to tens of thousands of shards) where O(n*k) GF(2^8) coders slow down sharply, e.g. data availability sampling, distributed storage or FEC over many packets.
+- Single-core encode throughput matters: README reports 4.8 GiB/s at 1024:1024 and 10.2 GiB/s at 32:32 with 1024-byte shards on a Ryzen 5 3600 (counting original plus recovery bytes).
+- You need more than 256 total shards, which GF(2^8) coders such as reed-solomon-erasure's default ReedSolomon8 or leopard-codec's GF(2^8) mode cannot address.
+- x86-64 or AArch64 targets with runtime SIMD selection and a plain-Rust fallback elsewhere; no_std builds are supported since 3.1.0 by disabling the std feature.
+
+**Skip it when:**
+- Small configurations with about 42 or fewer recovery shards when decode speed dominates: the README says other Rust crates decode faster there, and decode throughput at 32:32 is only about 254 MiB/s against 10 GiB/s encode.
+- Tiny payloads per process: a one-time table build (under 10 ms per the README) can outweigh the coding work.
+- You need errors (corrupted shards) corrected, not just erasures: the crate trusts every shard it is given, so add a per-shard hash (CRC32C, xxHash) yourself; erasure-and-error decoding is an open issue (#20).
+- You must interoperate with shards produced by Leopard-RS C++, ISA-L, Jerasure, Backblaze or reed-solomon-erasure: the codeword layout and field differ, and shards whose length is not a multiple of 64 bytes are only compatible from version 3.0.0 on.
+- You need a measured advantage over a C or C++ library: no head-to-head with Leopard-RS or ISA-L exists, and the maintainer only expects rough parity with klauspost/reedsolomon's Leopard GF16 mode (Go).
+
+**Integration:** crate · fixedbitset, once_cell, and cpufeatures on x86, x86-64 and AArch64 (readme-rustdocifier at build time) · Rust 1.82 (rust-version in Cargo.toml for 3.1.0), edition 2021 · x86 and x86-64 (SSSE3 or AVX2 picked at runtime), AArch64 (Neon), any other target through the plain-Rust NoSimd engine; no AVX-512 or GFNI engine
+
+**Vs siblings:** No erasure-coding entry sits in this category (the siblings are BLAS, ODE, FFT and vector-search kernels); against the catalogued klauspost/reedsolomon (Go, GF(2^8) matrix codes plus a Leopard GF16 mode) pick this crate for a pure-Rust dependency with no Go or C toolchain and shard counts in the thousands, and pick klauspost or ISA-L when you need AVX-512/GFNI kernels or small k+m codes with fast decode.
+
+**Gotchas:**
+- README throughput counts original plus recovery bytes (and missing shards for decode), following klauspost/reedsolomon's 'total shard size' convention, so 10.237 GiB/s at 32:32 is about 5.1 GiB/s of input data; halve the 1:1 rows before comparing with Leopard-RS's 'Input=' MB/s figures.
+- The 'fastest in all cases' claim comes from examples/quick-comparison.rs, which times each encode and decode once with Instant (no warm-up, no repetition, cold caches and page faults included), times reed-solomon-simd's table init separately and outside encode while leopard-codec's lazy table build falls inside its first timed encode, and runs reed-solomon-erasure GF(2^8) and leopard-codec only up to 128:128; no output of that run is published.
+- High-rate and low-rate codecs in the rate module are not interchangeable: data encoded with one must be decoded with the same rate (the crate's own algorithm.md notes they only appear compatible for a single chunk).
+- src/algorithm.md is stale: it still says shards must be a multiple of 64 bytes (relaxed to even lengths in 3.0.0) and its rate table (about 75-176 MiB/s) predates the SIMD engines; trust the README table instead.
+
+**Status:** Maintained at a slow pace (v3.1.0 on 2025-10-14, last commit that day, issues #71 and #77 open), MIT AND BSD-3-Clause, about 2.19M crates.io downloads; easy to adopt as a crate, but the catalogue entry stays at tier D because the only harness that names competitors is a single-shot timing run with uneven table-init accounting and no published numbers.
+
+[repo](https://github.com/AndersTrier/reed-solomon-simd) · [benchmark](https://raw.githubusercontent.com/AndersTrier/reed-solomon-simd/HEAD/README.md)
+
 #### runtime-jit-beats-aot
 
 ##### .NET 11 preview JIT (C#): benchLANG binary trees vs C and C++ at -O3  `C#`  `MIT`  `active`  `Tier C`
@@ -74147,6 +75312,47 @@ Research Clang 9 fork adding [[clang::jit]]: templates instantiated at run time;
 **Status:** Abandoned research prototype (cxxjit branch last updated 2019-12-30, cxxjit-ni-9.0 2020-01-16, LLVM 9.0 base, open crash and build issues), Apache-2.0 WITH LLVM-exception; worth reading as a reference design, not as a dependency.
 
 [repo](https://github.com/hfinkel/llvm-project-cxxjit) · [benchmark](https://github.com/hfinkel/llvm-project-cxxjit/wiki)
+
+##### Dart AOT 3.13.0: benchLANG binary trees vs C and C++ at -O3  `Dart`  `MIT`  `active`  `Tier C`
+
+Dart 3.13 AOT binary beats per-node malloc/free C by 1.17x on benchLANG binary trees; Dart source unpublished.
+
+**Beats:** C (GCC 16.2.0: gcc -O3 -march=native -flto -funroll-loops -ffp-contract=off) and C++ (g++ -std=c++20 with the same flags) binary-trees programs that allocate every node with malloc/free (C) or new/delete (C++) — benchLANG's 3 September 2026 run (one run per language, Ryzen 9 5900X locked at 3.5 GHz, Arch Linux) timed binary trees at 0.865 s for Dart 3.13.0 AOT (dart compile exe, default VM GC settings) against 1.010 s for C (gcc 16.2.0 -O3 -march=native -flto -funroll-loops, malloc/free per node) and 1.147 s for C++ (g++ 16.2.0, new/delete). That is about 1.17x and 1.33x faster, or roughly 12.7 against 14.8 ns per node over 68.3 million nodes (derived from page data). The Dart program behind the number is not published.
+
+**Known shortcoming:** The Dart source is not in the repo (raw 404, not tracked), so the row cannot be reproduced; the C side frees every node inside the timer while Dart's GC does not (OCaml benchLANG precedent); one run; Dart is about 2.13x slower than C over the whole suite.
+
+**Known shortcoming:** Enricher: bench.dart was never committed (.gitignore has no !*.dart rule; raw 404), so the row cannot be reproduced; C frees inside the timer while Dart 3.13's GC (16 MB semi-space, concurrent mark and sweep on helper threads) does not; one run; the native rows themselves spread 0.986-1.147 s; the README misdescribes -S, which is --save-debugging-info and affects only binary size.
+
+**Independent measurement:** verifier batch-117 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** The win comes from the memory manager rather than Dart code generation: the Dart VM allocates by bumping a pointer in a semi-space young generation (up to 16 MB per semi-space on 64-bit by default in SDK 3.13.0) and reclaims dead trees with a copying scavenge whose cost scales with survivors, while C pays one malloc and one free call per node plus a second traversal to free. Old-generation marking and sweeping run concurrently on helper threads by default (concurrent_mark and concurrent_sweep true, 2 marker tasks in 3.13.0's flag_list.h), so part of the reclamation is off the timed main thread; the README publishes no CPU time for this row. This mechanism is inferred from the VM defaults, since the Dart program itself could not be read.
+
+**Use it when:**
+- You already ship Dart (Flutter back ends, CLI tools) and wonder whether a pass that builds many short-lived tree nodes (ASTs, parse trees, immutable persistent structures) needs to move to C through FFI: with default VM settings the AOT binary beat naive malloc/free C on this workload.
+- Allocation-heavy code whose objects die before the next young-generation scavenge, the case bump allocation and copying collection handle cheaply.
+- As one data point when picking a garbage-collected AOT language: Dart's 0.865 s ties OCaml (0.865 s), is close to Bun (0.816 s) and Nim (0.809 s), and is well ahead of Go (1.796 s) and Node (1.444 s) on this row of the same table.
+
+**Skip it when:**
+- As evidence that Dart beats C in general: it lost the other four workloads and is 2.13x slower in total (20.754 s vs 9.762 s; Fibonacci 8.135 vs 1.694 s, strings 6.523 vs 2.132 s, primes 2.963 vs 2.725 s).
+- Against C or C++ that allocates tree nodes from an arena, pool or bump allocator: the benchmark's C uses malloc/free per node by design, and the advantage is the allocator, not compiled-code quality.
+- Memory- or size-constrained deployments: whole-process peak RSS was 74.6 MiB against 33.3 MiB for C, and the stripped executable 5617 KiB against 26 KiB, because the AOT binary embeds the Dart runtime.
+- When you need reproducible evidence: the Dart program is not published, the table is one run per language, and the raw results file with checksums and CPU times is not committed.
+
+**Integration:** source-drop (benchmark program; the Dart file itself is not published) · Dart SDK 3.13.0 from nixpkgs-unstable (flake.lock pinned); any pubspec or package use is not documented · Dart 3.13.0 as measured; `dart compile exe` has no optimisation-level option for native executables (in the SDK's compile command only the wasm target takes -O), so this is the default AOT pipeline · Measured on x86-64 Linux only (Arch Linux, Ryzen 9 5900X locked at 3.5 GHz)
+
+**Vs siblings:** Among the catalogued benchLANG binary-trees rows Dart (0.865 s) ties OCaml, trails Java (0.347 s) and Bun (0.816 s), and beats C# (0.931 s); prefer the OCaml or C# rows when you need an inspectable program (their sources are committed), and LangArena's Java and Bun Binarytrees::Obj entries for stronger C++ baselines. Cite this row only when Dart is already your stack.
+
+**Gotchas:**
+- The Dart source is missing, so the row cannot be reproduced. .gitignore ignores every file and re-includes extensions language by language with no !*.dart rule, languages/ has no Dart directory, and raw languages/Dart/bench.dart returns 404, although run_benchmarks.sh changes into languages/Dart and runs `dart compile exe bench.dart`. A fresh clone fails at the Dart compile step. The algorithm, node layout and timer placement cannot be checked, and checksum agreement cannot be confirmed because benchmark_results_*.txt is not committed either.
+- Harness asymmetry, stated in the README ('native code frees inside the timer, GC runtimes collect when they like'): C and C++ walk every tree a second time to free each node inside the timed region, while a GC runtime just drops the root. With 16 MB semi-spaces and concurrent old-generation mark and sweep on helper threads, some reclamation happens off the main thread and some garbage may still be live at exit, so the row compares allocation strategies rather than languages.
+- Small single-run margin: 0.865 s against C's 1.010 s is 14% less time, but the native malloc rows running the same algorithm already spread from 0.986 s (Fortran) to 1.147 s (C++); against the best native row the margin is about 1.14x (derived from page data), from one run with no variance reported.
+- The README says `-S` 'strips the snapshot'; in the Dart SDK, -S is --save-debugging-info, which removes debugging information from the executable and saves it to bench.sym. That affects only the reported 5617 KiB binary size, not timing.
+
+**Status:** Small single-author MIT repo (8 stars, last commit 2026-09-03) with Nix-pinned toolchains, but the Dart row cannot be reproduced from it because bench.dart was never committed; treat it as a first-party anecdote at tier C at most (a move to D is defensible if unpublished code counts as no valid measurement).
+
+[repo](https://github.com/GlebOlsen/benchLANG) · [benchmark](https://raw.githubusercontent.com/GlebOlsen/benchLANG/HEAD/README.md)
 
 ##### JSON3.jl (Julia) vs nlohmann/json, json-c and Boost.PropertyTree in kostya/benchmarks JSON  `Julia`  `MIT`  `active`  `Tier C`
 
@@ -75130,6 +76336,93 @@ Pure-Julia symbolic term-rewriting engine (core of Symbolics.jl). It beats SymEn
 
 #### string-and-text
 
+##### base64-simd (Nugine/simd)  `Rust`  `MIT`  `active`  `Tier C`
+
+Rust SIMD base64 (plus hex, base32, UUID) crate; made uutils base64 1.56x faster than GNU coreutils base64 end to end.
+
+**Beats:** GNU coreutils base64 (/usr/bin/base64, C), via the uutils coreutils base64 command that adopted base64-simd — A uutils maintainer (PR #8578, 2025-09-08) used hyperfine -N --warmup 3 (10 runs) to encode a 4 GB single-line file of 'A' characters with the uutils base64 command built on base64-simd 0.8: 3.146 s, against 4.901 s for /usr/bin/base64 (GNU coreutils, version and flags not stated) and 5.998 s for the previous uutils build, which is 1.56x and 1.91x faster; no CPU or compiler details were given.
+
+**Known shortcoming:** Only evidence is one maintainer comment in uutils PR #8578 (1.56x vs GNU base64, 1.91x vs old uutils) with no CPU or GNU version; CLI timing includes I/O; no comparison with aklomp/base64 or Turbo-Base64; the crate is still 0.8.0 (2022-12-28).
+
+**Known shortcoming:** Enricher: the measured number is the uutils base64 command, not the crate (uutils calls encode_to_string per chunk and copies into a VecDeque); system time 1.937 s vs GNU 0.996 s; the input is 4 GB of the single byte 'A' (issue #8574); machine unstated, and the reporter's i7-13620H measured GNU at 2.461 s against the maintainer's 4.901 s. The measured code is crates.io 0.8.0 (2022-12-28); no AVX-512 path (#67); open #78 (unreachable!() with target-cpu=x86-64-v2) and #43 (Rust 1.75 vpavgb regression); the author opened #81 on 2026-10-08 to restore maintenance with AI assistance.
+
+**Independent measurement:** verifier batch-114 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Encoding loads 24 input bytes into a 256-bit register (12 into 128-bit), splits them into 6-bit fields with shuffles and multiply-shift tricks, and maps the values to ASCII with a pshufb offset lookup table, following Wojciech Mula's 0x80.pl SIMD base64 algorithm; decoding and validation use aqrit's 'alsw' lookup scheme. The vsimd dispatch macro picks AVX2, SSSE3, NEON or WASM simd128 at runtime (feature 'detect', via std::arch feature detection) or at compile time when the target already enables AVX2/NEON/simd128, with a scalar fallback. The GNU baseline uses a scalar gnulib table loop, so the measured gain is SIMD against scalar code, not a language effect.
+
+**Use it when:**
+- Rust programs that encode or decode large base64 payloads (MIME bodies, data URLs, JSON blobs, CLI tools) where the base64 crate or a scalar loop shows up in profiles.
+- x86-64 with SSSE3 or AVX2, aarch64 with NEON, or wasm32 with simd128, where the crate's vector paths exist.
+- Validation-heavy paths: check() verifies base64 without writing output, and decode_inplace avoids a second buffer.
+- Browser-compatible decoding: the forgiving_decode functions implement the WHATWG forgiving-base64 rules.
+- no_std targets: the crate builds without std or alloc (runtime CPU detection then needs compile-time target features instead).
+
+**Skip it when:**
+- When you want the fastest base64 available: there is no AVX-512 (VBMI) path (issue #67 open since April 2026), while C libraries such as aklomp/base64, simdutf and Turbo-Base64 ship AVX-512 kernels; no head-to-head against them was found.
+- When you need line wrapping (76-column MIME, GNU base64 default) built in: the crate emits one unwrapped string, and the caller must insert newlines.
+- When you need fixes from the repository: the crates.io release is still 0.8.0 from 2022-12-28, and every later commit (dev version 0.9.0-dev, MSRV 1.85) is unreleased.
+- On CPUs without SSSE3 (old x86) or on other architectures (POWER, RISC-V, s390x), where it falls back to scalar code and loses its edge.
+- Projects that audit unsafe code strictly: the README says the project 'relies heavily on unsafe code'.
+
+**Integration:** crate · outref and vsimd (same repo); rayon only with the 'parallel' feature (which also needs 'unstable', i.e. nightly) · Rust 1.63 for the published 0.8.0 (crates.io rust_version); repository HEAD declares rust-version 1.85.0 · x86/x86-64 (SSSE3, AVX2), aarch64 (NEON), armv7 NEON with 'unstable', wasm32 simd128; scalar fallback elsewhere
+
+**Vs siblings:** Pick it when your Rust code needs a base64 or hex codec; the uutils coreutils sibling is the CLI that embeds this crate, and the other string-and-text siblings (regex, mail-parser, sd, tuc) solve different problems.
+
+**Gotchas:**
+- The 1.56x figure is the uutils base64 command, not the crate: uutils calls STANDARD.encode_to_string per chunk and then copies the String into a VecDeque (src/uucore/src/lib/features/encoding.rs), and its system time (1.937 s) is double GNU's (0.996 s), so the number mixes the crate with the uutils I/O path and understates the encoder alone.
+- The benchmark input is a 4 GB file containing only the letter 'A' (per the reporter in uutils issue #8574), timed on an undisclosed machine; on the reporter's i7-13620H GNU base64 took 2.461 s, half the 4.901 s the maintainer measured for GNU, and no post-fix run exists on that machine.
+- Open issue #78 (July 2026): building with -C target-cpu=x86-64-v2 makes unicode-simd's UTF-16/UTF-32 swap hit unreachable!() on SSSE3-only CPUs because the SSSE3 dispatch arm is not treated as SSE4.1; it shows the dispatch tables can be wrong for intermediate ISA levels, though base64-simd itself was not reported.
+- Open issue #43: a Rust 1.75 regression where LLVM stopped emitting vpavgb for _mm256_avg_epu8 (upstream stdarch #1477) slowed vsimd code; performance depends on the rustc version.
+
+**Status:** MIT-licensed and very widely used (about 165 million crates.io downloads), but in maintenance mode: no crates.io release since 0.8.0 (2022-12-28), commits since then are CI and dependency fixes (last 2026-08-30), and the author opened issue #81 'Restore project maintenance with AI assistance' on 2026-10-08.
+
+[repo](https://github.com/Nugine/simd) · [benchmark](https://github.com/uutils/coreutils/pull/8578)
+
+##### block-aligner  `Rust`  `MIT`  `stale`  `Tier C`
+
+Rust SIMD adaptive-block heuristic aligner (affine gaps, profiles); about 2-3x faster than Edlib, 1.5-2x than banded ksw2, approximate.
+
+**Beats:** parasail (C), ksw2 ksw_extz2_sse (C), Edlib (C++), WFA2-lib (C), each called from the Rust benchmark through FFI bindings (parasailors, ksw2-sys, edlib_rs, rust-wfa2) — In the author's executed notebook (AVX2 build, Rust nightly, CPU not stated, likely an x86-64 Mac), global alignment with traceback at a 1% block took 0.33-29.6 s per dataset versus 2.1-3.4x longer for Edlib, 1.5-2.1x for 1%-banded ksw2 and 5.7-29x for score-only parasail, while exact WFA2 was 8.4x faster on Illumina reads; proteins were 4-9x faster than parasail. A third-party Criterion chart (rchikhi/rust-alignbench, 1 kbp random DNA, block-aligner score-only at a fixed block of 16, no CPU stated) shows block-aligner flat at about 55-57 MB/s from 1% to 10% divergence against WFA2 falling from about 167 to 7.5 MB/s, parasail about 2 MB/s and unbanded ksw2_extz2_sse about 1 MB/s (read from the chart).
+
+**Known shortcoming:** Downgraded from B to C: the numbers come from the author's own notebook with no CPU model and C/C++ flags unstated; the Bioinformatics 2023 paper is unreachable (snippet only). It compares an approximate aligner against exact ones, parasail ran score-only, WFA2 is about 8.4x faster on Illumina, and libgaba (C) is about 2.3x faster on 25 kbp Nanopore in a separate harness. Stale; paper-access retier candidate.
+
+**Known shortcoming:** Enricher: harness flaws in examples/nanopore_bench_global.rs: the ksw2 scoring matrix is zeroed except mat[0]=2 and mat[1]=-4, so ksw2's scores and paths are meaningless; WFA2 runs with penalties 4/4/2 rather than the equivalent 6/4/3; parasail score-only goes through the _sat dispatcher; timer placement is uneven across tools. Open bugs #33 (empty CIGAR), #34 (traceback panic), #15 (traceback slowdown); trace memory about 477 MB for a 50 kbp pair (derived). Third-party rchikhi/rust-alignbench (Criterion, 1 kbp DNA, no CPU) shows block-aligner flat at about 55-57 MB/s against WFA2 167 to 7.5 MB/s and parasail about 2 MB/s, but block-aligner ran score-only and WFA2 full alignment.
+
+**Independent measurement:** verifier batch-112 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Instead of filling the whole DP matrix or a fixed band, it computes only a small square block that greedily shifts right or down depending on which edge holds the larger scores, grows from a saved checkpoint when the scores stall (large gaps, hard regions) and shrinks when a large block is not needed. Each block is filled with SIMD (SSE2, AVX2, Neon or WASM SIMD) using 16-bit score lanes plus 32-bit per-block offsets and a prefix-scan formulation of the gap recurrences, so the computed area stays close to the alignment path. The cost is that the result is heuristic: the block can leave the optimal path and return a suboptimal score.
+
+**Use it when:**
+- Global alignment with traceback of noisy long reads (Nanopore, roughly 1-50 kbp at 5-15% error) where an exact aligner's time grows with divergence; the author's notebook shows 2.1-3.4x over Edlib and 1.5-2.1x over 1%-banded ksw2.
+- Protein alignment with BLOSUM-style matrices or sequence-to-profile (PSSM) alignment, where WFA-family and bit-parallel edit-distance aligners do not apply; the notebook shows 4-9x over parasail on Uniclust30 and SCOP pairs.
+- Batches of alignments in one thread that can reuse one Block allocation sized for the longest pair, on x86-64 (AVX2 or SSE2), aarch64 (Neon) or WebAssembly SIMD.
+- X-drop extension around seeds when an approximate score and end position are acceptable.
+
+**Skip it when:**
+- You need the guaranteed optimal score: the block placement is heuristic, the README says it trades some accuracy for speed, and the maintainer notes repeats and large gaps can mislead it unless the block is made larger.
+- Short, low-divergence reads: in the same notebook exact WFA2 was about 8.4x faster on Illumina reads, and in a third-party benchmark (rchikhi/rust-alignbench, 1 kbp random DNA) WFA2 was about 3x faster at 1% divergence.
+- Unit-cost edit distance on long DNA, where exact bit-parallel tools (A*PA2, Edlib) or, on the 25 kbp Nanopore set, libgaba and the Suzuki-Kasahara difference-recurrence codes (about 2x faster in the notebook, separate harness) are competitive.
+- Very long sequences with traceback on limited memory: the trace arrays hold (max_block/16) x (n+m+2+2*max_block) 32-bit words twice with AVX2, which is about 477 MB for a 50 kbp pair at max block 8192 (derived from Trace::new).
+- Large scores: lanes are 16-bit, so very large blocks or scores saturate (README: use a smaller block size); gap penalties are i8 and open must be strictly larger in magnitude than extend.
+
+**Integration:** crate (block-aligner on crates.io, 0.5.1); C API built from c/ as a static library · none at runtime (parasailors, rust-wfa2, edlib_rs, ksw2-sys and bio are dev-dependencies for benchmarks only) · Stable Rust, edition 2018 with const generics (no rust-version declared); nightly Rust and Linux or macOS for tests and benchmarks · x86-64 (SSE2 or AVX2), aarch64 (Neon), wasm32 (SIMD128); selected by Cargo feature at compile time, no runtime detection
+
+**Vs siblings:** Pick block-aligner over A*PA2, bitdp or Sassy when you need affine gaps with substitution matrices or profiles (proteins, PSSMs) or traceback on noisy long reads and can accept an approximate score; pick A*PA2 for exact unit-cost long-read alignment, Sassy for pattern search in text, and note that the same author's triple_accel covers only Hamming and Levenshtein and has no measured claim.
+
+**Gotchas:**
+- Harness flaws in examples/nanopore_bench_global.rs (behind the DNA numbers): the ksw2 scoring matrix is a zeroed 5x5 array with only mat[0]=2 and mat[1]=-4 set, so ksw_extz2_sse scores A:A=+2, A:C=-4 and every other pair 0 and solves a different problem from block-aligner's +2/-4 matrix (fixed-band fill time is probably little affected, but its scores and paths are meaningless); WFA2 runs with penalties mismatch 4, open 4, extend 2, while the WFA equivalent of the shared +2/-4, gap -6/-2 scheme is mismatch 6, open 4, extend 3, so WFA2 solves an easier lower-penalty problem that likely flatters WFA2.
+- Parasail is timed score-only (no traceback, which favours parasail) through parasail_nw_striped_profile_sat, the dispatcher that runs the 8-bit kernel first and recomputes at 16 and 32 bits on overflow; kilobase global scores overflow 8 bits, so parasail's times likely include a discarded pass. Timer placement also differs: in the DNA bench Block::new is outside the timer while Edlib and ksw2 allocate inside it; in uc_bench block-aligner's per-pair allocation is inside the timer and only block-aligner gets warm-up runs.
+- No runtime CPU dispatch: building without a SIMD feature hits compile_error, the no_simd feature compiles none of the aligner modules, an AVX2 build crashes on CPUs without AVX2, and two SIMD features enabled at once (possible through Cargo feature unification) would re-export L twice (inferred from lib.rs). Block sizes must be powers of two, at least 32 recommended and at most 16384.
+- Open bugs with no maintainer reply: #33 returns an empty CIGAR for 1-2 bp sequences when FREE_QUERY_END_GAPS is set, #34 panics with 'Traceback cigar end position must be in bounds!' on a repetitive query containing an N run with free query gaps, and #15 (open since 2022) says traceback became much slower after a gap-traceback correctness fix.
+
+**Status:** Stale: last release 0.5.1 and last commit 2024-06-23, with 2024-2025 bug reports unanswered, but MIT-licensed, dependency-free and on stable Rust, so usable as a crate if you pin the SIMD feature per target and validate scores on your data.
+
+[repo](https://github.com/Daniel-Liu-c0deb0t/block-aligner) · [benchmark](https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/block-aligner/HEAD/vis/block_aligner_bench_vis.ipynb)
+
 ##### cw (Rust wc replacement)  `Rust`  `MIT`  `abandoned`  `Tier C`
 
 Rust wc clone with SIMD line and UTF-8 character counting; 1.5-70x faster than FreeBSD 12 wc and GNU wc 8.30 in 2019.
@@ -75388,6 +76681,49 @@ Rust command-line filter that drops duplicate lines with a hash set, replacing s
 **Status:** Stale: last release 2.7.0 on 2022-04-20 and last commit 2024-01-26 (a trivial trim_end change), with the broken-pipe panic still open; BSD-3-Clause per Cargo.toml and the readme text (GitHub detects no LICENSE file), one 217-line Rust file and easy to vendor; 265 stars and 355,150 crates.io downloads; the README benchmark measured 2.1.0, whose hash call had an out-of-bounds read, and has not been re-run since.
 
 [repo](https://github.com/koraa/huniq) · [benchmark](https://github.com/koraa/huniq)
+
+##### hunt (hunt-rs)  `Rust`  `MIT`  `stale`  `Tier C`
+
+Multithreaded Rust file-name finder (CLI); the author's warm-cache README runs show it 5.5-12x faster than GNU find.
+
+**Beats:** GNU find (C) — The author's own hyperfine runs on one undescribed machine (about 2.76 million files including a network and an external drive; CPU, kernel, filesystem, GNU find version and cache state not stated, and the script warms up once): finding a deeply nested hidden file under ~/ took 180.2 ms with the hunt build of May 2023 against 2.219 s for `find ~/ -name SomeFile -print -quit` (12.3x), and listing every name containing 'SomeFile' from / took 633.6 ms with the January 2022 build against 3.473 s for `find / -name "*SomeFile*"` (5.5x). In the second case hunt used about 1.9x find's total CPU time, so the speedup comes from running the walk on many cores.
+
+**Known shortcoming:** Multithreaded hunt against single-threaded GNU find: total CPU 1.54 s vs 1.58 s and 5.38 s vs 2.84 s (derived from page data), so the 12.31x and 5.48x are wall-clock parallelism; warm cache (--warmup 1); no hardware stated; the script is benchmarks/run; stale since 2025-07-06.
+
+**Known shortcoming:** Enricher: the README numbers predate 3.0.0 and come from two builds 16 months apart (the '/' rows from commit 060b8f4, 2022-01-15, and the first-match rows from aab3011, 2023-05-26); benchmarks/run cannot reproduce them (no find row for '/', different fd flags, warm cache, --ignore-failure). Docs drift (--first and 'whole system' wrong; HEAD searches only '.' by default); --ignore canonicalises every entry and silently drops dangling symlinks; the README's xargs rm -r example splits paths with spaces; output is lossy for non-UTF-8 names.
+
+**Independent measurement:** verifier batch-114 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Parallel directory traversal. search_dir() opens a rayon scope per directory and spawns every subdirectory as a work-stealing task with no depth limit by default (the HUNT_MAX_DEPTH environment variable switches deeper levels to serial recursion), so readdir calls for many directories run on all cores at once while GNU find walks one directory at a time. Per entry it takes the file type from the directory entry, does the substring test with a prebuilt memchr::memmem::Finder, allocates through mimalloc (the author reports about 15% from mimalloc in issue #8) and sends hits over a bounded crossbeam channel; --first calls process::exit on the first received hit. The README's own CPU columns show the win is wall-clock parallelism, not less work: about 1.54 s of user+system CPU for hunt against 1.58 s for find in the first-match case, and 5.38 s against 2.84 s in the all-matches case (derived from page data).
+
+**Use it when:**
+- Interactive 'where did I put that file' lookups by name fragment over a large home directory or whole disk on a many-core machine with a warm dentry and inode cache.
+- Quick substring or exact-name searches where grouped, sorted output (exact matches listed separately) is more useful than find's stream.
+- Finding the first copy of a uniquely named file deep in a tree, where a parallel walk reaches deep branches sooner than find's depth-first order.
+- Picking a result interactively (--select, --multiselect) in a shell session.
+
+**Skip it when:**
+- Scripts that need find semantics: no -mtime/-size/-perm/-exec/-prune, no regex or glob patterns, different option syntax, and output is buffered, grouped and sorted unless -ss is passed.
+- Paths that must be piped safely: there is no -print0 option, paths are converted with to_string_lossy (non-UTF-8 names come out with U+FFFD), and the README's own `hunt -s -e SomeFile | xargs rm -r` example splits names containing spaces.
+- Machines with few cores, cold caches, spinning disks or network filesystems: hunt spent equal or more total CPU than find in the README runs, so the margin rests on idle cores and on concurrent metadata I/O being fast; no cold-cache or low-core numbers exist.
+- Reproducible first-match results: with several matching files the parallel walk returns whichever is found first, which can differ between runs.
+- Long-lived tooling: last commit 2025-07-06, last release 3.0.0 (2024-11-13), single maintainer.
+
+**Integration:** binary crate (CLI; cargo install hunt, cargo binstall, or prebuilt release binaries) · clap, colored, rayon, crossbeam-channel, mimalloc (C allocator built from source), thin_str, memchr, inquire, profi; rustix on Linux, winapi-util on Windows · crates.io 3.0.0 declares rust-version 1.74.1; the HEAD Cargo.toml uses edition 2024 (Rust 1.85 or newer) · prebuilt for x86_64 Linux, x86_64 and aarch64 macOS, x86_64 Windows (cargo-dist targets); Unix and Windows code paths in source
+
+**Vs siblings:** Pick hunt over fd (catalogued under systems-and-safety) only for plain name-fragment lookups where its grouped exact/contains output helps. fd has regex and glob patterns, .gitignore handling and -x/-X exec, and hunt's README win over fd (5.07x first match, 2.29x all matches) was measured on 2022-2023 builds. Use the walkdir or ignore crates (bench_walk) to embed a directory walker in Rust code, and uutils findutils when you need find-compatible syntax.
+
+**Gotchas:**
+- The README numbers describe old builds, measured 16 months apart: the all-matches-from-/ rows (633.6 ms vs 3.473 s) were added in commit 060b8f4 on 2022-01-15, the hunt 1.5.x era when it still used jetscii and aho-corasick, and the first-match rows (180.2 ms vs 2.219 s) in commit aab3011 with the 2.0.0 release on 2023-05-26. Neither covers 3.0.0 or HEAD. The two cases also name different home directories (/home/user and /home/lyon). The shipped benchmarks/run script cannot regenerate them: it has no find row for the / case, passes fd --unrestricted instead of the README's fd flags, and runs hyperfine with --warmup 1 --ignore-failure, so every timing is warm-cache. The README points to a benchmarks.sh file that does not exist.
+- The README says --first searches [current_dir, home_dir, root] and that `hunt -f -e SomeFile` searches the whole system. At HEAD, search.rs walks only '.' when no directory is given.
+- Passing --ignore makes is_result() call canonicalize() (a realpath walk) on every entry visited, a large per-entry cost, and an entry whose canonicalize fails, such as a dangling symlink, is silently dropped from the results.
+- Case-insensitive mode lowercases file names with to_ascii_lowercase while the automatic case-sensitivity switch checks Unicode uppercase, so non-ASCII letters match only in the same case. Directories given twice (one nested in another) are walked twice (documented; dedup request #6 is open). Read errors are skipped silently unless -v is set.
+
+**Status:** Stale: last commit 2025-07-06 (dependency, edition and flake updates) and last release 3.0.0 on 2024-11-13; MIT-licensed, about 42k crates.io downloads and 104 stars; installable from crates.io or prebuilt binaries, but the published speed numbers predate 3.0.0.
+
+[repo](https://github.com/LyonSyonII/hunt-rs) · [benchmark](https://github.com/LyonSyonII/hunt-rs)
 
 ##### hwc (Haskell wc)  `Haskell`  `BSD-3-Clause`  `abandoned`  `Tier C`
 
@@ -75864,6 +77200,49 @@ Rust reimplementation of MeCab's Viterbi lattice tokenizer for Japanese; about 2
 
 [repo](https://github.com/daac-tools/vibrato) · [benchmark](https://github.com/daac-tools/vibrato/wiki/Speed-Comparison)
 
+##### walkdir and ignore walkers (dkorunic/bench_walk shootout)  `Rust`  `MIT`  `active`  `Tier C`
+
+Criterion shootout of Rust directory walkers; walkdir edges out a spawned GNU find, parallel ignore wins 3.7x with 8 threads.
+
+**Beats:** GNU find (C), system find invoked as 'find <root>' — On one Xeon E5-1630 v3 (4 cores, 8 threads), ext4 on SATA RAID-10, warm cache, shallow Linux kernel clone, Criterion 80 s warm-up and 400 s measurement: walkdir 68.39 ms against a spawned GNU find 90.62 ms (about 1.3x, derived from page data) and against glibc fts via the fts crate 81.62 ms (about 1.19x), and parallel ignore 24.73 ms with 8 threads (about 3.7x against single-threaded find). Cargo bench profile is opt-level 3, fat LTO, one codegen unit; rustc, GNU find and glibc versions are not stated.
+
+**Known shortcoming:** The find row includes process spawn and captured output while the crate rows print nothing; the parallel 3.7x is 8 threads against single-threaded find. CPU is a Xeon E5-1630 v3 (4 cores, 8 threads; the README says 8-core); rustc and find versions unstated. A fairer C row: walkdir beats fts(3) by about 1.19x (derived from page data). The ignore crate is part of the listed ripgrep project.
+
+**Known shortcoming:** Enricher: the find row runs as a subprocess that pipes and buffers all output while the crate rows only iterate, and walkdir's own README says its speed is comparable to find and nftw, so the stable 1.3x serial win (three published tables) is most likely harness overhead; the parallel 3.7x is 8 threads on a 4-core/8-thread E5-1630 v3 against single-threaded find; the fts_walkdir row is glibc fts behind a Rust wrapper copying two PathBufs per entry.
+
+**Independent measurement:** verifier batch-115 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** walkdir, walkdir_minimal, ignore and jwalk read each directory once and use the d_type field from readdir(3) to tell files from directories, so they never stat an entry when only paths are wanted; the README attributes the second tier (walker, fsindex and others several times slower) to a syscall per entry. ignore's parallel walker (crossbeam-deque work stealing) and jwalk/swdir spread directories over threads, giving about 2.7x over the best serial walker on 8 hardware threads because traversal is syscall-bound.
+
+**Use it when:**
+- Rust programs that must enumerate large trees (source checkouts, build outputs, backup scanners) and only need paths and file types: walkdir serially, ignore's build_parallel() when you can use several cores.
+- Tools that need gitignore, hidden-file and glob filtering during the walk: ignore applies them while walking instead of filtering a find listing afterwards.
+- Warm-cache traversals of tens of thousands of entries where per-entry stat calls would dominate (walker and fsindex, which stat every entry, were about 3x slower than walkdir here).
+- Replacing a spawned find subprocess inside a Rust service, which also removes process start-up and stdout parsing.
+
+**Skip it when:**
+- As evidence that Rust walks faster than C: walkdir's own README says its speed is comparable with find and glibc nftw with no observable difference, and the 1.3x gap here sets an in-process iterator against a find subprocess whose output is piped and buffered.
+- Shell use as a find replacement: these are crates; for a CLI see hunt, and find's predicate language (-newer, -exec, -perm) has no equivalent here.
+- Workloads that need ordered output: every crate here ran with sorting disabled, and ignore's parallel visitor runs on several threads at once, so entries do not arrive in sorted order.
+- Cold-cache or network filesystems: every number in the table is warm page cache on local ext4 RAID-10, so disk seek behaviour was not measured.
+- Code that needs per-entry metadata anyway: once each entry is stat'ed, the d_type advantage that separates the top tier from walker and fsindex disappears.
+
+**Integration:** crate · walkdir: same-file (plus winapi-util on Windows); ignore: crossbeam-deque, globset, log, memchr, regex-automata, same-file, walkdir (plus winapi-util on Windows) · walkdir: Rust 1.60.0 (README MSRV policy); ignore 0.4.33: Rust 1.88 (crates.io rust-version; 0.4.26 as benchmarked declares none) · any std target: walkdir is described as cross-platform and both crates carry Windows-specific dependencies; the benchmark itself ran only on Linux x86-64
+
+**Vs siblings:** Use walkdir or ignore when traversal is embedded in your own Rust code; hunt is the catalogued CLI replacement for GNU find (12x on a first-match search), uutils findutils has no speed claim, and ripgrep is the listed tool that already ships the ignore walker.
+
+**Gotchas:**
+- Harness asymmetry behind the serial win: src/lib.rs times find as Command::new("find").arg(root).output(), so the find row includes process spawn and writing every path through a pipe into a buffered Vec, while the crate rows only iterate (for _ in WalkDir::new(root) {}). walkdir's README reports parity with find and nftw on the author's own runs, so the 1.3x serial margin is most plausibly this overhead, not a faster walk; the ratio was stable at about 1.3x across the three published tables (Oct 2024: 54.98 ms vs 72.39 ms; June 2026: 69.50 vs 93.68 and 68.39 vs 90.62).
+- The parallel 3.7x is 8 threads (num_cpus::get() on a 4-core, 8-thread Xeon E5-1630 v3, which the README calls 8-core and '8 physical cores') against single-threaded find; the fairer parallel comparison is only among the crates.
+- The 'C' row closest to like-for-like, fts_walkdir, is glibc fts(3) called through the fts crate, whose wrapper copies each entry into two PathBufs (path and name), so walkdir's 1.19x margin over it also includes Rust wrapper cost.
+- The test tree is a fresh depth-1 clone of torvalds/linux HEAD that the bench deletes when it finishes, and the kernel commit is not recorded, so absolute times are not comparable between README versions (they rose from 55 ms to 68 ms for walkdir between the 2024 and 2026 tables); each table itself comes from one run, since every row changed in each update.
+
+**Status:** The shootout repo is active (last commits 2026-06-06, MIT) and the winners are healthy, widely used crates (walkdir 680M downloads, last release 2.5.0 in March 2024; ignore 189M downloads, 0.4.33 in August 2026, both Unlicense/MIT), but the serial win over find is a harness artifact and the parallel win is threads against one thread, so treat the entry as a crate recommendation rather than a language-speed result.
+
+[repo](https://github.com/dkorunic/bench_walk) · [benchmark](https://github.com/dkorunic/bench_walk)
+
 ##### wc in Haskell ('Beating C with 80 lines of Haskell')  `Haskell`  `BSD-3-Clause`  `abandoned`  `Tier C`
 
 Haskell wc clone that beats single-threaded macOS wc only by splitting the file across 4 cores.
@@ -76079,6 +77458,49 @@ Zig csv-zero field iterator plus std.fmt.parseFloat in LangArena CSV::Parse; 2.3
 
 [repo](https://github.com/kostya/LangArena) · [benchmark](https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js)
 
+##### zspell  `Rust`  `Apache-2.0`  `stale`  `Tier C`
+
+Pure-Rust Hunspell-format spellchecker that pre-expands affixes for near-constant 47-63 ns word checks, about 4-27x faster than Hunspell on en_US.
+
+**Beats:** Hunspell and Nuspell (C++) through the-mikedavis/ffi-dictionaries — Independent numbers exist that the record missed: Spellbook's docs/compare.md (helix-editor/spellbook, written by Spellbook's author on 2024-11-13) times zspell check_word on the stock en_US dictionary at 46.86 ns ('earth'), 50.51 ns ('Earth'), 52.63 ns ('EARTH'), 54.52 ns ('unearth'), 61.13 ns ('unearthed') and 62.47 ns ('reearth', misspelled), against Hunspell at 212.30, 827.88, 1,426.46, 288.74, 448.48 and 1,175.15 ns and Nuspell at 126.97, 513.78, 280.78, 924.66, 534.85 and 520.51 ns in the same-format libtest table (Hunspell and Nuspell called through Rust FFI from the-mikedavis/ffi-dictionaries), so about 4.5x to 27x faster than Hunspell (derived from page data); hardware, compiler and zspell version are not stated, the zspell benchmark code was not found in that repository, and zspell fails the compound and number cases.
+
+**Known shortcoming:** 'Tends to outperform' has no numbers and no named baseline; the benches only time internal hash sets. 63 stars, stale since 2024-07-09.
+
+**Known shortcoming:** Enricher: independent numbers exist in helix-editor/spellbook docs/compare.md (2024-11-13, by the Spellbook author, Hunspell and Nuspell through ffi-dictionaries): zspell check_word 'earth' 46.86 ns vs Hunspell 212.30 and Nuspell 126.97, 'EARTH' 52.63 vs Hunspell 1,426.46, about 4.5-27x over Hunspell (derived from page data); no hardware, compiler or zspell version. The current compare.md re-ran the other engines with Criterion in 2026-06 while the zspell table is still the 2024 run, so use the table at ca13e83. Costs: 57 MB peak heap vs Hunspell 3.2 MB; pt_BR ran over 6 minutes and 100 GB before being killed; no compounds; stacked suffixes rejected (#116). Raised from D to C.
+
+**Independent measurement:** verifier batch-115 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** At build time it applies every prefix and suffix rule to every stem and stores all resulting surface forms in hashbrown hash maps (main, nosuggest and forbidden word lists), so a check is a few hash lookups of the word and its lowercase form instead of Hunspell's runtime affix stripping and flag checks. The README frames this as optimizing for the common case that most words are correct and that a compiled word list fits in memory (about 20 MiB by its estimate). The library is #![forbid(unsafe_code)].
+
+**Use it when:**
+- Checking large volumes of mostly correct text against a simple dictionary such as en_US, where per-word latency matters and tens of MB of RAM are acceptable.
+- Rust or Python programs that want a no-unsafe, no-C-dependency checker for Hunspell-format dictionaries without linking libhunspell.
+- Stemming and morphological lookups (entry API returning stems and morph info) on dictionaries whose affix rules zspell expands correctly.
+- Long-running processes that build the dictionary once and amortize the expansion cost over many checks.
+
+**Skip it when:**
+- Morphologically rich dictionaries: the Spellbook author reports pt_BR (312,000 stems, 47 prefixes, 57 suffixes) ran over six minutes and past 100 GB of memory before being killed, versus about 100 ms for Spellbook.
+- When you need suggestions, compound words (COMPOUNDRULE, e.g. en_US '20000th') or numbers ('8675,309.0'); these are missing or unstable.
+- Memory-constrained or short-lived processes: en_US peaks at about 57 MB of heap against about 3.2 MB for Hunspell and 4.2 MB for Nuspell (DHAT, Spellbook compare doc).
+- Languages with stacked suffixes such as French: open issue #116 reports 'répondez' and 'projections' wrongly rejected because multiple suffix stripping does not work.
+- Projects that need an active upstream: no commits since 2024-07-09 (dependency bumps; last release 0.5.5 on 2024-06-13).
+
+**Integration:** crate · cfg-if, dirs, hashbrown, itertools, lazy_static, regex, stringmetrics, sys-locale, unicode-segmentation, visibility, xxhash-rust · Rust 1.65 for the library (README MSRV); the CLI and test runner track newer Rust · any Rust target (pure safe Rust); prebuilt CLI binaries and Python wheels for common platforms
+
+**Vs siblings:** Pick Spellbook (also Rust, measured against Hunspell and Nuspell, with suggestions, compounds and about 2 MB peak heap) by default; pick zspell only when you check en_US-like dictionaries in bulk, want the stem and morph entry API, CLI or Python bindings, and can spend tens of MB for its flat 47-63 ns checks (faster than Spellbook's 2024 figures of 66-540 ns on the same words).
+
+**Gotchas:**
+- Speed is bought with eager affix expansion: build time and memory scale with stems times applicable affixes, which is fine for en_US (about 57 MB peak) and unusable for pt_BR (over 100 GB before being killed, per Spellbook's compare doc).
+- check_word allocates a lowercase String on every call and only tries the word as given and its full lowercase form; it does not implement Hunspell's capitalization rules beyond that (for example all-caps forms of mixed-case entries are not mapped back to title case).
+- The current Spellbook compare doc mixes runs: its Hunspell, Nuspell and Spellbook table was re-measured with Criterion on 2026-06-07 (commit 09013cf), while the ZSpell table is the 2024-11-13 libtest ns/iter run, and the current table's word_with_suffix row uses 'earthed' where the ZSpell row uses 'earthly'. Compare ZSpell only against the 2024 table (commit ca13e83 or 781c609).
+- zspell's own benches/findings.md times internal collection choices only, and its Vec row is internally inconsistent (a miss, which must scan the whole list, is listed at 1.91 us against 594 us for a hit), so it says nothing about speed against Hunspell.
+
+**Status:** Stale since 2024-07-09 (last release 0.5.5) but Apache-2.0 and small; the record's 'no comparison found' is superseded by Spellbook's independent 2024 measurement (a retier above D looks justified, capped by the unstated hardware and the unpublished zspell bench), while its memory blow-up on complex dictionaries and missing compounds or suggestions limit it to en_US-like bulk checking.
+
+[repo](https://github.com/pluots/zspell) · [benchmark](https://github.com/pluots/zspell)
+
 ##### awkrs (Rust AWK)  `Rust`  `MIT`  `active`  `Tier D`
 
 AWK implementation in Rust with a fused bytecode VM; its single-rule fast paths run 2-5x faster than mawk on 1M-line files.
@@ -76249,6 +77671,90 @@ pt: an ack/ag-style recursive code searcher in Go. A single 2015 first-party run
 
 [repo](https://github.com/monochromegane/the_platinum_searcher) · [benchmark](https://raw.githubusercontent.com/monochromegane/the_platinum_searcher/HEAD/README.md)
 
+##### triple_accel  `Rust`  `MIT`  `abandoned`  `Tier D`
+
+Rust crate of AVX2/SSE4.1 banded Hamming, Levenshtein and restricted Damerau-Levenshtein routines; no measured win over Edlib or any C/C++ library.
+
+**Beats:** none measured: the README and benches compare only against the crate's own scalar fallback; no edlib (C++) or parasail (C) comparison found — Nothing against a C or C++ baseline was measured: the README's 20-30x line is a general remark about SIMD versus scalar code, and the crate's criterion benches compare only its own SIMD and scalar routines without published numbers. The only cross-library timing found is block-aligner's rand_scan bench (Rust, rust-bio's wrapper around triple_accel), which does different work (exact bounded Levenshtein against block-aligner's adaptive-band NW1 scoring with affine gaps), so it is not a like-for-like comparison.
+
+**Known shortcoming:** No C or C++ baseline and no numbers; the '20-30x' is README motivation, not a measurement. About 2.04M crates.io downloads; abandoned since 2022-12-05.
+
+**Known shortcoming:** Enricher: wrong results with the SIMD path on (issue #17, open: rdamerau('AL NASSER','HALA NASSER') returns 3, should be 2; fix PR #19 unmerged); traceback wrong with gap-open costs (#9); soundness issues #4, #6, #16, #20 (alloc_str frees with the wrong alignment; hamming_words_64/128 are safe public functions that read out of bounds and misaligned under Miri); no NEON path. Its own bench compares SIMD only to its own scalar code, whose levenshtein_naive is full O(nm) DP, so banding gains mix into the SIMD gain; block-aligner's 34x row calls it through rust-bio with different scoring and work.
+
+**Independent measurement:** verifier batch-112 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Levenshtein runs as a Ukkonen-style banded DP (band set by the bound k, which levenshtein_exp finds by exponential search starting at k=30 and doubling) whose anti-diagonals are held in SIMD registers ('Jewel' vectors: 1, 2, 4 or 8 AVX2 registers of 8-bit cells, or wider 16-bit and 32-bit cells), updated with alignr/permute shifts, cmpeq and unsigned min. The cell width and register count are chosen at runtime from k and the string lengths, and AVX2 or SSE4.1 is picked by is_x86_feature_detected. Hamming uses a 32-byte cmpeq per step (hamming_simd_parallel), with SWAR u64/u128 variants for aligned buffers.
+
+**Use it when:**
+- Rust code on x86-64 that needs exact Levenshtein or Hamming distance between byte strings of tens to a few thousand bytes where the expected distance is small relative to length (the banded, exponential-search path is what pays off).
+- Fuzzy matching or deduplication over ASCII keys (BK-trees, spell lookups); bk-tree and editdistancek on crates.io already depend on it.
+- Short-read or barcode matching with unit or simple affine-ish costs where a k-bounded answer (None above k) is useful and no traceback precision with gap-open costs is needed.
+- Builds where a zero-dependency crate with automatic scalar fallback is preferred over FFI to Edlib or parasail.
+
+**Skip it when:**
+- rdamerau or any RDAMERAU_COSTS call on the SIMD path: issue #17 (open) reports rdamerau('AL NASSER','HALA NASSER') returns 3 with SIMD and 2 with default-features = false, and levenshtein_simd_k_with_opts('warsa','was',3,RDAMERAU_COSTS) returns 3 instead of 2; the proposed fix (PR #19) is unmerged.
+- Tracebacks with non-zero gap-open costs: issue #9 (open since May 2022) reports inaccurate traceback.
+- Long sequences with high divergence: with a large bound the band covers most of the matrix and the 16-bit or 32-bit paths are used; block-aligner's own bench (via rust-bio's bounded_levenshtein wrapper) times it at about 7.8 ms for a 10 kbp pair at K=1000.
+- aarch64 / Apple Silicon or WASM: SIMD paths are x86-only; elsewhere every call runs the scalar fallback (maintainer in issue #11: no NEON support).
+- Unicode text: u8 only; levenshtein_simd_k_str maps non-ASCII chars to bytes and returns None for more than 256 distinct characters, which is indistinguishable from 'distance above k' (PR #21 open).
+
+**Integration:** crate · none at runtime (criterion 0.3 and rand 0.7.3 are dev-dependencies for benches) · Rust 2018 edition on stable; no rust-version (MSRV) declared in Cargo.toml · any for scalar paths; SIMD only on x86 and x86-64 (AVX2 or SSE4.1, detected at runtime)
+
+**Vs siblings:** Pick it over block-aligner (same author, affine-gap adaptive banding, NEON and WASM support) only when you need exact unit-cost Levenshtein or Hamming distance in a tiny dependency-free crate on x86; for pattern search against Edlib-class speed Sassy is the measured choice, and for exact global alignment of long divergent sequences A*PA2 or bitdp have published C/C++ comparisons.
+
+**Gotchas:**
+- hamming_words_64 and hamming_words_128 are safe pub fns that cast &[u8] to u64/u128 pointers and read a whole word for the tail: issue #20 (open, Miri reproductions) shows out-of-bounds reads and misaligned loads on ordinary slices. They are only safe on buffers from alloc_str; the default hamming() uses hamming_simd_parallel with unaligned loads and is not affected.
+- alloc_str builds a Vec<u8> from a Vec<u128> allocation, so it frees with a different alignment than it allocated (issue #6, open; the maintainer agreed and proposed removing it) and can overflow its capacity calculation (issue #16).
+- hamming_search and hamming_search_simd_with_opts panic if the haystack contains a zero byte; the &str and byte APIs give no error type, only Option.
+- The crate's benches (benches/rand_benchmarks.rs) check each SIMD result against the naive routine before timing, but compare only against its own scalar code on random printable-ASCII strings with 5-10% edits, and levenshtein_naive is the full O(nm) DP, so that group mixes the banding gain with the SIMD gain; no results are saved in the repo (issue #8 asks for them).
+
+**Status:** Abandoned: last commit 2022-12-05, last release 0.4.0 on 2021-06-18, with open soundness (issues #4, #6, #16, #20) and wrong-result (#9, #17) reports and five unmerged PRs; MIT-licensed and still widely pulled in (about 2.04M crates.io downloads, mostly via bk-tree and editdistancek), so pin it and avoid rdamerau and the words_* Hamming helpers.
+
+[repo](https://github.com/Daniel-Liu-c0deb0t/triple_accel) · [benchmark](https://github.com/Daniel-Liu-c0deb0t/triple_accel)
+
+##### uutils findutils (find, xargs, locate, updatedb)  `Rust`  `MIT`  `active`  `Tier D`
+
+Rust reimplementation of GNU find, xargs, locate and updatedb aiming at drop-in compatibility; never timed against GNU find.
+
+**Beats:** GNU findutils find (C) — No speed measurement against GNU find exists: the README compares only GNU and bfs test-suite pass rates, the benches time uutils find alone with output discarded, and searches of the issue tracker and the web found no uutils-versus-GNU timing.
+
+**Known shortcoming:** No speed comparison with GNU find anywhere; the benches cover only uutils code. crates.io's newest release is 0.10.0 while Cargo.toml says 0.11.0.
+
+**Known shortcoming:** Enricher: still no GNU find timing anywhere (CodSpeed benches time uutils alone in simulation mode with output to io::sink); traversal is single-threaded walkdir with parallel traversal (#112) and a metadata cache (#430) still open; compatibility as of 2026-10-10 is 425 of 495 GNU tests and 274 of 317 bfs tests.
+
+**Independent measurement:** verifier batch-115 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** It does not claim to be faster and no speed technique is documented. Traversal is a single-threaded depth-first walk through the walkdir crate, -regex matching uses the Rust regex crate with onig (Oniguruma bindings) also in the dependency list, and release builds use fat LTO, codegen-units=1 and panic=abort. Parallel traversal (#112, open since 2021) and a metadata and user/group-name cache (#430, open since 2024) are the only performance ideas on the tracker.
+
+**Use it when:**
+- You want a memory-safe find/xargs/locate/updatedb that follows GNU syntax, for example alongside uutils coreutils on a Rust-based userland.
+- Windows, macOS, Linux or wasm32-wasip1 targets where GNU findutils is unavailable or awkward to ship; CI builds all four.
+- Embedding find semantics in a Rust program through find_main and the Dependencies trait, with output sent to your own writer.
+- Scripts that rely on find expression syntax (-prune, -printf, -regex, -size) and are covered by the passing part of the GNU test suite.
+
+**Skip it when:**
+- As a speed upgrade over GNU find: no comparison exists, traversal is single-threaded, and the project's benchmarks measure only its own code.
+- When exact GNU compatibility matters: the GNU test suite shows 425 of 495 tests passing and 69 failing, and the bfs suite 274 of 317 passing and 37 failing (findutils-tracking, 2026-10-10).
+- Large-tree searches where a parallel walker helps; hunt, fd or ignore-based walkers are the measured options.
+- Pure-Rust or minimal-dependency builds: it pulls in clap, chrono, nix, uucore, walkdir, regex and onig, the last binding the C Oniguruma library.
+
+**Integration:** crate with binaries (find, xargs, locate, updatedb) and a library API · argmax, chrono, clap, faccess, nix, onig (Oniguruma C library bindings), regex, uucore, walkdir, itertools, thiserror; rustix on WASI · Rust 1.88 (rust-version in Cargo.toml, edition 2021) · Linux, macOS and Windows tested in CI; wasm32-wasip1 build checked in CI
+
+**Vs siblings:** Pick it over hunt or walkdir/ignore-based walkers only when GNU find syntax and behaviour matter more than speed; hunt (12.31x on a first-match search) and walkdir in dkorunic/bench_walk (about 1.3x over system find) are the catalogued entries with measured wins over GNU find, and this project has none.
+
+**Gotchas:**
+- The repo's Criterion benches (benches/find_bench.rs and siblings) build a synthetic tree and call find_main with output sent to io::sink, and CodSpeed runs them in simulation mode; they track regressions in uutils itself and contain no GNU find baseline, so they cannot support a faster-than-GNU claim.
+- The repository Cargo.toml is at 0.11.0 while crates.io's latest release is 0.10.0 (2026-08-03), so cargo install findutils gives an older build than main.
+- Every file entry goes through a single-threaded walkdir walk; issue #430 (open) says file metadata is fetched repeatedly and uid/gid-to-name lookups are not cached, which costs most on -user, -group and -printf heavy expressions.
+
+**Status:** Actively maintained official uutils project (MIT, commits through 2026-10-12, crates.io 0.10.0 with about 21,000 downloads) that is a compatibility replacement rather than a performance pick; it stays at tier D on record only because it was proposed as faster than GNU find.
+
+[repo](https://github.com/uutils/findutils)
+
 ##### xerg (xtreme-grep, Rust parallel grep)  `Rust`  `MIT`  `active`  `Tier D`
 
 Small Rust learning-project grep (xerg) that searches files in parallel with rayon; claims 17.7-33.7x over macOS system grep on a target/ directory.
@@ -76290,6 +77796,49 @@ Small Rust learning-project grep (xerg) that searches files in parallel with ray
 **Status:** MIT-licensed bootcamp learning project with 3 stars, 51 commits and 142 crates.io downloads; no release or commit since 0.2.1 on 2025-11-14, and the record's 'active' status is stale; the speed claim deserves D-level weight given unequal work and an unpublished harness.
 
 [repo](https://github.com/yinkam/xtreme-grep) · [benchmark](https://raw.githubusercontent.com/yinkam/xtreme-grep/HEAD/README.md)
+
+##### zeebo/xxh3 (Go XXH3 with assembly)  `Go`  `BSD-2-Clause`  `active`  `Tier D`
+
+Go port of XXH3 64/128-bit hashing with avo-generated SSE2/AVX2/AVX-512/NEON accumulators; no measured win over C xxHash.
+
+**Beats:** xxHash XXH3 (C reference implementation by Cyan4973), not benchmarked in the repository — Only Go throughput is published: on a Ryzen 9 9950X (README updated 2026-07-23, Go version and flags not stated) a 64-bit hash of 100 KB takes 4.03 us with the scalar Go path, 2.10 us SSE2, 1.07 us AVX2 and 685 ns AVX-512 (149 GB/s); a 2020 i7-8850H table gives 13.0, 4.05 and 2.31 us. No C xxHash timing exists in the repository (internal/compare benchmarks cespare/xxhash, a Go XXH64), so the record shows no win over the C baseline.
+
+**Known shortcoming:** No C timing anywhere: _compat.c only generates test vectors and compare_test.go benchmarks cespare/xxhash (Go); any speed comes from avo-generated assembly.
+
+**Known shortcoming:** Enricher: the README Rate column above 240 B is the forced pure-Go path (withGeneric in hash64_test.go), not what amd64 users get; default dispatch prefers AVX2 over SSE2 although the README's own Ryzen 9950X rows show SSE2 faster at 241 and 512 B, and AVX-512 (used from 1 KiB) is slower than SSE2 at 1024 B; the i7-8850H table dates from 2020-07-28, before the 2023 speedups.
+
+**Independent measurement:** verifier batch-117 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Inputs up to 240 bytes take XXH3's short paths as straight-line Go with bits.Mul64 128-bit multiply-fold steps and no loops below 129 bytes. Longer inputs run the 8-lane stripe accumulator (acc += lo32(data^secret) * hi32(data^secret), plus a scramble every 1 KiB block) in avo-generated assembly: SSE2, AVX2 or AVX-512 on amd64, chosen at run time with klauspost/cpuid (AVX-512 only from 1 KiB), and NEON on arm64 (added January 2026); every other GOARCH uses a scalar Go accumulator. Hash and HashString reinterpret the slice or string header through unsafe so no copy or allocation happens per call.
+
+**Use it when:**
+- Go services that need fast non-cryptographic hashing (content checksums, dedup keys, sharding, cache keys) without cgo: the 2026 README shows 1.2-3.9 ns per hash for 0-128 byte inputs and 96 GB/s (AVX2) or 149 GB/s (AVX-512) at 100 KB on a Ryzen 9 9950X.
+- When Go code must produce the same XXH3 or XXH128 values as C, C++ or Rust peers: the repo's compat tests check Go output against vectors printed by the upstream C library.
+- When you need 128-bit XXH3 or seeded XXH3 in Go; cespare/xxhash, the usual Go hash dependency, implements XXH64 only.
+- amd64 and arm64 deployments, where the SIMD paths exist; go-simd/xxhash's own measurements put zeebo/xxh3 ahead of it on Apple-silicon arm64 (about 22.9 vs 15.2 GB/s at 64 KiB) and slightly ahead on amd64 at 64 KiB.
+
+**Skip it when:**
+- Inside C or C++ programs: call upstream xxHash directly. Nothing in the repository times the C library, so there is no evidence this port beats it (upstream reports 59.4 GB/s AVX2 and 31.5 GB/s SSE2 on an i7-9700K with Clang 10; the port's i7-8850H table shows 44.3 and 25.3 GB/s on different hardware, which is not a comparison).
+- Targets other than amd64 and arm64 (ppc64le, s390x, riscv64, loong64) get only the scalar Go accumulator; go-simd/xxhash measured 10333 MB/s against this package's 4554 MB/s on an IBM z15 at 64 KiB.
+- Code that needs XXH3 with a caller-supplied secret, or XXH32/XXH64: only the default secret and seeds are supported.
+- Seeded hashing of many 241 B to tens-of-KB inputs: each seeded one-shot call re-derives the 192-byte secret (512 B SSE2: 20.3 vs 11.2 ns unseeded); reuse a NewSeed Hasher instead, or wait for open PR #28.
+- Anything adversarial (hash-flooding resistance, integrity against attackers): XXH3 is not a keyed cryptographic hash.
+
+**Integration:** module (Go package github.com/zeebo/xxh3, plain Go assembly files, no cgo) · github.com/klauspost/cpuid/v2 (CPU feature detection on amd64); github.com/zeebo/assert for tests only · Go 1.22 (go.mod); assembly is pre-generated, avo is only needed to regenerate it · amd64 (SSE2 baseline, AVX2 and AVX-512F selected at run time), arm64 (NEON); all other GOARCH values build with the scalar Go path (the Makefile vets 386, arm, windows and darwin targets)
+
+**Vs siblings:** No hashing library is catalogued in string-and-text (the siblings are parsers, text tools and LangArena rows). Among Go hash packages, pick it over cespare/xxhash when you need XXH3 or XXH128 values, and over go-simd/xxhash on amd64 and arm64, where go-simd's own numbers show zeebo/xxh3 faster; go-simd wins on s390x and other architectures with no SIMD path here.
+
+**Gotchas:**
+- Run-time dispatch always prefers AVX2 over SSE2 and switches to AVX-512 at 1 KiB, yet the README's own Ryzen 9 9950X columns show SSE2 faster than AVX2 at 241 B (7.95 vs 11.3 ns) and 512 B (11.2 vs 14.1 ns) and AVX-512 slower than SSE2 at 1024 B (23.9 vs 20.7 ns). The per-ISA columns come from benchmarks that force each path (withSSE2/withAVX2 overrides in hash64_test.go), so the default path is not the fastest column between 241 B and 1 KiB on that CPU.
+- Benchmark harness: the README 'Rate' column above 240 B is the forced scalar Go accumulator (withGeneric in BenchmarkFixed64), not what amd64 users get; every benchmark rehashes one zero-filled buffer, so the 100 KB rows are cache-resident; the Intel i7-8850H tables were last edited on 2020-07-28, before the January 2023 'Improve pure Go speed up to 45%' and May 2023 AVX2/AVX-512 speedups, so they describe older code. Go version and flags are not stated for either machine.
+- The streaming Hasher once returned wrong hashes for payloads over 1089 bytes (issue #14, fixed September 2021), and its Write path was rewritten on 2026-09-08 ('Avoid buffered copies for chunked writes'). Reading the new block-bridging code, it keeps more than 64 unprocessed bytes whenever a block has been consumed, as XXH3's final stripe requires, but it is recent code; pin a version and keep a streaming-versus-one-shot test in your own suite.
+- Heavy unsafe use: []byte inputs are reinterpreted as string headers and loads use manual pointer arithmetic (open PR #32 moves to unsafe.Add). Loads are explicitly little-endian, so big-endian targets hash correctly; go-simd/xxhash reports millions of differential fuzz runs against this package, s390x included, with zero mismatches.
+
+**Status:** Actively maintained (last commit 2026-09-08, NEON path January 2026, five open PRs including two performance PRs) and BSD-2-Clause; easy to adopt as a Go dependency (gotosocial vendors it), but as a 'faster than C' claim it stays tier D with no measurement.
+
+[repo](https://github.com/zeebo/xxh3) · [benchmark](https://github.com/zeebo/xxh3)
 
 ##### zog (Zig SIMD JSONL search)  `Zig`  `MIT`  `active`  `Tier D`
 
@@ -77495,6 +79044,48 @@ Pure-Nim raw Snappy codec; its 2022 README table beats snappy-c everywhere and a
 
 [repo](https://github.com/guzba/supersnappy) · [benchmark](https://github.com/guzba/supersnappy/blob/master/tests/bench.nim)
 
+##### sylph  `Rust`  `MIT`  `active`  `Tier C`
+
+Rust k-mer-sketch metagenome profiler giving species abundances and containment ANI with far less CPU and memory than Kraken2.
+
+**Beats:** Kraken2 (C++) — The Nature Biotechnology paper (Shaw and Yu) reportedly says sylph took more than 10-fold less CPU time and 30-fold less memory than Kraken2 for multisample profiling (abstract text seen only in search snippets). The authors' artifact repo holds raw /usr/bin/time outputs for 45 paired gut samples: Kraken2 78,212 CPU-seconds, 1:47:10 wall and 73.9 GB peak against sylph sketch plus contain (-t 20) at 3,843 CPU-seconds, 7:48 wall and 9.6 GB peak, about 20x CPU, 13.7x wall and 7.7x memory (derived from page data), on an unstated CPU with unknown Kraken2 version, database and command; the tools produce different outputs, so this is an algorithmic gap, not a Rust-over-C++ one.
+
+**Known shortcoming:** Downgraded from B to C: the paper's Kraken2 claim (more than 10x less CPU, 30x less memory) was seen only in snippets; the sylph-test raw time files give about 20x CPU, 13.7x wall and 7.7x memory (derived) but the pairing is unconfirmed, no CPU model is stated and kraken2.sh returns 404. Sketch-based profiling against read classification is an algorithmic win, not a language one. Licence MIT.
+
+**Known shortcoming:** Enricher: the Kraken2 side of the artifact is lopsided: kraken2.sh is missing, and kraken2.time shows 599,547,602 minor faults (about 2.2 TiB) and about 97.5 GiB of file-system output at 73.9 GB RSS, consistent with the database being reloaded per sample and per-read output counted inside Kraken2's time (inferred). The sylph time files use legacy formats from an early release. Derived ratios 20x CPU, 13.7x wall, 7.7x memory (the paper says 30x); panic=abort means one corrupt FASTQ kills the whole run (#65).
+
+**Independent measurement:** verifier batch-116 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** It replaces per-read classification against a large k-mer hash table with FracMinHash sketching: only k-mers (k=31 by default) whose 64-bit mixed hash falls below u64::MAX/c are kept (c=200, so about 1 in 200), hashed four lanes at a time with AVX2 when the CPU has it; reads are deduplicated through a hash set or scalable cuckoo filter. Abundance and ANI come from containment counts corrected by a zero-inflated Poisson model of low coverage, with winner-take-all k-mer reassignment between similar genomes, so the database and sample sketches stay a few GB. v1.0.0 (September 2026) adds an optional two-stage .syl2db database (a sparse c=3000 screen, then Golomb-Rice-compressed dense blocks loaded on demand) and multithreaded read sketching.
+
+**Use it when:**
+- Species-level abundance profiling of many shotgun samples against GTDB-scale databases (100k-200k genomes) on a workstation; the README cites about 5 GB of RAM for GTDB-R232.
+- Low-coverage samples where you want containment ANI to reference genomes or your own MAGs (the README claims accurate ANI down to 0.1x coverage).
+- Large cohorts where Kraken2's per-sample run with a roughly 70 GB database would dominate: in the authors' artifact time files, 45 paired samples took 78,212 CPU-seconds for Kraken2 against about 3,843 for sylph's sketch plus profile.
+- Nanopore or PacBio long-read metagenomes as well as short reads, with custom databases built from your own genomes.
+
+**Skip it when:**
+- You need per-read classification (binning reads, extracting reads of a taxon, host-read removal): sylph assigns no reads, and Kraken2 or a read mapper is the tool.
+- Taxonomic resolution above or below species without reference genomes, or organisms absent from the database: sylph only reports genomes in the sketched database, and unknown fractions are rough estimates (-u option).
+- Small genomes or very low-abundance taxa near the detection floor: profiling needs at least 10 sampled k-mers per genome (-M) and 7 contained k-mers by default, so short viral genomes can drop out.
+- Pipelines that cannot tolerate format churn: sketch formats changed across versions (.sylqueries/.sylsample, then .syldb/.sylsp, now optional .syl2db readable only by v1.0.0+), and the pseudotax option once required regenerated files.
+
+**Integration:** CLI binary (Rust crate built with cargo from the GitHub repo; the crates.io name 'sylph' belongs to an unrelated 2016 crate; a conda package is referenced in issue #2) · needletail 0.5 (FASTA/FASTQ parsing), rayon, crossbeam-channel, boomphf, fxhash, scalable_cuckoo_filter, flate2 with the zlib-ng backend, statrs, nalgebra, bincode, serde; tikv-jemallocator on musl builds · Rust edition 2021 (no rust-version declared in Cargo.toml); release profile uses lto=true and panic=abort · x86-64 Linux primary (AVX2 k-mer hashing chosen at runtime with is_x86_feature_detected and a scalar fallback; static musl target configured in .cargo/config.toml); other targets presumably via the scalar path, not documented here
+
+**Vs siblings:** Among the siblings, skani (same author, same sketching approach) estimates ANI between assembled genomes or MAGs, while sylph profiles raw reads against a whole database; pick sylph for read-level metagenome profiling and skani for genome-to-genome comparison. The other bioinformatics siblings (mosdepth, sambamba, noodles, rasusa, mako) handle alignments, FASTA indexing or subsampling, not taxonomic profiling.
+
+**Gotchas:**
+- Kraken2 comparison harness is lopsided and unverifiable: the artifact kraken2.time ran ./scripts/kraken2.sh, which is missing from sylph-test (404), and records 599,547,602 minor page faults (about 2.2 TiB of 4 KiB pages) and 204,536,960 file-system output blocks (about 97.5 GiB at 512 bytes per block) with a 73.9 GB peak RSS, which points to the roughly 70 GB database being reloaded per sample and per-read output being written inside Kraken2's timed run, while sylph writes one small TSV (inferred from the time file; the script itself is unseen).
+- The artifact sylph timings use the legacy .sylqueries and .sylsample formats (still accepted as old suffixes in src/constants.rs), so they come from an early sylph release; the paper's 30-fold memory figure does not match the 7.7x ratio in these files (73.9 GB against 9.6 GB peak), and the database sketching run (1:31 wall at 1727% CPU) is excluded on the sylph side, as is Kraken2's database build.
+- Release builds use panic=abort, so one corrupted FASTQ aborts the whole multi-sample run with a needletail slice-index panic (issue #65, 180 metagenomes against GlobDB); validate inputs first.
+- Default thread count is 3 (-t), so throughput figures quoted at -t 20 need the flag; read deduplication with cuckoo filters raised sketching memory 3-4x when it was introduced (CHANGELOG).
+
+**Status:** Actively developed (v1.0.0 with the two-stage database and multithreaded read sketching in September 2026, last commit 2026-10-10, 325 stars, 7 open issues), MIT-licensed per the LICENSE file (Cargo.toml says MIT OR Apache-2.0); it is a standalone tool to install, not code to vendor into C++.
+
+[repo](https://github.com/bluenote-1577/sylph) · [benchmark](https://pmc.ncbi.nlm.nih.gov/articles/PMC12339375/)
+
 ##### tac (neosmart, SIMD-accelerated Rust rewrite of GNU tac)  `Rust`  `MIT`  `stale`  `Tier C`
 
 Rust tac that reverses a file's lines using mmap and an AVX2 newline scan; claims 2.55x over GNU tac.
@@ -77713,6 +79304,48 @@ Zig port of Verstable's chained open-addressing hash table; edges Abseil/Boost/A
 
 [repo](https://github.com/ThobiasKnudsen/verztable) · [benchmark](https://raw.githubusercontent.com/ThobiasKnudsen/verztable/main/BENCHMARKS.md)
 
+##### vlagent (Go log collector, VictoriaLogs): log-collectors-benchmark vs Fluent Bit  `Go`  `Apache-2.0`  `active`  `Tier C`
+
+Go Kubernetes log collector for VictoriaLogs; about 4x less CPU than Fluent Bit per log at 10k logs/s in a vendor-run benchmark.
+
+**Beats:** Fluent Bit (C), v5.0.9 in the 2026-09-17 run (v4.2.3 in the 2026-08-12 and 2026-09-16 runs), Helm chart fluent/fluent-bit 0.57.9, tail input with the kubernetes filter and an HTTP JSON-lines output with gzip, limited to 1 CPU and 1 GiB — In VictoriaMetrics' own log-collectors-benchmark (kind cluster on a c2d-highcpu-8 GCP VM per the results-page template, each collector capped at 1 CPU and 1 GiB, prebuilt Helm images), vlagent v1.52.0 shipping 10 Pods x 1000 JSON lines/s for one hour averaged 0.048 cores and 31.6 MiB RSS against Fluent Bit v5.0.9's 0.204 cores and 53.5 MiB with zero versus 3 lost lines; in the ramp-to-saturation case vlagent peaked at about 178k logs/s while Fluent Bit was OOM-killed at about 41k logs/s with a later-fixed buffer config.
+
+**Known shortcoming:** Vendor-run with no hardware stated; the 4.3x throughput rests on Fluent Bit being OOM-killed in all rounds (the Mem_Buf_Limit fix c53524a postdates the results at bd89fd0), so only the resources case is usable (4.3x less CPU, 1.7x less memory); product against product, not a language-level comparison.
+
+**Known shortcoming:** Enricher: AvgCPUUsage is an average over the whole ramp plus one idle minute (bench-runner/report.go), not CPU at peak, so 'neither reached the 1-CPU limit' is wrong: scaling per-log CPU puts vlagent near 0.8 cores at 178k logs/s and Fluent Bit near 0.77 at its OOM, and a fair Fluent Bit 1-core ceiling of about 53k makes the throughput gap about 3.3x, not 4.3x (estimate). Throughput is a peak (max_over_time of a 1-minute rate) from one run per case on a shared c2d-highcpu-8 GCP VM that also hosts 50 generator pods, the verifier, VictoriaMetrics and Grafana. Codecs differ (vlagent jsonline zstd vs Fluent Bit gzip plus docker/cri multiline parsers). No post-fix Fluent Bit results; vlagent panics #1552 and #1796 were closed after the benchmarked v1.52.0.
+
+**Independent measurement:** verifier batch-118 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** The repo and docs give no explanation; the source shows a narrow, purpose-built pipeline: a hand-written CRI line parser with a fast path for unsplit lines (partial lines are joined only on the slow path, capped at 2 MiB), JSON parsing with VictoriaLogs' pooled logstorage JSON parser and valyala/fastjson, zero-copy byte-to-string conversion (bytesutil.ToUnsafeString), sync.Pool-recycled buffers and parsers, and Pod metadata computed once per log file as common fields instead of per record. Output batches are compressed with zstd in jsonline mode, while the Fluent Bit config in the same benchmark compresses with gzip, so part of the CPU gap is the codec. values/vlagent.yml says the native VictoriaLogs format would cut CPU by about another 20%.
+
+**Use it when:**
+- Collecting Kubernetes container logs into VictoriaLogs where per-node collector CPU and memory matter (about 0.05 cores and 32 MiB average RSS at 10k JSON lines per second in the vendor run).
+- Log volumes per node in the tens to low hundreds of thousands of JSON lines per second on a 1-CPU budget (about 178k logs/s peak in the vendor throughput case).
+- You need replication to several VictoriaLogs instances with on-disk buffering during outages, without adding a separate aggregation tier.
+- Mostly JSON or klog-formatted container output, which vlagent parses and maps to _msg and _time automatically.
+
+**Skip it when:**
+- You need Fluent Bit's breadth: many inputs, filters, Lua or WASM processing, and outputs to Elasticsearch, Kafka, S3, Loki and so on; vlagent only writes VictoriaLogs native or jsonline over HTTP.
+- Log files rotated with copytruncate or compressed .gz files: the docs say copytruncate is not fully supported and .gz files are not read.
+- Syslog or CEF over TCP ingestion: open issues #1697 (CEF messages corrupted when several arrive in one TCP read) and #1365 (embedded newlines split into fragments).
+- Non-Kubernetes edge or embedded hosts where a small C binary with a mature plugin ecosystem is the requirement; vlagent is young (bug-fix panics were still being closed in October 2026).
+
+**Integration:** Go binary (vlagent-prod in the vlutils release archive; Docker images victoriametrics/vlagent; Helm chart vm/victoria-logs-collector) · none at runtime beyond the Kubernetes API for Pod discovery; built from the VictoriaLogs Go module (VictoriaMetrics lib, valyala/fastjson) · Go toolchain of the VictoriaLogs repo to build from source (version not documented in the files read); prebuilt binaries and images need none · Linux amd64 and arm64 images (multiarch build directory); the file collector also runs outside Kubernetes
+
+**Vs siblings:** Against the Vector-versus-Fluent-Bit sibling: pick vlagent when the sink is VictoriaLogs and node CPU is the constraint; in this same VictoriaMetrics harness on 2026-09-17, Vector v0.58.0 used 0.288 cores and 106 MiB average RSS at 10k logs/s and peaked at 32k logs/s, worse than Fluent Bit, so the Rust collector's win in its own harness does not carry over here. Pick Vector when you need its transform language and many sinks.
+
+**Gotchas:**
+- Harness detail the record misreads: AvgCPUUsage in the throughput case is avg_over_time of the CPU rate across the whole ramp (bench start through saturation, then one idle minute), not CPU at the peak. Scaling the resources-case cost per log (about 4.5 microseconds of CPU for vlagent, 18.7 for Fluent Bit, derived from page data) puts vlagent near 0.8 cores at its 178k logs/s peak and Fluent Bit near 0.77 cores when it was OOM-killed at 41k, so both were approaching the 1-CPU limit; a Fluent Bit run that did not OOM would top out near 53k logs/s at 1 core by the same arithmetic, making the throughput gap closer to 3.3x than 4.3x (rough estimate, not a measurement).
+- Throughput is max_over_time of a 1-minute receive rate sampled every 10 s, a peak rather than a sustained rate, and each case is one run on one c2d-highcpu-8 node (8 vCPUs) shared with the 50 generator Pods, log-verifier, VictoriaMetrics and Grafana; vlagent's nearly identical ceiling in all three rounds (176.7k to 178.3k) may partly reflect the node rather than the agent.
+- The Fluent Bit throughput figure in all committed rounds is an OOM failure point: values/fluent-bit.yml gained Mem_Buf_Limit 512MB only after the results were produced, and no post-fix results are committed (results/ holds only 2026-08-12, 2026-09-16 and 2026-09-17). The Fluent Bit config also runs the docker and cri multiline parsers and gzip, versus zstd for vlagent.
+- Panics on a deleted collected file ending without a newline (#1552) and on unreadable files during rotated-file lookup (#1796) were closed on 2026-10-01, after the benchmarked v1.52.0; use a later release.
+
+**Status:** Actively developed inside the Apache-2.0 VictoriaLogs repo (last commit 2026-10-09, 2.4k stars) with releases every few weeks and a steady flow of closed bug reports; the benchmark is first-party, single-run and vendor-published, so treat the 4x CPU figure as indicative and re-run the harness (go run ./bench-runner, about 10 hours) with your own Fluent Bit tuning before relying on it.
+
+[repo](https://github.com/VictoriaMetrics/VictoriaLogs) · [benchmark](https://raw.githubusercontent.com/VictoriaMetrics/log-collectors-benchmark/HEAD/results/2026-09-17/vlagent-resources.json)
+
 ##### Zig (kostya/benchmarks base64)  `Zig`  `MIT`  `active`  `Tier C`
 
 Zig std.base64 in kostya/benchmarks: 8192 rounds of 128 KiB encode plus decode 1.31x faster than a hand-written scalar C codec (clang), 1.59x (gcc).
@@ -77886,6 +79519,48 @@ Zig 64-bit Roaring bitmap whose in-memory buffer is its serialized form; 2.2x fa
 
 [repo](https://github.com/manishrjain/zroar) · [benchmark](https://raw.githubusercontent.com/manishrjain/zroar/HEAD/README.md)
 
+##### banzai  `Rust`  `MIT`  `active`  `Tier D`
+
+Pure-Rust bzip2 encoder using linear-time SA-IS for the BWT; bounds bzip2's worst case but is slower on average.
+
+**Beats:** bzip2 reference implementation (C); lbzip2 and pbzip2 not compared — There is no benchmark: the README compares banzai with the bzip2 C reference only qualitatively (similar compression ratios, worse average runtime, better worst-case runtime), with no hardware, compiler or data named, and an older README revision estimated the average runtime at about twice the reference's.
+
+**Known shortcoming:** Not faster than the bzip2 C reference: the author says average runtime is worse, only the SA-IS worst case is better; encoder only and no numbers. The 2026-07-28 commit is only an edition bump; the code dates from 2022.
+
+**Known shortcoming:** Enricher: no measurement; the 2022-09-20 README said runtime was about 2x reference bzip2 and the text was later softened with no performance commits in between. The README says 'entirely safe Rust' but lib/bwt.rs's Array::split has an unsafe i32-to-u32 slice cast (sound); assert! panics on a bad level; no CI; 0.3.0 was yanked.
+
+**Independent measurement:** verifier batch-113 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** It is not faster on average; its advantage is a worst-case bound. The Burrows-Wheeler transform is computed with SA-IS (Nong, Zhang and Chan's induced-sorting suffix array construction), which is linear time on any input, run on the block concatenated with itself to obtain bzip2's wrap-around rotation order. The C reference sorts blocks with a comparison-based main sort and falls back to a slower algorithm on highly repetitive data, which is the case where banzai's linear bound helps; Huffman table selection follows the reference closely, so ratios are about the same.
+
+**Use it when:**
+- Producing .bz2 output from Rust without linking libbz2 or another C toolchain dependency (the crate's only dependency is crc).
+- Inputs that are highly repetitive or adversarial, where the reference encoder's fallback sort makes compression time spike and a linear-time bound on block sorting matters more than average speed.
+- Memory-safety-sensitive tools that must write bzip2 and can accept slower typical compression.
+- Small single-threaded jobs where compression speed is not the bottleneck (archiving logs or exports at level 9).
+
+**Skip it when:**
+- Throughput-sensitive compression of ordinary data: the author states average runtime is worse than the C reference, and an earlier README revision put it at roughly twice the reference runtime.
+- Anything that needs decompression; there is no decoder.
+- Multi-core compression: encoding is single-threaded, so lbzip2 or pbzip2 style block parallelism is not available.
+- Production pipelines that need a hardened encoder: the README calls it alpha software that is not battle-hardened, there is no CI, and the code has not changed since September 2022.
+
+**Integration:** crate (library banzai plus binary crate bnz) · crc 3.0 · Rust edition 2024 (Rust 1.85 or newer) as of 0.3.2; no rust-version field in the manifest · any target with usize of at least 32 bits (bwt panics otherwise)
+
+**Vs siblings:** Pick banzai over libbzip2-rs (a Rust port of libbzip2 with measured wins over C in both directions) only when you want an independent encoder with a linear-time worst case and no ported C code; for speed, libbzip2-rs, or the Zig bzip2z (also SA-IS-based, measured 1.79x faster than system bzip2 1.0.8 compression in its README), is the better choice.
+
+**Gotchas:**
+- The README says banzai is 'written entirely in safe Rust' (an earlier revision said it 'has no usage of unsafe'), but lib/bwt.rs Array::split contains an unsafe block that reinterprets the tail of the i32 suffix-array buffer as &mut [u32] via slice::from_raw_parts_mut; it is sound (same size and alignment, every bit pattern valid) but audits that require forbid(unsafe_code) will flag it.
+- Invalid levels panic: encode and write_stream_header use assert!(1 <= level && level <= 9) instead of returning an io::Error.
+- Memory per block: bwt appends a copy of the block to itself and allocates a 2n-entry i32 suffix array, about 1.8 MB plus 7.2 MB at level 9, plus the buckets and the output buffers.
+- Performance evidence is a sentence, not a measurement: the 2022-09-20 README said runtime 'tends to be approximately twice as long' as the reference except for highly repetitive inputs; the 2022-09-26 'readme updates' commit replaced that with 'worse average runtime but better worst-case runtime', and the commit titles in between show no performance work, so the 2x figure probably still describes the current code. Correctness rests on unit tests and a cargo-fuzz round_trip target that decodes with the bzip2 0.4 crate (libbzip2); 0.3.0 was yanked on crates.io.
+
+**Status:** Effectively dormant: the roughly 2,100-line library has been unchanged since 2022-09-26 apart from a 2026-07-28 edition-2024 bump (0.3.2); it is MIT-licensed, has about 28k crates.io downloads and three reverse dependencies (bnz, weavatrix-search, melodium-loader), and is small enough to vendor.
+
+[repo](https://github.com/jgbyrne/banzai) · [benchmark](https://github.com/jgbyrne/banzai)
+
 ##### C3 (related_post_gen suite)  `C3`  `MIT`  `active`  `Tier D`
 
 C3 entry of the related_post_gen benchmark: same top-5 related-posts algorithm as the C++ entry, about 1.23x faster single-core.
@@ -77969,6 +79644,49 @@ Community D (ldc2) solution to the related-posts benchmark, about 1.43x faster t
 **Status:** The suite (now served as zupat/related_post_gen, 500 stars, MIT) is maintained, with C++ results refreshed 2026-02-24, but the d_v2 directory has had no commits since Feb 2024; it is a copyable reference pattern, not a maintained library.
 
 [repo](https://github.com/jinyus/related_post_gen) · [benchmark](https://raw.githubusercontent.com/jinyus/related_post_gen/main/readme.md)
+
+##### dg2d (D 2D vector rasterizer, cerjones)  `D`  `BSL-1.0`  `abandoned`  `Tier D`
+
+Single-threaded SSE2 analytic-coverage 2D path rasterizer in D; claims speed but publishes no comparison with Cairo or Blend2D.
+
+**Beats:** Cairo (C) and Blend2D (C++), named only in the orchestrator's lead; the repository names no baseline — Nothing was measured: the README says only 'Very fast, high performance rasterizer with SIMD support' and that LDC with LTO or cross-module inlining performs best, the lead's 'about 2x Cairo' appears nowhere, and issue #8 discusses glyph speed against GDI without timings while the maintainer estimates a possible 4x glyph speedup from caching.
+
+**Known shortcoming:** No numbers and no baseline; the lead's '2x Cairo' claim was not found anywhere; abandoned since 2022-05-06, 21 stars.
+
+**Known shortcoming:** Enricher: the demo FPS is the best of 125 paints with no comparison, not a benchmark; library code unchanged since 2020-11-14 (2022 commits touch the demo only); open issue #13 (angular gradient Pad mode skips one quadrant, fix unmerged); alignment checked only by assert with aligned SSE stores. A maintained fork lives in AuburnSounds/Dplug as dplug:canvas (no numbers either).
+
+**Independent measurement:** verifier batch-118 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** The rasterizer computes exact-area (analytic) anti-aliased coverage in 24:8 fixed point and stores it per scanline in differentiated (delta) form, so long spans with constant coverage need no per-pixel work. A bitmask with one bit per 4 pixels marks cells where an edge touches the scanline; the blitters bit-scan that mask to skip empty spans or write opaque spans with plain aligned 16-byte stores, an idea the source credits to Blend2D. Blitters integrate the deltas and blend 4 pixels at a time with SSE2 intrinsics (intel-intrinsics), and edges crossing the left or right clip edge are folded into per-row clip accumulation buffers instead of being tested per pixel.
+
+**Use it when:**
+- A D program that needs anti-aliased solid or gradient path fills into its own 32 bpp buffer on x86 without linking a C or C++ graphics library.
+- Studying a compact (about 1,000-line) delta-coverage scanline rasterizer with a span bitmask before reading Blend2D's much larger code base.
+- UI or plugin rendering in D where the maintained Dplug fork (dplug:canvas, nothrow @nogc, no alignment requirement) is the real target and dg2d is the upstream reference.
+- Filling many small shapes or glyph outlines per frame on one core, which is what the demo panels exercise.
+
+**Skip it when:**
+- You need evidence that it beats Cairo or Blend2D: no benchmark, timing table or baseline exists in the repository or its issues, and the demo's FPS readout compares against nothing.
+- You need stroking, images, pattern fills, transforms on paints, compositing operators or multi-threaded rendering; the README lists all of these as not yet done.
+- Non-x86 targets or straight-alpha pixel formats: the README requires SSE2, 32 bpp with alpha in the high byte and 16-byte aligned scanlines; the maintainer said ARM testing would need a Linux port that he never did (issue #6).
+- Production code that needs maintenance: library code last changed on 2020-11-14 (the 2022 commits touch only the demo's X11/XWayland window), the API is declared unstable, and a 2025 angular-gradient bug report is unanswered.
+- @nogc or betterC code: the Rasterizer and Canvas are GC-allocated classes and the rasterizer's scanline, mask, bucket and clip buffers are GC dynamic arrays.
+
+**Integration:** dub package (library target) or source-drop of source/dg2d/*.d · intel-intrinsics ~>1.0 (AuburnSounds); D runtime with GC · Not documented; any D compiler with intel-intrinsics 1.x, LDC recommended with link-time optimization or cross-module inlining so the intrinsics inline · x86 and x86-64 with SSE2; demo windowing on Win32 and X11; ARM untested
+
+**Vs siblings:** No rasterizer is catalogued in this category (the siblings are sorters, file tools, allocators and codecs); among catalogued rasterizers Blend2D (wave 10, tier B) and tiny-skia (tier A) have measured numbers and more features, so pick dg2d only for a D-native, dependency-light fill rasterizer, and prefer its maintained Dplug fork for real use.
+
+**Gotchas:**
+- The 16-byte buffer alignment and stride-multiple-of-4 rules are checked only by assert; release builds drop the checks and the blitters use aligned SSE loads and stores (_mm_load_si128/_mm_store_si128), so an external misaligned buffer can fault. Canvas allocates its own pixels with C realloc, which gives 16-byte alignment on common 64-bit allocators but is not guaranteed everywhere.
+- Angular gradients with RepeatMode.Pad never select one quadrant (fixupQuadrant can produce positions down to about -0.25), so part of the gradient is missing; p0nce posted a one-line SSE fix in issue #13 (2025-04-11) that is not merged.
+- Coincident edges after clipping once left zero spans in the delta buffer that made blitters skip or solid-fill wrongly (horizontal-line artifacts, issue #2, fixed in dff0979 on 2020-06-03); the delta-integration design means one bad cell corrupts the rest of the scanline. Copying a Font struct double-freed its data (issue #7); the maintainer's fix was to disable copying.
+- The demo's FPS figure is the best of 5 timed paints per timer tick, maxed over the last 25 ticks (effectively best of 125), with the canvas clear outside the timed region; it is an optimistic single-core number with no baseline and is not a benchmark.
+
+**Status:** Abandoned (library code unchanged since 2020-11-14, last commit 2022-05-06 on the demo, 21 stars) but BSL-1.0 and small enough to vendor; its rasterizer lives on, reworked as nothrow @nogc without alignment requirements, in Dplug's dplug:canvas, which is the better-maintained copy.
+
+[repo](https://github.com/cerjones/dg2d)
 
 ##### dups (c-blake/bu, Nim duplicate-file finder)  `Nim`  `MIT`  `active`  `Tier D`
 
@@ -78144,7 +79862,93 @@ Community Rust solution to the related-posts benchmark, about 1.28x faster than 
 
 [repo](https://github.com/zupat/related_post_gen) · [benchmark](https://raw.githubusercontent.com/zupat/related_post_gen/main/readme.md)
 
+##### sroar  `Go`  `Apache-2.0`  `abandoned`  `Tier D`
+
+Go Roaring bitmaps stored as one byte slice, no marshalling; beats Go roaring64 v0.6.1 FastOr, not 32-bit Go roaring.
+
+**Beats:** CRoaring (C): not compared; the README compares against RoaringBitmap/roaring (Go, roaring64 v0.6.1) — The README's 6.5x (p50, benchmarks over 1 ms) figure compares sroar FastOr on twelve Roaring real-data sets against Go RoaringBitmap/roaring roaring64 v0.6.1 on a Threadripper 2950X with an unstated Go version; the sroar column (benchmarks/sroar.txt) was re-run on 2021-12-09 while the roaring64 column (roar64.txt) dates from a 2021-05-18 run whose harness is no longer in the repo, so it is a cross-run comparison, and no C or C++ baseline was measured.
+
+**Known shortcoming:** Off-baseline: no CRoaring or C++ comparison, only the Go roaring64 library, with three FastOr slowdowns. This URL is a personal fork; the canonical repository is dgraph-io/sroar (go.mod module, 277 stars, archived 2024-07-18).
+
+**Known shortcoming:** Enricher: the README's 6.5x compares sroar.txt (rerun 2021-12-09) against roar64.txt (2021-05-18), a cross-run comparison whose roaring64 harness is no longer in the repo; the repo's own roar32.txt (32-bit Go roaring, same harness) is faster than sroar on 11 of 12 datasets (dimension_003 2.10 vs 11.66 ms), so the win is only against roaring64 v0.6.1's allocation-heavy FastOr. Latent bug: exported Memclr passes len([]uint16) as a byte count and zeroes half; the README command lacks the needed -tags real; the Maximum() fix (PR #33) was never merged. A maintained fork exists at weaviate/sroar.
+
+**Independent measurement:** verifier batch-113 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** FastOr first sums per-key container cardinalities across all inputs, pre-creates every key, then lays out full 8 KiB bitmap containers before sized array containers at the tail of the buffer, so the union is written into pre-sized space with lazy cardinality and almost no allocation (9 to about 60 allocs per op, against up to 54,500 for roaring64 on census1881). Containers are array or bitmap only (no run containers), stored inline in the flat buffer; growth shifts the tail with copy (scootRight) instead of allocating new container objects.
+
+**Use it when:**
+- Go services that persist or ship many bitmaps (posting lists, inverted indexes) and want zero-copy load from mmap or a network buffer, as Dgraph did
+- Unions over many 64-bit bitmaps where the Go roaring64 v0.6.1 FastOr allocated hundreds of MB per call (census1881 585 MB/op against 1.4 MB/op for sroar)
+- Workloads where GC pressure from many small container objects matters more than raw set-operation speed
+- Read-mostly bitmaps loaded with FromBuffer and queried in place
+
+**Skip it when:**
+- If your values fit in 32 bits: the repo's own benchmarks/roar32.txt (same FastOr real-data harness, same machine) has 32-bit Go roaring faster than sroar on 11 of 12 data sets, e.g. dimension_003 2.10 ms vs 11.66 ms and weather_sept_85_srt 0.48 ms vs 2.71 ms (derived from page data)
+- Run-heavy data, since there are no run containers; even against roaring64, FastOr is 1.4x to 3.8x slower on three of twelve sets (uscensus2000, weather_sept_85, census-income_srt)
+- When you need interoperability with CRoaring, Java or Go roaring files: the byte layout is sroar-specific and in host byte order
+- New projects wanting maintenance: dgraph-io/sroar was archived 2024-07-18 and this fork's last commit is 2022-05-27; the weaviate/sroar fork (234 commits, go 1.21) is the live line
+- When you need a C or C++ library: there is no measurement against CRoaring at all
+
+**Integration:** module · github.com/pkg/errors at runtime; RoaringBitmap/roaring v0.6.1 and testify only for tests and benchmarks · Go 1.16 per go.mod; uses //go:linkname to the unexported runtime.memclrNoHeapPointers and reflect.SliceHeader casts, so newer Go releases may reject or warn · Any Go platform in principle; buffers are reinterpreted with unsafe casts and no endian conversion, so the serialized form is only portable between hosts of the same byte order; benchmarks only on x86-64 (Threadripper 2950X)
+
+**Vs siblings:** Pick sroar over its Zig sibling zroar (same author, same serialized-Roaring design, measured against CRoaring 5.0.0) only when you are in Go and need the buffer-is-the-bitmap layout; for a measured win over a C baseline use zroar, and for maintained Go code use the weaviate/sroar fork.
+
+**Gotchas:**
+- Memclr (exported, utils.go) passes len(b) of a []uint16 as the byte count to runtime.memclrNoHeapPointers, so it zeroes only the first half of the slice; internal callers appear to tolerate it (array containers are bounded by their stored cardinality and toBitmapContainer re-clears with copy from a zero slice), and I found no wrong result, but any outside caller of sroar.Memclr gets a half-cleared slice.
+- FromBuffer aliases the caller's []byte (its doc says modifying the bitmap may corrupt the buffer; use FromBufferWithCopy to write), and FastOr with a single argument returns that same bitmap rather than a copy.
+- Importing the package allocates a 16<<20-element []uint16 (32 MiB) global zero slice named empty.
+- Bitmap-container Maximum() bug reported in dgraph-io/sroar PR #33 (2023-03-13) was closed unmerged when the repo was archived; the same fix was merged as weaviate/sroar#5, not here.
+
+**Status:** Abandoned: a 2022-05-27 fork of dgraph-io/sroar (archived 2024-07-18, go.mod still names github.com/dgraph-io/sroar) under Apache-2.0; the headline numbers are a cross-run comparison against roaring64 only, and the repo's own roar32.txt shows 32-bit Go roaring faster than sroar on 11 of 12 data sets, so treat the speedup as a fix for roaring64 v0.6.1's allocation-heavy FastOr rather than a general win; reproducing it on HEAD also needs -tags real (real_data_test.go carries a 'real' build tag the README command omits).
+
+[repo](https://github.com/dgraph-io/sroar) · [benchmark](https://github.com/manishrjain/sroar)
+
 #### web-and-serving
+
+##### Apache Pekko gRPC (Scala): grpc_bench unary echo vs C++ gRPC (cpp_grpc_mt)  `Scala`  `Apache-2.0`  `active`  `Tier C`
+
+Scala/Java gRPC on Pekko HTTP and Pekko Streams; out-served the stock C++ async gRPC greeter 1.27-1.73x in one grpc_bench run.
+
+**Beats:** gRPC C++ async server (cpp_grpc_mt in LesnyRumcajs/grpc_bench): the stock async greeter pattern with one completion queue per server thread, GRPC_SERVER_CPUS threads and a single pre-posted CallData per queue; main.cpp and the generated code are built with g++ 15.2.0 --std=c++20 -O3 -flto and linked with jemalloc against Debian-packaged libgrpc++, libgrpc and libprotobuf (versions and build flags not recorded). It was the fastest of the run's three C++ rows (cpp_grpc_mt, cpp_asio_grpc, cpp_grpc_st) at 1, 3 and 4 CPUs and within 0.4% of cpp_asio_grpc at 2 CPUs. — In grpc_bench discussion #559 (maintainer run, commit c4c93b3, Xeon Gold 6548N, server capped at 1-4 CPUs via docker --cpus, ghz 50 connections and 1000 concurrent unary echo calls, 120 s after 30 s warm-up), scala_pekko on Pekko 1.2.1 and Temurin 23 served 72808-142375 req/s against 57403-85485 req/s for the C++ async greeter built with g++ 15.2.0 -O3 -flto on Debian-packaged libgrpc++ (1.27x at 1 CPU up to 1.73x at 3 CPUs). Earlier published runs put the two within 0.89-1.15x of each other, so the size of the gap depends on the run and on a C++ baseline that is neither pinned nor tuned.
+
+**Known shortcoming:** Downgraded from A to B: the win (1.27-1.73x) appears only in grpc_bench #559; other runs show 0.89-1.15x; the old Pekko 1.2.1 stack was measured and uses about 50x more memory than C++. Shared reason for B: the C++ side links unpinned Debian libgrpc++, libgrpc and libprotobuf with version and flags unrecorded (only the 179-line main.cpp gets -O3 -flto), one run per CPU count, and cpp_asio_grpc sits within about 2% of cpp_grpc_mt while rust_tonic_mt also beats it, so the limit is the C++ gRPC library build, not C++ code generation.
+
+**Known shortcoming:** Enricher: crippled C++ baseline in grpc_bench: cpp_grpc_mt pre-posts one RequestSayHello per completion queue and does new/delete per RPC, while gRPC's own test/cpp/qps/server_async.cc pre-posts 5000 per queue; it links unpinned Debian libgrpc++ (likely gRPC 1.51.1 on the gcc:15 trixie base, inferred from snippets). JVM memory rows mostly reflect heap pre-sizing (MinRAMPercentage=70 of 4096m). Vert.x gRPC beat Pekko at 1-2 CPUs in #559. The same C++ flaw applies to every grpc_bench row compared against cpp_grpc_mt.
+
+**Independent measurement:** verifier batch-119 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** The benchmark gives no mechanism. What the server does: requests are served by Pekko HTTP's own HTTP/2 implementation on Pekko Streams (not by gRPC C++ core or grpc-java's Netty server), entities are collected strictly and dispatched to a Future-returning handler on a fork-join dispatcher capped at the container's CPU count, all JIT-compiled on the HotSpot JVM. In the April 2026 run the C++ server burned more CPU per request (405.58% CPU for 85485 req/s at 4 CPUs against 270.92% for 142375 req/s), which points at the C++ side's library build and server pattern rather than any trick in Pekko.
+
+**Use it when:**
+- You already run Pekko (or are migrating from Akka gRPC) and want gRPC endpoints that share the actor system, dispatcher and Pekko Streams backpressure for streaming RPCs.
+- Unary or streaming gRPC services on 2-4 cores where throughput per container matters more than memory: in grpc_bench #559 it reached 120-142k req/s at 2-4 CPUs on a Xeon Gold 6548N, ahead of the stock C++ greeter and rust_tonic_mt.
+- JVM shops that want one generated API for Scala and Java with sbt, Maven or Gradle builds.
+- Services where p50/average latency under heavy concurrency matters (5.23 ms average against 11.28 ms for the C++ greeter at 4 CPUs in #559).
+
+**Skip it when:**
+- Memory-constrained deployments: the Pekko server averaged 450-998 MiB in #559 against 21-32 MiB for the C++ server (largely JVM heap sizing, but a JVM floor of hundreds of MiB remains).
+- Tail-latency-critical paths: p99 at 4 CPUs was 22.14 ms against 19.69 ms for C++, and JIT warm-up plus GC pauses affect short-lived or bursty processes.
+- Single-core containers: in other grpc_bench runs (#441 on an i9-13900KF) it trailed cpp_grpc_mt at 1 and 2 CPUs (0.89x and 0.97x), and one 1-CPU result in #475 collapsed to 5661 req/s.
+- If raw JVM gRPC throughput is the goal and you are not tied to Pekko: Vert.x gRPC posted more req/s than Pekko at 1 and 2 CPUs in the same #559 run.
+- Teams that need a stable 2.x API now: the repo tracks Pekko 2.0 and pekko-http 2.0 milestones, and the README warns APIs and build plugins may still change.
+
+**Integration:** module · Pekko actor and streams, Pekko HTTP (server side, HTTP/2 enabled), grpc-java grpc-netty-shaded (client side), generated protobuf classes via the sbt/Maven/Gradle plugin · JDK 17+ (README); Scala 2.13 default, other cross-built Scala versions not listed in the README; the benchmark used Scala 2.13.17 on Temurin 23 · any JVM platform
+
+**Vs siblings:** Pick it over Armeria, Vert.x gRPC or grpc-dotnet when the service already lives in a Pekko actor system or uses Pekko Streams for streaming RPCs; for raw unary throughput on few cores Vert.x gRPC posted higher numbers in the same #559 run, and tonic gives similar req/s at a fraction of the memory.
+
+**Gotchas:**
+- Harness flaw on the C++ side: grpc_bench's cpp_grpc_mt keeps exactly one pre-posted RequestSayHello per completion queue and does a new/delete of CallData per RPC, whereas gRPC's own async QPS benchmark server (test/cpp/qps/server_async.cc) pre-posts 5000 request contexts per queue, so the baseline is the tutorial pattern, not gRPC C++ at its fastest.
+- The C++ server links Debian-packaged libgrpc++ installed by unpinned apt-get on the gcc:15.2.0 image; that image line is built on Debian trixie (docker-library gcc 15 Dockerfile FROM buildpack-deps:trixie), whose grpc package is 1.51.1 per Debian package listings seen in search snippets, many releases behind upstream gRPC (pekko-grpc itself moved to grpc-java 1.84.2 on 2026-10-10). The exact version was not recorded by the run, so this is an inference.
+- Memory figures in grpc_bench come from docker stats with -XX:MinRAMPercentage=70 -XX:MaxRAMPercentage=70 on a 4096m container, so the JVM row reflects a pre-sized heap more than its working set; tune heap flags before judging memory.
+- The published win was measured with Pekko 1.2.1, pekko-http 1.3.0 and ParallelGC at grpc_bench c4c93b3; the benchmark now builds Pekko 2.0 milestones with SerialGC, and no run of that configuration is published; the 1.27-1.73x margin comes from one 120 s run per CPU count, while other runs show 0.89-1.15x.
+
+**Status:** Actively maintained Apache project (commits through 2026-10-10, currently tracking Pekko and pekko-http 2.0 milestones) under Apache-2.0 and usable as a library today, but the catalogue's speed claim rests on one benchmark run against an untuned tutorial-pattern C++ server built on an unpinned distro gRPC.
+
+[repo](https://github.com/apache/pekko-grpc) · [benchmark](https://github.com/LesnyRumcajs/grpc_bench/discussions/559)
 
 ##### Arc (Arc Gateway)  `Rust`  `Apache-2.0`  `active`  `Tier C`
 
@@ -78188,6 +79992,49 @@ Young Rust io_uring reverse proxy claiming 2.05-2.30x nginx's HTTP/1.1 proxy thr
 
 [repo](https://github.com/shuakami/Arc) · [benchmark](https://github.com/shuakami/Arc)
 
+##### Armeria gRPC server (Java): grpc_bench unary echo vs C++ gRPC (cpp_grpc_mt)  `Java`  `Apache-2.0`  `active`  `Tier C`
+
+JVM microservice framework (Netty-based) whose gRPC server out-served the stock gRPC C++ async server at 2-4 CPUs in one grpc_bench run.
+
+**Beats:** gRPC C++ async server (cpp_grpc_mt in LesnyRumcajs/grpc_bench): the stock async greeter pattern with one completion queue per server thread, GRPC_SERVER_CPUS threads and a single pre-posted CallData per queue; main.cpp and the generated code are built with g++ 15.2.0 --std=c++20 -O3 -flto and linked with jemalloc against Debian-packaged libgrpc++, libgrpc and libprotobuf (versions and build flags not recorded). It was the fastest of the run's three C++ rows (cpp_grpc_mt, cpp_asio_grpc, cpp_grpc_st) at 1, 3 and 4 CPUs and within 0.4% of cpp_asio_grpc at 2 CPUs. — In grpc_bench run #559 (maintainer, commit c4c93b3, 2026-04-23, Xeon Gold 6548N, server Docker-capped at 1-4 CPUs and 4 GiB, ghz 0.114.0 client on 11 CPUs, 50 connections and 1000 concurrent complex_proto unary echoes, 120 s after a 30 s warm-up, one run per setting), Armeria 1.20.3 on Temurin 23 with G1GC served 0.98x, 1.28x, 1.65x and 1.64x the req/s of cpp_grpc_mt (g++ 15.2.0 -O3 -flto glue over Debian-packaged libgrpc++) at 1, 2, 3 and 4 CPUs. Three other published runs (#441, #475, #547) have Armeria at 0.03-1.02x of the same C++ server, so the win is specific to this run's C++ build and host.
+
+**Known shortcoming:** Downgraded from A to B: slower at 1 CPU (0.98x) and in most other runs (0.48-1.02x); the server is tuned for the benchmark with armeria pinned at 1.20.3. Shared reason for B: the C++ side links unpinned Debian libgrpc++, libgrpc and libprotobuf with version and flags unrecorded (only the 179-line main.cpp gets -O3 -flto), one run per CPU count, and cpp_asio_grpc sits within about 2% of cpp_grpc_mt while rust_tonic_mt also beats it, so the limit is the C++ gRPC library build, not C++ code generation.
+
+**Known shortcoming:** Enricher: the apparent win is the C++ baseline failing to scale: cpp_grpc_mt's CPU per request rises from 18.0 to 47.4 us between 1 and 4 CPUs while Armeria stays at 17.9-23.6 us (derived from #559); at 1 CPU they tie. Armeria matches plain grpc-java 1.58 on Netty (0.98-1.06x) and Vert.x gRPC beats it 1.78x at 1 CPU; the 4-CPU row is probably capped by the ghz client (top rows cluster near 150k req/s with idle server CPU); 1-CPU p90 is 58 ms vs 20 ms for C++; open issue #5152 (large messages slow, deserialisation on the event loop).
+
+**Independent measurement:** verifier batch-119 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Armeria's GrpcService runs its own gRPC framing on Armeria's Netty HTTP/2 stack (the grpc module depends on grpc-core, grpc-stub and grpc-protobuf but not grpc-netty), and, unlike upstream grpc-java, it runs service logic directly on the event-loop thread rather than handing each call to a separate executor (documented under 'Blocking service implementation'). No source attributes the grpc_bench margin over C++ to a mechanism. In run #559 Armeria's CPU per request stayed at 17.9-23.6 us from 1 to 4 CPUs while the C++ server's rose from 18.0 to 47.4 us (derived from page data), so the gap comes from the C++ server not scaling on that build, not from Armeria being cheaper per request.
+
+**Use it when:**
+- JVM shops that already run grpc-java and want one server for gRPC, gRPC-Web, Protobuf-JSON, Thrift and REST on a single port, with throughput at or slightly above plain grpc-java (run #559: 0.98-1.06x the grpc-java G1GC row).
+- Small unary RPCs with non-blocking handlers on 2-4 cores, where the event-loop-inline execution avoids a thread hop.
+- Teams that need an off-the-shelf gRPC server with gRPC-Web for browsers, unframed JSON access and server reflection, without an Envoy sidecar for gRPC-Web translation.
+- Services where heap memory of hundreds of MiB is acceptable and JIT warm-up can be absorbed before traffic.
+
+**Skip it when:**
+- Memory-constrained deployments: run #559 shows 570-679 MiB average for Armeria against 21-32 MiB for the C++ server (about 20-28x).
+- Tail-latency-sensitive single-core services: at 1 CPU Armeria matched the C++ throughput but its p90 was 58.18 ms against 19.93 ms and p99 65.14 ms against 21.81 ms; at 2 CPUs its p99 was still worse (46.85 vs 39.43 ms) despite 1.28x the throughput.
+- Handlers that block (JDBC, file I/O, synchronous HTTP): service code runs on the event loop by default, so blocking stalls every connection on that loop unless @Blocking or useBlockingTaskExecutor(true) is used.
+- Large or complex request messages: issue #5152 (open since 2023-08) reports p95 rising from about 100 ms on raw grpc-java to about 300 ms on Armeria for ~500 KB requests at 10-12K QPS, traced to deserialization on the I/O thread.
+- When the fastest JVM gRPC server is the goal: in the same run Vert.x gRPC served 1.78x Armeria's req/s at 1 CPU and Pekko gRPC 1.29x.
+
+**Integration:** Maven/Gradle JAR modules (com.linecorp.armeria:armeria plus armeria-grpc) · Netty, grpc-java core/stub/protobuf/services, protobuf-java (HEAD pins Netty 4.2.18.Final, grpc-java 1.84.0, protobuf 3.25.9); grpc-kotlin optional · Java 8 or later for users (README); the benchmark image used Temurin JDK 23 · any platform with a supported JVM
+
+**Vs siblings:** Pick Armeria over Vert.x gRPC or Pekko gRPC when you want grpc-java's own service API plus gRPC-Web, JSON transcoding and Thrift on one server; pick Vert.x gRPC or Pekko gRPC when raw unary throughput per core matters, since both beat Armeria at every CPU count in run #559, and tonic or grpc-go when memory footprint matters.
+
+**Gotchas:**
+- The C++ baseline collapses with core count rather than Armeria pulling ahead: cpp_grpc_mt went from 57,403 req/s at 1 CPU to only 85,485 at 4 CPUs (1.49x) while its CPU per request rose from 18.0 to 47.4 us (derived from page data); at 1 CPU, where both burn one core, the two servers tie. The C++ server pre-posts a single CallData per completion queue on the legacy async API and links the unpinned Debian libgrpc++ of the gcc:15.2.0 image, so the 1.28-1.65x margin measures that build and pattern on this host, not C++ codegen.
+- Armeria is not special among the JVM rows of the same run: the plain grpc-java 1.58 Netty server (java_hotspot_grpc_g1gc, same JVM flags minus the Armeria header switches) was 1.7% ahead at 1 CPU and 1.0% ahead at 2 CPUs, and Armeria led it by about 6% at 3-4 CPUs; any JVM gRPC server here beats cpp_grpc_mt at 2+ CPUs.
+- At 3-4 CPUs the top rows (Vert.x 149-153k, Pekko 141-142k, Quarkus 140-142k req/s) cluster with idle server CPU (Vert.x 225-230%, Pekko 261-271%), and Armeria used 330.65% of 400% at 4 CPUs, which points to the 11-CPU ghz client capping the run near 150k req/s; the 4-CPU ratio is client-bound and not a server ceiling.
+- The benchmark server is tuned (Date and Server headers off, -Dcom.linecorp.armeria.validateHeaders=false, PROTO-only serialization, 70% heap) and pins armeria 1.20.3 (2022) with grpc-java 1.58.0, still the pins at grpc_bench HEAD, while Armeria is at 1.42.0 (2026-10-06).
+
+**Status:** Actively developed by LINE (release 1.42.0 on 2026-10-06, 5,257 commits, 5.1k stars, 621 open issues), Apache-2.0 and copyable as Maven artifacts; the benchmarked 1.20.3 build is about four years and 22 minor releases old.
+
+[repo](https://github.com/line/armeria) · [benchmark](https://github.com/LesnyRumcajs/grpc_bench/discussions/559)
+
 ##### D (LDC, betterC) port of the C epoll raw HTTP responder (httpbench)  `D`  `Unlicense`  `abandoned`  `Tier C`
 
 Single-file betterC D port of a C epoll 'Hello, World!' HTTP responder; matches the gcc -O3 original within 10%.
@@ -78230,6 +80077,92 @@ Single-file betterC D port of a C epoll 'Hello, World!' HTTP responder; matches 
 **Status:** Abandoned since 2022-05-30 (19 stars, 4 forks, 89 commits, Unlicense, so copyable with no attribution); nothing has been re-measured since ldc2 1.29.0 and kernel 5.15, and it is a benchmark fixture rather than a maintained component.
 
 [repo](https://github.com/tchaloupka/httpbench) · [benchmark](https://github.com/tchaloupka/httpbench/blob/master/README.md)
+
+##### grpc-dotnet (gRPC for .NET)  `C#`  `Apache-2.0`  `active`  `Tier C`
+
+Managed gRPC for ASP.NET Core; outran stock gRPC C++ async servers 1.48-1.67x on grpc_bench's 2026 unary test.
+
+**Beats:** gRPC C++ (grpc/grpc) servers cpp_grpc_st, cpp_grpc_mt and cpp_asio_grpc in the grpc_bench suite — In grpc_bench run #559 (posted by the maintainer on 2026-04-22, Xeon Gold 6548N, server Docker-limited to 1-4 CPUs and 4 GiB, ghz client on 11 CPUs, 50 connections x 1000 concurrent unary complex_proto calls, 120 s after 30 s warm-up, one run per setting), the .NET 9 / Grpc.AspNetCore 2.66.0 server served 1.48-1.67x the req/s of the cpp_grpc_mt, cpp_grpc_st and cpp_asio_grpc servers, built with g++ -O3 -flto against Debian's prebuilt libgrpc++. The 2022 wiki run (.NET 6, Xeon E5-1650 v3) led only at 1 CPU and trailed by 2-4 percent at 2-3 CPUs, and a client-bound third-party run (#547, Ryzen 9 5900X) was a tie.
+
+**Known shortcoming:** grpc_bench discussion 559 (2026-04): 1.48-1.67x over all C++ servers at 1-4 CPUs in the newest run, but the 2022 run led at 1 CPU only and #547 was a client-bound tie; memory 4-6x higher and worse 1-CPU p99; the HTTP/2 work is Kestrel's (dotnet/aspnetcore, separate record). Shared C++ baseline flaw: unpinned distro libgrpc++, helloworld async pattern, poor scaling (85,485 req/s at 4 CPUs).
+
+**Known shortcoming:** Harness asymmetry: the .NET bench server has been maintained by grpc-dotnet's author (JamesNK, 2020-2026) and uses ServiceProvidersMiddleware to skip per-request DI scopes plus a singleton service, which is unsafe to copy into apps with scoped services; the C++ servers are the stock helloworld async completion-queue pattern with one pre-posted request per queue, linking libgrpc++ from Debian trixie (probably 1.51.1, late 2022; version from search snippets only). The memory column likely includes the resident dotnet run SDK process; the 3-4 CPU rows are likely capped by the client (.NET at 256-279% CPU). In #547 cpp_grpc_mt used 14.4 us CPU per request against .NET's 32.4 at 1 CPU. Open issue #2033: throughput falls from 494 to 116 kops/s when handlers fault.
+
+**Independent measurement:** verifier batch-42 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** The whole stack is managed code with no native gRPC core: Kestrel's HTTP/2 implementation over System.IO.Pipelines with pooled buffers; the unary handler deserializes the request straight from the request body's PipeReader and, when the message length is known and compression is off, Google.Protobuf serializes the reply straight into the response PipeWriter after writing the 5-byte gRPC frame header (HttpContextSerializationContext's direct-serialization path) instead of an intermediate array. The .NET tiered JIT recompiles the hot path after the 30 s warm-up (grpc_bench set DOTNET_TieredPGO=1 for .NET 6 in Dec 2021; the 2026 .NET 9 image sets no runtime flags and builds without ReadyToRun or Native AOT). The benchmark server adds two tuning steps of its own, a singleton service and a middleware that skips per-request DI scope creation, while the C++ baseline is the untuned helloworld async completion-queue server on Debian's prebuilt libgrpc++.
+
+**Use it when:**
+- A .NET service exposing unary gRPC APIs where a C++ gRPC server was considered for throughput: at 1-4 server CPUs it served 84,809-136,452 req/s versus 56,669-85,485 for the three C++ servers in grpc_bench #559.
+- Small CPU-limited containers (1-2 CPUs) where requests per core matter more than resident memory: about 12.0 us of server CPU per request at 1 CPU versus 18.0 us for cpp_grpc_mt, and 20.5 us versus 47.4 us at 4 CPUs (derived from page data).
+- Teams already on ASP.NET Core that want gRPC to share its middleware, DI, authentication, logging and Kestrel configuration.
+- Replacing the deprecated Grpc.Core package; Grpc.Net.Client also targets net462, netstandard2.0 and netstandard2.1, so older clients can talk to the same services.
+
+**Skip it when:**
+- Memory-tight deployments: 122-135 MiB per server in #559 versus 9-32 MiB for the C++ servers and 13-15 MiB for tonic and Thruster (part of that is probably the dotnet run host process, see gotchas).
+- Strict tail-latency budgets on one core: p99 at 1 CPU was 54.20 ms versus 21.81 ms for cpp_grpc_mt.
+- You want the fastest gRPC server regardless of language: in the same run rust_tonic_st (102,754), java_vertx_grpc (100,308) and rust_thruster_st (98,464) beat it at 1 CPU, and Vert.x, thruster_mt and tonic_mt at 2 CPUs.
+- Handlers that fail often: issue #2033 (open since Feb 2023) measured grpc-dotnet falling from 494 to 116 kops/s when unary handlers fault, below the old Grpc.Core server's 223 kops/s failure case (.NET 7).
+- Hosting a server outside ASP.NET Core or on .NET Framework: Grpc.AspNetCore.Server targets only net8.0, net9.0 and net10.0, and a standalone non-ASP.NET server is still an open request (#2543).
+
+**Integration:** module (NuGet packages: Grpc.AspNetCore for servers, Grpc.Net.Client and Grpc.Net.ClientFactory for clients) · ASP.NET Core (Kestrel) for the server, Google.Protobuf, Grpc.Tools for build-time code generation from .proto files · Server: .NET 8 (Grpc.AspNetCore.Server targets net8.0, net9.0, net10.0); client: .NET Framework 4.6.2 or netstandard2.0; the repo itself builds with .NET SDK 10.0.100 · wherever ASP.NET Core runs; the README lists no platform restrictions
+
+**Vs siblings:** Pick it over tonic or Thruster (Rust), which are faster at 1 CPU and use about a tenth of the memory, when the codebase is already .NET; it beats grpc-go at every CPU count in #559 (84,809 vs 55,667 req/s at 1 CPU, 135,948 vs 117,082 at 4). The Kestrel sibling entry is the HTTP/2 server it runs on, so much of the measured advantage belongs to Kestrel.
+
+**Gotchas:**
+- Harness asymmetry: the .NET server in grpc_bench has been maintained by grpc-dotnet's own author (JamesNK, commits 2020-2026) and uses ServiceProvidersMiddleware to bypass per-request DI scopes. Copied into an app with scoped services (an EF Core DbContext, for example), that resolves them from the root provider and shares them across concurrent calls. The C++ servers are the stock helloworld async example with one pre-posted request per completion queue on the older async API, not the callback API.
+- Baseline age: the C++ servers link the libgrpc++-dev of the gcc:15.2.0 image, which is Debian trixie; packages.debian.org lists 1.51.1 in bookworm and sid (search snippets only, trixie page not reachable), so the 2026 run probably compared .NET 9 with Grpc.AspNetCore 2.66.0 (2024) against a late-2022 gRPC C++ core built with distro flags.
+- The memory column comes from docker stats, and the image's ENTRYPOINT is 'dotnet run -c Release -p GreeterServer --no-build', which likely keeps the SDK CLI process resident next to the server, so the 122-135 MiB probably overstates the server itself.
+- At 3-4 CPUs the .NET server used only 256-279 percent CPU while the top seven servers cluster at 136-153k req/s, which suggests the 11-CPU ghz client caps those rows, whereas the C++ servers saturate 306-406 percent. In the client-bound third-party run (#547, 1 CPU) cpp_grpc_mt needed 14.4 us of CPU per request versus 32.4 us for dotnet_grpc (derived from page data), so the CPU-efficiency lead flips between runs.
+
+**Status:** Actively maintained by the gRPC project and Microsoft (Grpc.AspNetCore 2.84.0 on NuGet 2026-09-21, last commit 2026-09-17), Apache-2.0, and the recommended C# gRPC implementation; copyable as NuGet packages, with the grpc_bench image already moved to .NET 10 (PR #560) after the measured run.
+
+[repo](https://github.com/grpc/grpc-dotnet) · [benchmark](https://github.com/LesnyRumcajs/grpc_bench/discussions/559)
+
+##### grpc-go  `Go`  `Apache-2.0`  `active`  `Tier C`
+
+Google's pure-Go gRPC; beat a stock gRPC C++ async server at 2-4 CPUs in one grpc_bench run, lost in another.
+
+**Beats:** gRPC C++ (grpc/grpc) servers cpp_grpc_st, cpp_grpc_mt and cpp_asio_grpc in the grpc_bench suite — grpc_bench discussion #559 (maintainer run, 2026-04-22, commit c4c93b3, Xeon Gold 6548N, Ubuntu 24.04, ghz client on 11 CPUs, 50 connections, 1,000 concurrent requests, 120 s after 30 s warmup, one run per setting): go_grpc (grpc-go v1.79.3 built with Go 1.26.2, default options) served 55,667 / 88,531 / 109,481 / 117,082 req/s at 1-4 server CPUs against the best C++ server (cpp_grpc_mt or cpp_asio_grpc, app code built with g++ 15.2 -O3 -flto over Debian's prebuilt libgrpc++) at 57,403 / 74,869 / 81,581 / 85,485, i.e. 0.97x, 1.18x, 1.34x and 1.37x (derived from page data). The 2022 wiki run (Xeon E5-1650 v3, grpc-go v1.36.0, Go 1.17) reversed this: 1.28x at 1 CPU, 0.73x and 0.85x at 2-3 CPUs.
+
+**Known shortcoming:** Result flips between grpc_bench runs: 2022 wins at 1 CPU only; 2026 (discussion 559) loses at 1 CPU (0.97x) and wins at 2-4 CPUs (1.18-1.37x). Shared C++ baseline flaw: unpinned distro libgrpc++, helloworld async pattern, poor scaling (85,485 req/s at 4 CPUs).
+
+**Known shortcoming:** Harness flaw: the C++ baseline is the untuned helloworld async server (one completion-queue thread per CPU, one pre-posted request per queue) on unpinned Debian libgrpc++, most likely the 1.51.1 series (version from a search snippet; packages.debian.org blocked); its per-CPU throughput falls from 55,600 to 21,100 req/s between 1 and 4 CPUs (Go 55,200 to 35,100), so the 2-4 CPU win measures C++ scaling. docker --cpus is a quota, not a cpuset: Go matches it via automaxprocs while C++ sees 16 cores. The benchmarked v1.79.3 predates the 2026 advisories GHSA-hrxh-6v49-42gf, GHSA-vp52-pcj8-j9qc (CVE-2026-84304) and GHSA-2v4p-qf9q-27wj and was never re-measured; tonic, Thruster and grpc-dotnet beat go_grpc at every CPU count in #559.
+
+**Independent measurement:** verifier batch-42 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** Each connection has a reader goroutine and a 'loopy writer' goroutine that drains a control buffer, interleaves DATA frames from active streams within flow-control quota, and batches frames into a 32 KB write buffer that it flushes only when nothing is queued; if fewer than 1,000 bytes are pending it yields once (runtime.Gosched) so stream goroutines can add to the batch (internal/transport/controlbuf.go). Every RPC runs in its own goroutine on Go's netpoller-backed M:N scheduler, so all GOMAXPROCS threads share incoming calls instead of being bound to one completion queue each as in the C++ async example used as the baseline. A BDP estimator sizes flow-control windows dynamically, and buffers come from a mem.BufferPool. The measured lead is a scaling effect, not per-core speed: at 1 server CPU it is 0.97x of C++.
+
+**Use it when:**
+- Any Go service that needs gRPC: it is the reference Go implementation and is wire-compatible with C++, Java, Rust and .NET peers.
+- Small unary RPCs on 2-4 core containers, where the 2026 grpc_bench run put it at 88,531-117,082 req/s against 74,869-85,485 for the stock gRPC C++ async servers (1.18-1.37x).
+- Memory-constrained deployments: 21-31 MiB average memory in grpc_bench #559, similar to the C++ servers (9-32 MiB) and far below grpc-dotnet (122-135 MiB) or Java Vert.x (108-333 MiB).
+- Services that need xDS, ALTS, interceptors or OpenTelemetry stats in the same library (all live in this module and its go.mod).
+
+**Skip it when:**
+- If you need a stable speed advantage over C++ gRPC: the 2022 run of the same harness reversed the order (1.28x at 1 CPU, 0.73x and 0.85x at 2-3 CPUs), a 2025 third-party run (#547) is a tie, and a tuned C++ server (many pre-posted requests per completion queue, callback API, a current gRPC core) was never measured.
+- Single-core servers with tight tail latency: at 1 CPU it serves 0.97x of cpp_grpc_mt with a p99 of 37.04 ms versus 21.81 ms.
+- If you want the fastest gRPC server outright: in the same 2026 run rust_tonic_st (102,754 req/s at 1 CPU, 1.85x), grpc-dotnet, rust_thruster and java_vertx_grpc (130,000-153,000 req/s at 2-4 CPUs) all beat go_grpc at every CPU count.
+- GC-sensitive hot paths: the server path still allocates per RPC (performance issue #3305, 'reduce garbage allocations in server path', open since 2020) and the default server starts one goroutine per stream.
+- C or C++ codebases: there is no C/C++ API; the only route is a separate Go process.
+
+**Integration:** module (Go module google.golang.org/grpc; code generation with protoc-gen-go and protoc-gen-go-grpc) · golang.org/x/net (HTTP/2 framer, HPACK), google.golang.org/protobuf, genproto rpc status; go.mod also pulls Envoy go-control-plane, cncf/xds, OpenTelemetry and go-spiffe for the xDS and stats packages · Go 1.26 at HEAD (go.mod 'go 1.26.0'; the benchmarked v1.79.3 needed Go 1.24); the README supports only the two latest Go major releases · any Go target; the README installs it with a plain import and go build, no C toolchain step
+
+**Vs siblings:** Pick grpc-go when the service is written in Go; tonic and Thruster (Rust) and grpc-dotnet out-served it at every CPU count of the same 2026 run (rust_tonic_st 102,754 vs 55,667 req/s at 1 CPU; grpc-dotnet 123,609-136,452 vs 88,531-117,082 at 2-4 CPUs). Against grpc-dotnet it uses a quarter to a sixth of the memory (21-31 MiB vs 122-135 MiB).
+
+**Gotchas:**
+- Baseline asymmetry in the measured win: the C++ servers link Debian's prebuilt libgrpc++-dev (unpinned; Debian stable ships the 1.51.1 series per Debian package listings seen in a search snippet, so most likely a late-2022 gRPC core) while go_grpc used grpc-go v1.79.3 from 2026. cpp_grpc_mt is the helloworld async pattern with one completion-queue thread per GRPC_SERVER_CPUS and a single pre-posted RequestSayHello per queue, so under 1,000 concurrent requests each queue accepts new calls one at a time. Its efficiency collapses with cores, from 57,403 req/s at 103% CPU to 85,485 at 406% (about 55,600 to 21,100 req/s per CPU, derived from page data), while go_grpc goes from 55,667 at 101% to 117,082 at 333% (about 55,200 to 35,100). The 2-4 CPU win therefore measures a poorly scaling C++ server, not faster per-core code.
+- bench.sh limits the server with docker --cpus, a CFS quota rather than a cpuset: go_grpc imports go.uber.org/automaxprocs, so GOMAXPROCS matches the quota, while the C++ process still sees all 16 host cores. Only one run per setting, the client reaches the server through Docker's published port 50051, and the workload is a single unary complex_proto echo.
+- The benchmarked v1.79.3 predates three 2026 advisories: GHSA-hrxh-6v49-42gf (HTTP/2 Rapid Reset mitigation bypass, fixed in 1.82.1), GHSA-vp52-pcj8-j9qc / CVE-2026-84304 (heap exhaustion from millions of tiny DATA frames, fixed in 1.83.1 with receive-buffer compaction) and GHSA-2v4p-qf9q-27wj (xDS server crash on missing :authority and Host, fixed in 1.82.2 and 1.83.2). The fixes add per-frame accounting, and HEAD also turns on the shared write buffer by default (off in v1.79.3); nobody has re-measured throughput on these versions.
+- Defaults matter: the harness uses grpc.NewServer() with no options, so NumStreamWorkers (experimental, reuses goroutines instead of one per stream), WriteBufferSize/ReadBufferSize and window sizes were not tuned on the Go side either. The faster go_vtgrpc rows (4-8% above go_grpc) come from the vtprotobuf codec, listed separately in wave 2.
+
+**Status:** Actively maintained by the gRPC team (latest release v1.84.0 dated 17 Sep on the releases page, 23.1k stars, 120 open issues, Apache-2.0) and the standard choice for Go; the speed edge over C++ gRPC is run-dependent and rests on an untuned, probably 1.51-era C++ baseline, and production users should run 1.84.0 or later because the benchmarked v1.79.3 is affected by 2026 DoS advisories.
+
+[repo](https://github.com/grpc/grpc-go) · [benchmark](https://github.com/LesnyRumcajs/grpc_bench/discussions/559)
 
 ##### ioxide  `C#`  `MIT`  `active`  `Tier C`
 
@@ -78530,6 +80463,49 @@ Koa-style Rust web framework whose experimental thruster-grpc server, on hyper/h
 
 [repo](https://github.com/thruster-rs/Thruster) · [benchmark](https://github.com/LesnyRumcajs/grpc_bench/discussions/559)
 
+##### tonic (Rust gRPC)  `Rust`  `MIT`  `active`  `Tier C`
+
+Rust async gRPC (tokio, hyper, prost) that out-served the stock C++ gRPC async servers in grpc_bench's small unary echo test.
+
+**Beats:** gRPC C++ (grpc/grpc) servers cpp_grpc_st, cpp_grpc_mt and cpp_asio_grpc in the grpc_bench suite — In grpc_bench's complex_proto unary echo test (commit 14a8435, 2022-04-23 wiki page, Xeon E5-1650 v3, 50 connections, 1000 in-flight requests, 120 s after a 30 s warm-up), rust_tonic_st (tonic 0.7, Rust 1.59, LTO, jemalloc) served 41,546 req/s at 1 CPU. The C++ servers, built with g++ 11 -O3 -flto against the distro libgrpc++, served 26,700 (cpp_grpc_st), 26,376 (cpp_grpc_mt) and 24,926 (cpp_asio_grpc), so tonic was 1.56-1.67x faster, but cpp_grpc_mt led at 2 and 3 CPUs. All three C++ servers register only one pending request per completion queue, which gRPC's performance guide warns serialises request handling.
+
+**Known shortcoming:** grpc_bench discussion 559: wins only at 1 CPU (41,546 vs cpp_grpc_st 26,700 req/s); cpp_grpc_mt leads at 2-3 CPUs; the C++ side links the distro libgrpc++ (probably 1.30.2 on bullseye, snippet only) rather than a benchmark-flag build; rust_grpcio (C core) also beat the C++ rows.
+
+**Known shortcoming:** Harness flaw: all three grpc_bench C++ servers (cpp_grpc_st, cpp_grpc_mt, cpp_asio_grpc) post exactly one RequestSayHello per completion queue against 1,000 in-flight requests, which gRPC's performance guide calls essentially serial request processing (grpc_bench issue #490, open since 2024-11-04; same code at the 2026 commit c4c93b3), so the C++ baseline is untuned. The record's 'win only at 1 CPU' caveat is outdated: discussion #559 (2026-04-23, Xeon Gold 6548N) has rust_tonic_mt beating the best C++ at 2/3/4 CPUs (130,370 vs 74,869; 139,886 vs 81,581; 136,638 vs 85,485). The repo is now grpc/grpc-rust (hyperium/tonic redirects).
+
+**Independent measurement:** verifier batch-44 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** The README describes three layers: a generic gRPC core, the hyper/h2 HTTP/2 implementation on tokio, and prost codegen, all compiled together, so the grpc_bench build gets whole-program opt-level 3, LTO and codegen-units 1 plus jemalloc. The winning 1-CPU variant, rust_tonic_st, runs tokio's current_thread runtime: one event loop with no cross-thread wake-ups or work stealing. That last point is the benchmark's setup rather than a documented tonic technique. Part of the measured gap comes from the C++ side, not from tonic (see gotchas).
+
+**Use it when:**
+- New gRPC services or clients written in Rust: async/await on tokio, prost-generated types, streaming, rustls TLS, health and reflection services.
+- Small unary RPCs at high concurrency in CPU-capped containers. In grpc_bench's 1-CPU complex_proto test, rust_tonic_st served 41,546 req/s against 24,926-26,700 for the three C++ servers in 2022, and 102,754 against 56,669-57,403 in the 2026-04-23 run.
+- One process per core with predictable tails: the current_thread variant held p99 at 33.24 ms (2022) and 14.47 ms (2026) at 1 CPU, while the multi-thread runtime's p99 was 668.38 ms and 98.22 ms.
+- Memory-tight sidecars: 12-18 MiB average memory in grpc_bench, close to the C++ servers (about 9-37 MiB) and far below dotnet_grpc (114-176 MiB).
+
+**Skip it when:**
+- In-process use from C++. Tuning grpc++ (more pre-registered requests per completion queue, or the callback API) is likely cheaper than adding a Rust process, and the grpc_bench C++ baseline never did that tuning.
+- Multi-core servers judged on the 2022 data alone. At 2 and 3 CPUs, cpp_grpc_mt (69,882 and 71,806 req/s) and cpp_asio_grpc beat rust_tonic_mt (53,832 and 64,091). tonic_mt led C++ at 2-4 CPUs only in the 2026 run.
+- The multi-thread runtime under a 1-CPU quota when tail latency matters: p99 was about 20x (2022) and 7x (2026) worse than the current_thread variant.
+- When you need a stable API: the crate is still 0.x, master is preparing breaking changes (the README points to the 0.14.x branch), and the repository now lives at grpc/grpc-rust next to a new grpc crate.
+- Tail-latency-critical clients on aarch64: issue #1606 (elevated p99 and above on a master client compared with v0.10.2) is still open and has no root cause.
+
+**Integration:** crate · tokio, hyper 1 and h2 0.4, hyper-util, tower 0.5, axum 0.8 (default router feature), bytes, tokio-stream, tokio-util; prost through tonic-prost; optional rustls (tls-ring or tls-aws-lc), flate2 (gzip/deflate), zstd; codegen in tonic-build/tonic-prost-build needs protoc · Rust 1.88 (MSRV in the README and the workspace rust-version); the 2022 benchmark used Rust 1.59 with tonic 0.7 · not documented in the README (any target tokio supports); grpc_bench measured only x86-64 Linux in Docker
+
+**Vs siblings:** Pick tonic over Thruster (thruster-grpc) when you want the mainstream Rust gRPC stack with prost codegen, TLS, health, reflection and xDS work; rust_thruster_st was within 0.5-4.2% of rust_tonic_st in both grpc_bench runs (41,334 vs 41,546 and 98,464 vs 102,754). Pick it over grpc-dotnet or grpc-go when the service is in Rust or memory is tight (about 13-15 MiB vs 120-135 MiB for dotnet_grpc in 2026); grpc-dotnet was close in multi-core throughput (136,452 vs 139,886 at 3 CPUs).
+
+**Gotchas:**
+- Harness flaw in the baseline: all three grpc_bench C++ servers (cpp_grpc_st, cpp_grpc_mt and cpp_asio_grpc) post exactly one RequestSayHello per completion queue, while the client keeps 1000 requests in flight. In the CallData servers, each call registers its successor only on reaching PROCESS. The asio-grpc server runs one accept-loop coroutine per GrpcContext and awaits one agrpc::request at a time. gRPC's own performance guide says to 'register enough server requests for the desired level of concurrency' to avoid 'a slow path that results in essentially serial request processing'. grpc_bench issue #490 (opened 2024-11-04, still open) reports this for cpp_grpc_mt; the maintainer replied that the code came from the gRPC examples. The server code is unchanged at the 2026 run's commit c4c93b3. The C++ servers also link the distro libgrpc++ package, asio-grpc is pinned to 1.0.0, and cpp_grpc_mt runs one thread per completion queue, where the guide (as of gRPC 1.41) suggests two. So the C++ numbers are a lower bound for grpc++, which is consistent with rust_grpcio (C core) also beating them at 1 CPU (31,035 req/s in 2022).
+- The record's caveat that the win appears only at 1 CPU is outdated. In the 2026-04-23 run (discussion #559, Xeon Gold 6548N, 4096m server RAM, tonic 0.14 on Rust 1.94), rust_tonic_mt beat the best C++ server at 2, 3 and 4 CPUs: 130,370 vs 74,869 (1.74x), 139,886 vs 81,581 (1.71x) and 136,638 vs 85,485 (1.60x), derived from page data. The same under-registered C++ harness was used.
+- Results depend on the runtime flavour. At 1 CPU, current_thread beat multi-thread by 17-25% in throughput and by 7-20x at p99. A current_thread server uses one core per process, so scaling out means several processes behind SO_REUSEPORT or a load balancer.
+- Tonic was not alone. At 1 CPU in 2022, go_vtgrpc (44,074) and rust_thruster_st (41,334) matched or beat rust_tonic_st, and in 2026 dotnet_grpc reached 84,809 against 57,403 for the best C++ server. The lead over C++ is a property of this harness as much as of tonic.
+
+**Status:** Actively maintained: last commit 2026-10-07, MIT, 12.5k stars. The project now lives at github.com/grpc/grpc-rust (hyperium/tonic redirects there), and the latest release is the 0.14.x line, with breaking changes pending on master. It is a copyable crate, but the measured advantage over C++ rests on an untuned grpc++ harness: one outstanding request per completion queue, the open grpc_bench issue #490.
+
+[repo](https://github.com/hyperium/tonic) · [benchmark](https://github.com/LesnyRumcajs/grpc_bench/wiki/2022-04-23-bench-results)
+
 ##### Undertow  `Java`  `Apache-2.0`  `active`  `Tier C`
 
 Embeddable non-blocking Java HTTP server (Red Hat); a 2014 build topped Kore, libmicrohttpd and a 4-worker nginx in a 2015 hello-world test.
@@ -78572,6 +80548,49 @@ Embeddable non-blocking Java HTTP server (Red Hat); a 2014 build topped Kore, li
 **Status:** Actively maintained by Red Hat (Apache-2.0, 3.8k stars, last commit 2026-10-08, 2.4.4.Final on 2026-10-02) and copyable as a Maven dependency. The only evidence is a 2015 single-author benchmark of the 2014 1.0.0.Final jar, so treat the ratios as historical.
 
 [repo](https://github.com/undertow-io/undertow) · [benchmark](https://raw.githubusercontent.com/nanoant/WebFrameworkBenchmark/HEAD/README.md)
+
+##### Vert.x gRPC server (Java): grpc_bench unary echo vs C++ gRPC (cpp_grpc_mt)  `Java`  `EPL-2.0 OR Apache-2.0`  `active`  `Tier C`
+
+Eclipse Vert.x's own gRPC server for the JVM; served unary grpc_bench echo 1.75x faster than the gRPC C++ async server in one 2026 run.
+
+**Beats:** gRPC C++ async server (cpp_grpc_mt in LesnyRumcajs/grpc_bench): the stock async greeter pattern with one completion queue per server thread, GRPC_SERVER_CPUS threads and a single pre-posted CallData per queue; main.cpp and the generated code are built with g++ 15.2.0 --std=c++20 -O3 -flto and linked with jemalloc against Debian-packaged libgrpc++, libgrpc and libprotobuf (versions and build flags not recorded). It was the fastest of the run's three C++ rows (cpp_grpc_mt, cpp_asio_grpc, cpp_grpc_st) at 1, 3 and 4 CPUs and within 0.4% of cpp_asio_grpc at 2 CPUs. — In grpc_bench discussion #559 (maintainer run, commit c4c93b3, Intel Xeon Gold 6548N, ghz 0.114.0 with 50 connections and 1000 concurrent unary complex_proto echo calls, 120 s after a 30 s warm-up), Vert.x gRPC server 4.4.4 on Temurin 23 served 100308 req/s on 1 CPU against 57403 for cpp_grpc_mt (g++ 15.2.0 -O3 -flto glue linked to Debian-packaged libgrpc++ and jemalloc), 1.75x, and 1.75x to 1.99x at 2 to 4 CPUs where the faster rows appear to hit a shared ceiling; earlier published runs (#441, #475, #547) put it only 0.98x to 1.22x ahead.
+
+**Known shortcoming:** Downgraded from A to B: tops the 2-4 CPU tables in #559 (1.75-1.99x) but other runs show 0.98-1.22x; vertx-grpc-server pinned at 4.4.4. Shared reason for B: the C++ side links unpinned Debian libgrpc++, libgrpc and libprotobuf with version and flags unrecorded (only the 179-line main.cpp gets -O3 -flto), one run per CPU count, and cpp_asio_grpc sits within about 2% of cpp_grpc_mt while rust_tonic_mt also beats it, so the limit is the C++ gRPC library build, not C++ code generation.
+
+**Known shortcoming:** Enricher: java_vertx_grpc_bench's Dockerfile sets JAVA_OPTS (SerialGC, RAMPercentage=70) but uses an exec-form ENTRYPOINT that the java launcher runs without reading JAVA_OPTS, so Vert.x ran on default JVM ergonomics unlike the HotSpot rows that use the Gradle start script. The 2-4 CPU rows hit a shared ceiling near 150k req/s (only 230% CPU at the 4-CPU cap), so the like-for-like point is 1 CPU only (1.75x); p99 is worse than C++ (29.95 vs 21.81 ms at 1 CPU); the measured 4.4.4 carries CVE-2024-8391; the C++ baseline pre-posts one CallData per queue.
+
+**Independent measurement:** verifier batch-119 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** The benchmark gives no mechanism. In the source, GrpcServerImpl handles each gRPC call on the Vert.x context (event loop) that owns the HTTP/2 request, with message framing done on Vert.x Buffers, so there is no hand-off to a separate executor; the grpc_bench app deploys one ServerVerticle per CPU, each with its own HttpServer on its own event loop sharing port 50051. The measurable effect in #559 is CPU per request (derived from page data): about 10.1 us for Vert.x against 18.0 us for cpp_grpc_mt at 1 CPU, and 15.4 us against 47.4 us at 4 CPUs, where the C++ server's per-request CPU rose 2.6x while Vert.x's rose 1.5x.
+
+**Use it when:**
+- JVM services that are mostly small unary gRPC calls and need the highest requests per CPU core of the Java options (it topped all 13 JVM rows of grpc_bench #559 at 1 and 4 CPUs).
+- Applications already on Vert.x or Quarkus, where the gRPC endpoint can share the event loops and the HTTP server with REST routes.
+- gRPC proxies and gateways: the message-level API forwards protobuf-encoded (even compressed) messages without decoding and re-encoding them.
+- Services that must expose gRPC-Web or HTTP/JSON transcoding from the same port without an Envoy sidecar.
+
+**Skip it when:**
+- Memory-tight deployments or sidecars: grpc_bench #559 measured 108 to 333 MiB for Vert.x against 21 to 32 MiB for the C++ server and 13 to 15 MiB for Rust tonic.
+- Tail-latency-bound services: despite lower averages, Vert.x's p99 was worse than C++ in #559 (29.95 ms vs 21.81 ms at 1 CPU, 21.70 ms vs 19.69 ms at 4 CPUs).
+- Handlers that block (JDBC, file I/O, heavy CPU) unless they are moved off the event loop; a blocking handler stalls every call on that loop.
+- Short-lived processes or cold-start-sensitive deployments: the measured numbers come after a 30 s JIT warm-up.
+- Teams that need the C++ result reproduced: three other published grpc_bench runs show only 0.98x to 1.22x over cpp_grpc_mt.
+
+**Integration:** module (Maven artifact io.vertx:vertx-grpc-server; vertx-grpcio-server for grpc-java stubs) · vertx-core (Vert.x HTTP/2 server on Netty), protobuf-java; protobuf-java-util for the JSON wire format; grpc-java stubs only through vertx-grpcio-server · Minimum JDK not documented in the pages read; the benchmark built vertx-grpc-server 4.4.4 on eclipse-temurin 23 with Gradle and protoc 3.21.6 · any JVM platform (the benchmark ran on x86-64 Linux in Docker)
+
+**Vs siblings:** Pick it over grpc-dotnet (84809 req/s at 1 CPU), Rust tonic (82515) and Armeria (56315) when the service must stay on the JVM and per-core unary throughput matters most, since it posted 100308 req/s at 1 CPU in the same run; pick tonic instead when memory matters (13 to 15 MiB against 108 to 333 MiB) or p99 latency is the target.
+
+**Gotchas:**
+- Harness flaw in the measured row: java_vertx_grpc_bench/Dockerfile sets ENV JAVA_OPTS (-XX:+UseSerialGC, Min/MaxRAMPercentage=70) but starts the server with an exec-form ENTRYPOINT ["java", "-jar", ...]; the java launcher does not read JAVA_OPTS, so those flags never reached the JVM and Vert.x ran on default JVM ergonomics. The java_hotspot_grpc_* images use the Gradle installDist start script, which does read JAVA_OPTS, so the Vert.x row is not configured like its JVM siblings and the record's compiler_and_flags is wrong on this point.
+- The 2 to 4 CPU rows look capped outside the server: Vert.x stayed near 150k req/s (148200, 153126, 149776) and used only 230% CPU of a 4-CPU limit, and Quarkus, Armeria, tonic and .NET cluster at 131k to 142k; with a ghz client limited to 11 CPUs and the server reached through a Docker-published port on 127.0.0.1, the 1.88x to 1.99x figures probably measure the C++ server against a shared ceiling. The CPU-bound like-for-like point is 1 CPU (100308 vs 57403 req/s, 1.75x).
+- The C++ baseline pre-posts a single CallData per completion queue, whereas gRPC's own async QPS benchmark server (test/cpp/qps/server_async.cc) pre-posts 5000 request contexts per queue; it also links an unpinned Debian libgrpc++ build. cpp_asio_grpc lands within about 2% of it, so the ceiling is most likely the packaged gRPC C++ core rather than the app pattern, but the baseline is not gRPC C++ at its tuned best.
+- Security: the benchmarked vertx-grpc-server 4.4.4 is in the range of CVE-2024-8391 (GHSA-g76f-gjfx-4rpr: no limit on inbound message length, 4.3.0 to 4.5.9, fixed in 4.5.10), and a per-message allocation bound for compressed messages was only added on 2026-10-07 (5.1.9); set a maximum message size and use a current release.
+
+**Status:** Actively maintained Eclipse Vert.x component (5.1.9 released 2026-10-07, 5.3.0-SNAPSHOT on main, dual EPL-2.0/Apache-2.0); the measured 4.4.4 release is old, carries CVE-2024-8391, and its grpc-java MethodDescriptor style of binding moved to vertx-grpcio-server in 5.x, so the benchmark code needs porting before it can be rerun on a current release.
+
+[repo](https://github.com/eclipse-vertx/vertx-grpc) · [benchmark](https://github.com/LesnyRumcajs/grpc_bench/discussions/559)
 
 ##### wizzardo-http  `Java`  `MIT`  `stale`  `Tier C`
 
@@ -79739,6 +81758,49 @@ A grammar-driven DFA-table lexer generator for C++, claiming 2x flex's throughpu
 **Status:** Listed as actively maintained (last commit 2026-04-19) and copyable (BSD-3-Clause, confirmed via doc/software_license.txt and source_dfa/license.txt despite GitHub showing no license), but this GitHub repository is a third-party 'maintenance fork' of Paul B Mann's SourceForge project and its recent commits are GitHub-linguist tweaks rather than functional work -- treat the SourceForge project as the canonical upstream.
 
 [repo](https://github.com/p7r0x7/LRSTAR) · [benchmark](https://github.com/p7r0x7/LRSTAR/blob/master/website/dfa_doc_expert.html)
+
+##### merve (nodejs CommonJS export lexer)  `C++`  `Apache-2.0 OR MIT`  `active`  `Tier C`
+
+C++20 lexer that finds CommonJS named exports for Node's ESM import(); replaced cjs-module-lexer, making cold CJS imports about 21% faster.
+
+**Beats:** cjs-module-lexer (the JS/WebAssembly lexer previously bundled in Node.js core) — In Node PR 61456, merve's own author ran Node's benchmark CI to compare a Node build using merve with one using cjs-module-lexer on benchmark/esm/import-cjs.js, which runs ESM import() of the 2000+-export typescript.js fixture. The cold single import was +26.83 % ops/s (+/-0.58 %) and ten warm imports were +11.95 % (+/-0.14 %), which is about 21 % and 11 % less time per import (derived from page data). No CPU, compiler or flags are given, and the timing is end to end, including file read, compile, evaluation and the baseline's wasm start-up, so lexer-only speed is not isolated.
+
+**Known shortcoming:** Only evidence is the author's own Node CI run (cold +26.83%, warm +11.95%) with no CPU or flags; it times the whole import(), so the binding change and wasm start-up removal are mixed in with the lexer. The CMake benchmark option points to a benchmarks directory that does not exist. Post-merge regressions node #62212 and #63323 were fixed; merve issue #49 is still open.
+
+**Known shortcoming:** Enricher (code reading, not reproduced): no bracket-nesting bound; upstream cjs-module-lexer checks pushes against STACK_DEPTH 2048, but merve's src/parser.cpp checks only template nesting, so more than 2048 nested ( or { writes out of bounds into the stack-allocated CJSLexer arrays (up to about 512 KB past). No fuzz directory. Harness: the import-cjs.js warm assert compares Object.keys(result.default), which is module.exports and independent of the lexer output, so the warm row does not check lexer correctness.
+
+**Independent measurement:** verifier batch-21 (wave 3 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** It is a hand-written single-pass scanner that does not backtrack. It keeps the structure of cjs-module-lexer's lexer.c: the same open-token and template stacks with STACK_DEPTH 2048, and the same star-export backtracking. Characters are classified with 256-entry lookup tables built by consteval lambdas. Export names are std::string_view slices of the source, and a std::string is allocated only when an escape must be decoded. With MERVE_USE_SIMDUTF, which Node enables, simdutf::find locates backslashes and simdutf converts UTF-32 to UTF-8. Inside Node, part of the measured gain comes from calling native C++ directly, where the old path ran JS that called a WebAssembly lexer that had to be initialised first.
+
+**Use it when:**
+- Tools outside Node that must reproduce Node's CJS-to-ESM named-export detection, such as bundlers, resolvers, alternative runtimes or linters, written in C, C++ or Rust.
+- Bulk scans of npm packages to list CJS exports and re-exports with line numbers, where a native library is easier to embed than a JS or wasm module.
+- Runtimes where the cold-start cost of instantiating cjs-module-lexer's wasm matters, for example the first import() of a CJS dependency.
+- Flagging .js files that contain ESM syntax: it returns UNEXPECTED_ESM_IMPORT, UNEXPECTED_ESM_EXPORT or UNEXPECTED_ESM_IMPORT_META.
+
+**Skip it when:**
+- Untrusted or adversarial source until a nesting-depth bound is added: parentheses and braces nested more than 2048 deep overrun fixed-size stacks (see gotchas).
+- You need exports that the cjs-module-lexer rules miss: module.exports = { test: 5 } yields no exports (open issue #27, the same won't-fix behaviour as upstream), and import * namespaces lose exports whose names start with 'get' (open issue #49).
+- You need a general JavaScript tokenizer or parser: merve only recognises export patterns.
+- Pure-JS environments: the cjs-module-lexer npm package stays the portable option, and merve needs a native C++20 build.
+- You need lexer-only throughput numbers: none are published, and the repository has no benchmarks directory although CMake has a MERVE_BENCHMARKS option.
+
+**Integration:** static or shared lib (CMake target lexer::lexer) or source-drop (singleheader/merve.h and merve.cpp); Rust crate in rust/ · none; simdutf optional (MERVE_USE_SIMDUTF, fetched with CPM when not found) · C++20 (consteval lookup tables), CMake 3.16 · Linux, macOS and Windows per the README; scalar portable code, with SIMD only through optional simdutf
+
+**Vs siblings:** The catalogued siblings (flex, logos, simd-lexing, the Zig SIMD tokenizer, LRSTAR) are general lexer generators or language tokenizers. Pick merve only for the narrow job of detecting CommonJS exports with Node-compatible semantics, which none of them provide.
+
+**Gotchas:**
+- No nesting-depth check on brackets: upstream cjs-module-lexer guards every push with pushOpenToken(), which raises a syntax error at STACK_DEPTH 2048 in lexer.c and throws 'Maximum nesting depth exceeded.' in lexer.js. merve's src/parser.cpp checks only template nesting (TEMPLATE_NEST_OVERFLOW). Its five openTokenDepth++ pushes (plain '(' and '{', import(, __interopRequireWildcard( and __export( or __exportStar( contexts), and the ++openTokenDepth in templateString(), write to std::array<..., 2048> members with no bound. More than 2048 nested parentheses or braces therefore writes out of bounds in the CJSLexer object, which is a local on the stack in parse_commonjs. Because openTokenDepth is uint16_t, the index can reach 65535, about 512 KB past openTokenPosStack_. Node runs this lexer on any CJS file that ESM code imports. This was found by reading the code at HEAD; it was not reproduced (no build), and the repository has no fuzz directory.
+- Benchmark harness: the warm row of nodejs/node benchmark/esm/import-cjs.js asserts deepStrictEqual(Object.keys(require(fixture)), Object.keys(result.default)). result.default is module.exports, which does not depend on the lexer, so the check does not validate the names merve detects; those appear on the namespace object itself. The cold row times a single import() that includes reading, compiling and evaluating typescript.js, plus the baseline's wasm initialisation.
+- Zero-copy names: for exports held as string_view (most plain identifiers), the source buffer must outlive the analysis, including through the C API, where the merve_analysis handle must also be freed with merve_free().
+- Released versions had memory-safety and correctness regressions: a heap-buffer-overflow read when require() is the first token (Node issue 62212, fixed in 1.2.1 by merve PR 41), a ToLocalChecked abort in Node's binding (fixed by node PR 63885), 'get' export names breaking later exports (fixed in 1.2.0), and Rust-binding unsoundness (issues #16 and #28, fixed in 1.1.x).
+
+**Status:** The project is active (v1.2.2 released 2026-03-11, last commit 2026-04-17), Apache-2.0 OR MIT, and shipped in Node v24.14.0 LTS and v25.6.1. It is young, though: there have been several post-merge crash and wrong-export fixes, issue #49 is open, HEAD has no bracket-nesting bound (a possible stack out-of-bounds write on deeply nested input), and the only numbers come from a first-party end-to-end Node CI run whose warm-row assertion does not check the lexer's output.
+
+[repo](https://github.com/nodejs/merve) · [benchmark](https://github.com/nodejs/node/pull/61456)
 
 ##### simd-lexing  `C`  `Zlib`  `abandoned`  `Tier C`
 
@@ -84996,6 +87058,91 @@ Header-only C++20 thread pool with per-worker mutex queues and stealing; first-p
 
 [repo](https://github.com/DeveloperPaul123/thread-pool) · [benchmark](https://github.com/DeveloperPaul123/thread-pool#benchmarks)
 
+##### FastThreadPool (komrad36)  `C++`  `MIT`  `abandoned`  `Tier D`
+
+183-line header: an unbounded MPMC work queue of plain function pointers with spin-bit locking; no benchmark against any thread pool.
+
+**Beats:** None named by the author; std::async, boost::asio::thread_pool and BS::thread_pool are the natural incumbents (inferred by the search agent, never compared) — Nothing was measured: the README's only claim is 'a super fast lock-free (though not always wait-free) thread pool', with no baseline, compiler, hardware or benchmark code, and no comparison against std::async, boost::asio::thread_pool or BS::thread_pool exists.
+
+**Known shortcoming:** No numbers and no baseline; the header is a function-pointer MPMC queue rather than a thread pool, its tag-bit spinning means it is not truly lock-free, and the repo has been abandoned since 2021-10-19.
+
+**Known shortcoming:** Enricher (code reading, not reproduced): RemoveWork reads m_pTail relaxed and then pHead->m_next, so on ARM or POWER the consumer can see the new tail with a null next pointer, set head to nullptr and strand every queued item (x86 TSO hides it); the relaxed head hand-off makes the read of m_f a data race; Pause() is a no-op on MSVC (no __SSE2__ define); tag bits act as spinlocks, so it is not lock-free.
+
+**Independent measurement:** verifier batch-63 (wave 11 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** It is a singly linked FIFO in the style of the Michael-Scott two-lock queue, with the two locks folded into the pointers: producers claim the tail by CAS-setting bit 0 of m_pTail, consumers claim the head by CAS-swapping m_pHead to the sentinel value 1, and waiters spin with _mm_pause. Head and tail sit on separate 64-byte cache lines (alignas(64)), so producers and consumers mostly touch different lines and an uncontended enqueue or dequeue is one CAS plus a couple of stores. Nothing in the repository measures how fast this is.
+
+**Use it when:**
+- You are writing your own worker threads on x86-64 and want a tiny, dependency-free MPMC queue of void(*)() jobs to read and adapt rather than a full pool.
+- Teaching or study material: a compact example of a two-lock linked-list queue with tag-bit locks and annotated (but unproven) memory orders.
+- Jobs are global functions with no arguments and no results, and you already have your own sleep/wake policy for idle workers.
+
+**Skip it when:**
+- You need a real thread pool (worker threads, std::function or move-only callables, arguments, futures, wait-for-all): use BS::thread_pool, dp::thread_pool, riften::Thiefpool or inkooboo/thread-pool-cpp instead.
+- ARM, POWER or other weakly ordered CPUs: the consumer reads the tail with relaxed loads before reading the old head's next pointer, so the C++ memory model does not guarantee it sees the link the producer published (see gotchas); only x86 TSO hides this.
+- Latency-sensitive systems where a preempted thread must not stall others: a producer holding the tail tag or a consumer holding the head sentinel blocks everyone else, so despite the README it is not lock-free in the formal sense.
+- Allocation-sensitive hot paths: every AddWork does a new and every RemoveWork a delete, with no allocator hook or node pooling.
+- Anything that needs a measured speedup: there is no benchmark, test or comparison in the repository.
+
+**Integration:** header-only · none (C++ standard library <atomic>, <cstdint>; <emmintrin.h> when __SSE2__ is defined) · C++11 (std::atomic, alignas); not documented beyond that · any target with std::atomic; the _mm_pause spin hint is emitted only when __SSE2__ is defined (GCC/Clang on x86), so on ARM and under MSVC the spin loops have no pause or yield; memory ordering is only safe on x86 (see gotchas)
+
+**Vs siblings:** Pick it over inkooboo/thread-pool-cpp, nexus or BS-style pools only when you want a few dozen lines of queue code to vendor into your own x86-only worker design; every catalogued sibling (thread-pool-cpp, nexus, dp::thread_pool, riften::Thiefpool) ships worker threads, callable wrappers and at least a first-party benchmark, which this repository lacks.
+
+**Gotchas:**
+- Memory-ordering flaw (analysis of fast_thread_pool.h, not reproduced): in RemoveWork the consumer loads m_pTail with memory_order_relaxed (L4, and relaxed CAS failure ordering) and, on seeing a tail different from the node it holds, reads pHead->m_next with acquire. The relaxed tail read creates no happens-before with the producer's release store of m_next (S4), so on ARM or POWER the consumer can see the new tail yet read a null next pointer, set m_pHead to nullptr and strand every queued and future item (RemoveWork then returns nullptr forever and the nodes leak). Making the L4 loads acquire would close it; x86 TSO never reorders the two loads.
+- The head hand-off store (S9) is relaxed, so a later consumer's acquire CAS on m_pHead synchronizes with nothing and its read of the plain (non-atomic) m_f field is formally a data race under the C++ memory model; it works in practice on x86 and through address dependencies on ARMv8, but sanitizers such as TSan may flag it.
+- MSVC does not define __SSE2__, so on Windows MSVC builds Pause() compiles to nothing and the spin loops busy-wait without a pause hint; RemoveWork on an empty queue returns nullptr immediately, so the caller's idle loop decides whether workers spin (the README's TODO says they should sleep).
+- AddWork takes void f() (a function pointer): lambdas with captures, std::function, member functions and arguments are not accepted, and new can throw std::bad_alloc out of AddWork.
+
+**Status:** Abandoned after five commits on 2021-10-18 and 2021-10-19 (the last one, 'update consume operations', made m_next atomic and added the acquire load), with no issues, tests or releases; MIT-licensed and small enough to vendor, but the tail loads in RemoveWork need acquire ordering before use on ARM.
+
+[repo](https://github.com/komrad36/FastThreadPool)
+
+##### Lace (trolando)  `C`  `Apache-2.0`  `active`  `Tier D`
+
+C11 fork-join work-stealing runtime (split deque, leapfrogging) from the Sylvan BDD author; claims Wool-level overhead, no reproducible numbers against TBB, Cilk or OpenMP.
+
+**Beats:** Intel TBB, Cilk Plus (Cilk++), OpenMP and Wool (Wool is the parity target, not a claimed loss) — No reproducible comparison exists: the repo's bench.py and benchmarks/CMakeLists.txt build only Lace and sequential versions of the Cilk-5/Nowa-derived programs, the Euro-Par 2014 paper claims only parity with Wool (abstract seen as a snippet), and the 2020 Twente essay ranking Lace ahead of Cilk Plus, TBB and OpenMP on UTS, Fibonacci and Strassen was seen only as a snippet. The only numbers seen are informal ones in issue #7 (2022, Lace v1, 6 threads, CPU and compiler not stated): fib(41) 0.188 s for Lace against 2.663 s for Weave with eager heap-allocated futures, and N-Queens 15 at 23.01 s against Weave's 24365.96 printed under a 'Time(us)' label that the author read as 24.37 s; the Weave author's own 18-core i9-9980XE rerun reported '2x to 2.5x faster on nqueens but 2.5x to 10x slower on fibonacci' without naming the subject, and noted that Weave's lazy futures cut the fib overhead.
+
+**Known shortcoming:** No figures anywhere: the Euro-Par paper abstract claims only parity with Wool, the Twente essay ranking Lace first was seen as a snippet only, and the repo's benchmarks build only Lace and sequential versions. Downgraded to D; retier possible once the papers are reachable.
+
+**Known shortcoming:** Enricher: the only numbers seen are issue #7 (2022, Lace v1, 6 threads, CPU unstated): fib(41) Lace 0.188 s vs Weave 2.663 s with Weave in its heap-allocating eager-future mode, and NQueens 15 with mislabelled units; Weave's author reports 2-2.5x faster on nqueens and 2.5-10x slower on fib on an i9-9980XE without naming the subject. LACE_NATIVE_OPT defaults ON (-march=native), the deque defaults to 100,000 slots per worker and exits on overflow, the stack is clamped to 16-64 MB unlike the header comment, and issue #16 is open (the FreeBSD port forces all memory orders to seq_cst; test_together segfaults on armv7 and arm64).
+
+**Independent measurement:** verifier batch-63 (wave 11 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Each worker owns a split deque (van Dijk and van de Pol, Euro-Par 2014 workshops): the owner pushes and pops the private end wait-free with no atomics on the SYNC fast path, thieves CAS a packed 64-bit tail/split word, and the split point moves only on request (a movesplit flag), so fences are needed only when the shared part shrinks. Tasks live in fixed-size 32/64/128-byte deque slots instead of heap objects, and a worker whose stolen task is not finished steals back from the thief (leapfrogging) instead of blocking. Idle workers yield for 256 attempts, then futex-sleep with a 100 us to 1 ms ramp, and a per-worker bump arena replaces malloc and alloca for task-local scratch memory.
+
+**Use it when:**
+- Recursive divide-and-conquer in C or C++ with very small tasks (fib-style spawn/sync, tree or decision-diagram traversal, UTS, N-Queens, recursive matmul) where per-task overhead dominates.
+- Programs that cannot rely on a Cilk compiler (OpenCilk) or on TBB but want Cilk-style SPAWN/SYNC on GCC, Clang or MSVC across Linux, macOS, Windows and FreeBSD.
+- Long-running parallel engines that need stop-the-world points: NAME_NEWFRAME suspends all workers to run one task (e.g. garbage collection, table resize) and NAME_TOGETHER runs a copy on every worker, as Sylvan uses them.
+- Multi-socket machines where you can enable LACE_USE_HWLOC so workers are pinned and their stacks and deques are NUMA-local.
+
+**Skip it when:**
+- General task-pool needs (fire-and-forget jobs, futures that escape their scope, async I/O, parallel_for over ranges): use TBB, Taskflow or a thread pool instead.
+- Processes that share cores with other parallel runtimes or need an elastic worker count: the pool size is fixed at lace_start, changing it means stop and restart (issue #9), and the author says it targets research programs running alone on a large machine.
+- Unbounded or very deep spawn chains: each worker's deque defaults to 100,000 slots and overflow terminates the process; worker stacks are clamped to 16-64 MB.
+- Tasks whose arguments plus result exceed 48 bytes (lace.h), 16 bytes (lace32.h) or 112 bytes (lace128.h); larger data must be passed by pointer.
+- Choosing on proven speed: no repo, paper or third-party table opened here shows Lace beating TBB, Cilk Plus or OpenMP with numbers.
+
+**Integration:** static lib (CMake targets lace::lace, lace::lace32, lace::lace128; shared build possible but warned against) · pthreads (or Windows threads); optional hwloc; Synchronization.lib on Windows · C11 compiler (GCC, Clang, or MSVC with /experimental:c11atomics); CMake 3.23 per CMakeLists.txt (the getting-started page still says 3.15); header also compiles as C++ (benchmarks build fib-lace.cpp as C++11) · Linux, macOS (os_sync wait/wake on 14.4+, __ulock below), Windows 8+, FreeBSD; x86-64 and aarch64, with i386 and armv7 builds tested in CI via QEMU since 2.1.0
+
+**Vs siblings:** Pick Lace over OpenCilk when you cannot switch compilers but want the same spawn/sync model in plain C, and over Staccato or Weave when you need C (not C++ templates or Nim) plus stop-the-world NEWFRAME/TOGETHER interrupts and NUMA pinning; pick Staccato, Nowa or OpenCilk if you want a published comparison against TBB and Cilk Plus with numbers, which Lace's repo does not provide.
+
+**Gotchas:**
+- LACE_NATIVE_OPT defaults to ON, so the library and benchmarks build with -march=native and the binaries may not run on other CPUs; the building docs say to turn it off for distributed builds. The library also compiles with -Werror plus -Wconversion/-Wsign-conversion, which broke a downstream build in 2.2.2 (issue #20, fixed).
+- Fixed sizes: lace_start(.., 0, ..) gives 100,000 deque slots per worker (the source's static 1M default and the design page's '1M task slots x 64 bytes' are overwritten), and exceeding it prints 'lace_task stack overflow' and exits; requested stack sizes are silently clamped to 16-64 MB, unlike the header comment that describes the default as the minimum of 16 MB and the caller's stack size.
+- SPAWN/SYNC must match in strict LIFO order (out-of-order SYNC is undefined behaviour) and every spawned task must be synced or dropped before the frame returns; scratch-arena allocations need a matching lace_scratch_reset on every return path (leaks are only reported at the next deep idle).
+- Weak-memory confidence: in still-open issue #16 (32-bit builds, latest comment 2026-04-26) the FreeBSD port works around suspected ordering bugs by rewriting every memory_order_* to seq_cst, and test_together segfaulted on armv7 and arm64 with no confirmed root cause; the 2.x design page now documents the release/acquire/seq_cst points for ARM and POWER, but the port workaround had not been dropped.
+
+**Status:** Actively maintained (2.4.0 released 2026-06-07 with the scratch arena, 2.3.x in April 2026; CI on Linux, macOS, Windows and FreeBSD), Apache-2.0 and small (one .c and one generated-macro header per variant), so it is copyable; the performance claim stays directional, since the repo's harness has no baseline builds and the 2022 Weave comparison in issue #7 pitted Lace's slot-based tasks against Weave's heap-allocating eager-future mode on an unstated CPU.
+
+[repo](https://github.com/trolando/lace)
+
 ##### ThreadPool (progschj)  `C++`  `Zlib`  `abandoned`  `Tier D`
 
 Single-header C++11 fixed-size thread pool returning futures; not shown to beat std::async thread-per-task overall.
@@ -89755,6 +91902,50 @@ Header-only C99 library implementing x86 (MMX to AVX2, parts of AVX-512), Neon a
 
 [repo](https://github.com/simd-everywhere/simde) · [benchmark](https://developer.arm.com/community/arm-community-blogs/b/tools-software-ides-blog/posts/porting-to-arm-intrinsics-with-simde)
 
+##### fastapprox  `C`  `BSD-3-Clause`  `abandoned`  `Tier D`
+
+Header-only C/C++ single-precision approximations of exp, log, pow, sigmoid, trig, erf, lgamma and Lambert W, with SSE2 variants; no measured speedup over libm.
+
+**Beats:** libm expf/logf/powf (single-precision libm; the repo's tests use them as the accuracy reference, libm is never timed) — No speed comparison against libm exists: the repo's tests assert that average error on the metric above stays under 1e-4 (fast tier) and 2e-2 (faster tier) against expf, logf, powf, sigmoid built from expf, sinf and others over 100000 drand48 samples in fixed ranges, and time only the approximation on a constant input with no compiler, flags or CPU recorded. The only first-party speed statement is directional and partly negative (fasttrig.h: the full-range trig versions can be slower than libc on older machines).
+
+**Known shortcoming:** No speed number anywhere: the tests only check accuracy against expf (1e-4 fast, 2e-2 faster) and the timing loop times the approximation alone on a volatile 1.0f, never libm. Abandoned since 2017-03-01, a fork of etheory/fastapprox; BSD-3-Clause from COPYING. Author's blog unreachable.
+
+**Known shortcoming:** Enricher (compiled transcription of the formulas, GCC -O2): fastexp and fasterexp have no upper clamp, so fastexp(89) is NaN and fastexp(90) is -9.3e-39 (vfasterexp gives -0), which makes fastsigmoid(-90) return 1.0 and fasttanh(-45) return +1; fastlog(0) is -88 and fastlog(-1) +177. The tests sample exp only on [-5,5] and sigmoid on [-50,50] with an error metric about half the usual relative error, asserting only the average. fasttrig.h warns full-range trig can be slower than libc on older machines; SSE2 variants are missing on MSVC unless __SSE2__ is defined by hand.
+
+**Independent measurement:** verifier batch-75 (wave 1 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** It works on the IEEE-754 bit pattern instead of doing range reduction and polynomials: the 'faster' variants are Schraudolph-style tricks (exp2 builds the float bits as 2^23 * (p + 126.94), log2 reads the raw bits as an integer and rescales), and the 'fast' variants add a small rational correction on the mantissa fraction (for example 27.728 / (4.8425 - z) in pow2). Sigmoid, pow, sinh, cosh and tanh are composed from these; sin and cos use a parabola-plus-correction approximation on [-pi, pi]; there are no branches except input clamps, so the SSE2 versions are straight-line code.
+
+**Use it when:**
+- Machine-learning or probabilistic inner loops (logistic loss, softmax-like weights, digamma and lgamma in variational updates) that tolerate about 1e-4 relative error and keep arguments in moderate ranges.
+- SSE2 batch evaluation of exp, log or sigmoid where a full vector math library is too heavy to pull in.
+- Plain C codebases that want a single BSD-licensed header with no dependencies.
+- Graphics, audio or game code that only needs 2-3 correct digits and can use the 'faster' tier.
+- As a reference for the bit-manipulation techniques (the repo includes a Mathematica notebook explaining them).
+
+**Skip it when:**
+- Inputs outside the tested ranges: fastexp/fasterexp return NaN or a negative number instead of +inf for x above about 88.7, so fastsigmoid(x) returns NaN, 1.0 or a small negative number instead of nearly 0 for x below about -88.7, and fasttanh(x) returns NaN or +1 instead of -1 just below x = -44.4 (fasttanh(-45) and fasttanh(-50) give +1).
+- Code that relies on libm special values: fastlog(0) is about -88.0 instead of -inf, fastlog(-1) about +177 instead of NaN, and NaN or inf inputs give finite values near 89.
+- When you need a documented speedup: the repo never times libm, and the author's own fasttrig.h comment says fastsinfull, fastcosfull and fasttanfull can be slower than libc on older machines and only slightly faster on newer ones.
+- Double precision, faithfully rounded results or reproducible ulp bounds: everything is float and accuracy is only checked as an average.
+- AVX2, AVX-512 or NEON vectorization: only SSE2 four-wide variants exist, and the project has had no commits since 2017.
+
+**Integration:** header-only · none (stdint.h; emmintrin.h when __SSE2__ is defined) · C99 or C++ (GCC or Clang vector extensions for the C SSE2 path; MSVC supported for C++ through operator overloads added in the 2017 patch) · any for the scalar functions; x86 with SSE2 for the v4sf variants, which are compiled only when __SSE2__ is defined (MSVC does not define that macro by default, so the vector variants are absent there unless it is defined by hand)
+
+**Vs siblings:** Pick fastapprox over SLEEF when 1e-4 average error is acceptable and you want one dependency-free header with sigmoid, lgamma, digamma, erf-inverse and Lambert W in it; pick SLEEF (1-ulp, AVX2/AVX-512/NEON, maintained) or fast_math_cpp (scalar float approximations with measured speed against glibc) when you need stated accuracy bounds or a measured speedup.
+
+**Gotchas:**
+- Overflow bug outside the tested domain (checked this session by compiling a transcription of fastexp.h formulas with GCC -O2 on x86-64): fastexp(89) and fasterexp(89) return NaN, fastexp(90) returns -9.3e-39 and fastexp(200) returns -6.2e9 where expf returns inf, because the 2^23 * (p + 121.27 + ...) bit pattern spills past the exponent field into the sign bit and nothing clamps the top end; vfasterexp returns -0.0 there. The composed functions inherit it: fastsigmoid(-90) and fastersigmoid(-90) return 1.0 (true value about 8e-40) and fasttanh(-45) returns +1.0 instead of -1.0. The tests never see this because they sample exp on [-5, 5], sigmoid on [-50, 50] and sinh and cosh on [-25, 25]; inputs past the 2^32 limit make the float-to-uint32 cast undefined behaviour. Clamp arguments yourself.
+- The tests' accuracy metric is |est - exact| / (1e-4 + |est| + |exact|) and only its average over 100000 samples is asserted (max error is printed, not checked): it is about half the usual relative error and becomes an absolute-error test for outputs below 1e-4, so the '1e-4' figure understates the conventional relative error, especially for small sigmoid outputs.
+- The timing macro in tests/testmacros.h runs the approximation 1e8 times on a volatile constant 1.0f with gettimeofday and never runs libm, so the printed million calls per second is not a comparison.
+- Type punning goes through unions, which is defined in C but formally undefined in C++ (GCC, Clang and MSVC accept it); cast.h's include guard never defines __CAST_H_, which is harmless because the macro is redefined identically.
+
+**Status:** Abandoned since the 2017-03-01 MSVC and gcc narrowing merge (ChangeLog stops at 0.3.2), BSD-3-Clause per fastapprox/COPYING and small enough to vendor, but the unclamped exp overflow that breaks sigmoid and tanh for large negative arguments must be patched or guarded by the caller.
+
+[repo](https://github.com/pmineiro/fastapprox) · [benchmark](https://raw.githubusercontent.com/pmineiro/fastapprox/HEAD/fastapprox/tests/testfastexp.c)
+
 ##### xsimd  `C++`  `BSD-3-Clause`  `active`  `Tier D`
 
 Header-only C++ SIMD abstraction: portable batch<T,Arch> type replaces scalar loops across x86/ARM/RISC-V/WASM.
@@ -93931,6 +96122,49 @@ Multithreaded C++ Redis 6.2 fork serving one keyspace from many event-loop threa
 **Status:** Stale: last release v6.3.4 (Oct 2023) and last commit April 2024, and the lead developer, leaving Snap, recommended Valkey. The code is BSD-3-Clause and builds with make, but anyone adopting it maintains the fork themselves.
 
 [repo](https://github.com/Snapchat/KeyDB) · [benchmark](https://docs.keydb.dev/blog/2020/09/29/blog-post/)
+
+##### mrcache  `C`  `MIT`  `stale`  `Tier C`
+
+Single-threaded io_uring key-value cache server in C; README claims 7x Redis and 46x memcached GET throughput at 16 B.
+
+**Beats:** Redis (also memcached) — The README reports single-node GET throughput from the repo's Go client (bench.go, localhost by default), which fetches one zero-filled 16-byte key over and over: 18.6m ops/s against Redis 2.5m and memcached 400k with 16 B values, and 979k against 313k and 261k with 10 kB values (212k with zstd on an all-zero value). No CPU, kernel, compiler, Redis or memcached version or configuration, connection count or batch size is given, and the memcached client is not in the repo. mrcache's numbers come from a busy-polling event thread plus an SQPOLL kernel thread, while the Redis and memcached configurations are unstated.
+
+**Known shortcoming:** First-party README table only: no CPU, versions or run flags, the memcached harness is missing from the repo, and bench.go hits one repeated key (default value 256 B) over loopback with batch 1 and 16 connections, at which 18.6M gets/s is implausible without undisclosed pipelining; its length-times-batch count undercounts mrcache's 4-byte reply header as well as Redis RESP. SQPOLL burns an extra core. The lead's 9.8M vs 2.7M numbers are the pre-2024-04-24 README; the '25x faster than memcached' headline is stale against the current table (16 B: 18.6M vs Redis 2.5M vs memcached 400k; 10 kB: 979k vs 313k vs 261k). MIT, 26 stars, last commit 2024-10-29 (stale); the HEAD Makefile still links -lmrloop after mrloop.h was removed.
+
+**Known shortcoming:** Enricher (code reading): security and robustness bugs in the server: a 1,024-entry iovec array with no bounds check (overflows above 1,024 GETs per 32 KB recv chunk), no close() anywhere (each connection leaks an fd plus about 6.3 MB), SET lengths not validated (heap overflow), an unsigned '< 0' guard in GETZ that never fires, an infinite loop when SETZ compression fails, an off-by-one leak of GETZ buffers, and a short write inside the first iovec that resends it. bench.go counts length*batch reply bytes while mrcache sends 4+length and Redis 23 B at 16 B, so above about batch 200 the client runs ahead of replies and reported rates drift to about 1.25x served (mrcache) and 1.44x (Redis), a bias that favours Redis; the zstd row used an all-zero value. The event loop busy-polls one core even when idle plus the SQPOLL core, the recv buffer pool is 512 MB, the real minimum kernel is 6.0 (not 5.8), and `make` fails (build with the bld script).
+
+**Independent measurement:** verifier batch-92 (wave 6 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Networking uses io_uring with SQPOLL, multishot accept and multishot recv into a 16,384-entry provided buffer ring, and the event loop busy-polls the completion ring, so the user thread makes almost no syscalls and the kernel's SQ thread does the submission work on another core. Every request in a received chunk is parsed in place and all replies go out in one writev whose iovecs point straight at the stored item (length header plus value), so GET replies are never copied in user space. Lookup is wyhash plus linear probing in a power-of-two table of 8-byte slots that pack a 28-bit block id, 12 hash bits and a 24-bit offset; a SET is a bump allocation into the current block and eviction drops a whole block, so there is no per-item free or LRU bookkeeping.
+
+**Use it when:**
+- Studying or forking a compact io_uring server: SQPOLL, multishot accept/recv, provided buffer rings and one zero-copy writev per received chunk, all in a few hundred lines of net.c.
+- A trusted, single-tenant cache of many small items behind your own client, where about 18 B of per-item overhead (8 B index slot at a 70% load cap plus a 6 B item header) matters more than Redis features and FIFO eviction is acceptable.
+- Read-heavy, pipelined GET traffic from a few long-lived connections on one Linux 6.0+ machine, where giving up one spinning user core plus the SQPOLL kernel core is acceptable.
+- Large compressible values you want stored zstd-compressed (level 2) on the server via setz/getz, trading GET throughput (979k to 212k ops/s at 10 kB in the README) for RAM.
+
+**Skip it when:**
+- You need Redis or memcached protocol compatibility, data types, TTLs, DEL, persistence, replication or auth; none exist, and set has no acknowledgement.
+- Clients are untrusted, buggy or reconnect often: request lengths are not validated, an unknown command frees the connection while its multishot recv is still armed, and client sockets are never closed.
+- Memory beyond the item store is tight: the receive pool is 16,384 x 32 KB = 512 MB of address space (each buffer gets at least one page touched as the ring cycles, so 64 MB or more resident), each connection callocs about 6.3 MB of iovec groups, and the index is sized once at startup and never grows.
+- You want multi-core scaling or an idle server that sleeps: there is one event-loop thread, and it spins on the completion ring even with no traffic.
+- Kernel older than 6.0 or any non-Linux platform: IORING_SETUP_SINGLE_ISSUER and multishot recv need 6.0, although the README says 5.5+ in one place and 5.8+ in another.
+
+**Integration:** source-drop (standalone server binary; clients use its binary TCP protocol) · liburing (provided-buffer-ring API, io_uring_setup_buf_ring) and libzstd; wyhash.h is vendored. The Makefile also links -lmrloop, which the source no longer uses. · gcc with -std=c99 -D_GNU_SOURCE (the repo's bld script uses -O3); Linux kernel 6.0+ in practice · Linux only (io_uring); the parser does native-endian unaligned loads, so little-endian x86-64 or aarch64
+
+**Vs siblings:** Pick Pogocache, Dragonfly or Valkey when you need a drop-in Redis/Memcached server with published versions and repeatable runs (Pogocache: about 2.0x Redis 8.2.1 GET at pipeline 1, median of 31 runs). Pick mrcache only when you control both client and server, want the lowest per-item overhead for many small items on one core with FIFO eviction, or want a small io_uring server to study or fork and harden.
+
+**Gotchas:**
+- Harness flaw (bench/bench.go): the client counts a batch as done after length*batch reply bytes, read in 4 KB chunks, but mrcache sends 4+length bytes per GET and Redis 23 bytes at 16 B. Once a batch's replies exceed one 4 KB read (batch above about 200 at 16 B), leftover reply bytes carry into the next batch and, at many batch sizes, keep piling up, so the client stops waiting for its own batch. The reported rate then tends to 1.25x the served rate for mrcache and 1.44x for Redis at 16 B, so this bias favours Redis rather than mrcache. The zstd row used an all-zero 10 kB value (rand.Read is commented out), which is zstd's best case.
+- The server cannot safely absorb deep pipelines. Each received chunk (up to 32 KB) is answered with one writev from a fixed 1,024-entry iovec array with no bounds check, so more than 1,024 GETs in one chunk (about 20 KB of 16-byte-key GETs) overflows into the free list and the next iovec group and exceeds IOV_MAX. In addition, a short write that ends inside the first iovec resends that whole iovec and desyncs the stream.
+- No input validation: SET value lengths (signed 32-bit) are never checked against the 16 MB block size, so an oversized or negative length writes past the block. GETZ on a key stored with plain SET tests an unsigned ZSTD_getFrameContentSize result with `< 0`, so the guard never fires: the server mallocs 2 bytes, writes a 4-byte header into them and queues a negative-length reply, and the client gets no answer. A SETZ whose compression fails (for example, an incompressible value above about 2 MB overflowing the vlen+64 output buffer) never advances the parse pointer, so the single thread spins forever. GETZ decompression buffers are also stored at free_me[num] instead of free_me[num-1], so the last buffer of every write leaks; with one GETZ per write, every buffer leaks.
+- Connections leak. No close() appears anywhere in the server, and an EOF completion arrives without IORING_CQE_F_MORE, so it falls into the write-completion branch and free_conn never runs. Each closed client therefore leaks its fd and its roughly 6.3 MB connection struct. The README's `make` fails: the Makefile wildcard also compiles probe.c, which has its own main(), and it links the dropped -lmrloop; use the bld script instead. The documented -z/--zstd flag is not parsed (it prints usage and exits with status 2), and the default -m is 128 MB, not the 256 MB the README and usage text state.
+
+**Status:** Stale: last commit 2024-10-29, last code change 2024-05-12, and issue #2 (2020) is still open. MIT and small enough to read in an afternoon, but experimental code: the connection leak, unchecked request lengths and the 1,024-iovec limit make it unfit for production without fixes, and it should be built with the bld script rather than make.
+
+[repo](https://github.com/MarkReedZ/mrcache) · [benchmark](https://github.com/MarkReedZ/mrcache)
 
 ##### otter  `Go`  `Apache-2.0`  `active`  `Tier C`
 
@@ -98323,6 +100557,53 @@ Own-IDL C++/Java/Python serialization framework; bit-packed decode 1.2x-2.6x fas
 
 ## Copyleft
 
+### assembly-simd-kernels-and-wasm
+
+#### assemblyscript-and-wasm-langs
+
+##### spair  `Rust`  `MPL-2.0`  `active`  `Tier B`
+
+Rust/WebAssembly single-page-app framework without a virtual DOM; its 2022 build runs the js-framework-benchmark about 1.5x faster than React 19.2 hooks.
+
+**Beats:** React 19.2 hooks (react-hooks-v19.2.0-keyed, JavaScript in Chrome/V8) in krausest/js-framework-benchmark; also compared with vanilla JavaScript (vanillajs-keyed) — In krausest/js-framework-benchmark (WebDriver-driven Chrome 154.0.8037.98 on an Apple M4 MacBook Pro 14, a development snapshot), the author-submitted spair 0.0.8 keyed implementation's median total times give a geometric mean of 0.662x React 19.2 hooks over the nine CPU rows (spair-qr 0.616x), but 1.205x vanilla JavaScript (spair-qr 1.122x); medians recomputed from results.ts match the record (create 1,000 rows 24.6 vs 23.6 ms, swap 12.5 vs 89.7 ms, create 10,000 rows 262.7 vs 401.0 ms).
+
+**Known shortcoming:** Measures the 2022 0.0.8 design that the main branch has replaced; slower than vanilla JS and uses more memory than React; same M4 Chrome 154 snapshot; best keyed-entry gap 1.26x; CSP note #1139.
+
+**Known shortcoming:** Enricher: medians from results.ts match; the numbers measure spair 0.0.8, a prebuilt bundle from 2022-11-19, while the main branch is an unpublished 0.0.10 rewrite with no benchmarks (crates.io stops at 0.0.9); memory after clear is 3.54 vs React 1.98 MB; among Rust frameworks only the hand-written wasm-bindgen entry beats it (0.584x React; spair-qr 0.616x, spair 0.662x).
+
+**Independent measurement:** verifier batch-125 (wave 13 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** No virtual DOM: in the current main branch the proc macros work out at compile time which DOM nodes can change, build each view from an HtmlTemplateElement fragment clone, and on update write only those nodes. Keyed lists are reconciled by trimming the common prefix and suffix, detecting single forward or backward moves, and running a longest-increasing-subsequence pass (code copied from the axelf4/lis crate) on the middle so only rows outside the LIS are moved, keyed through an FxHashMap. The measured 0.0.8 design instead re-ran a render function that compared new values with cached ones in place, with static_nodes/static_attributes markers to skip parts that never change; the spair-qr variant adds queue render (QrVec/QrVal containers that push only the changed pieces), which is why it is faster on select (2.5 ms vs 3.7 ms).
+
+**Use it when:**
+- You are already writing the front end in Rust/Wasm and want one of the faster Rust frameworks in krausest/js-framework-benchmark: spair-qr's geometric mean is 0.616x React's time and spair's is 0.662x, ahead of leptos 0.7.0 (0.684x), dominator (0.681x), dioxus 0.7.2 (0.698x), sycamore (0.711x), mogwai 0.6.5 (0.719x) and yew 0.23 (0.819x) in the same results.ts (derived from page data).
+- Keyed tables or lists where rows are reordered or swapped: swap rows is 12.5 ms against React's 89.7 ms, the largest single gap in the suite rows.
+- Large initial renders: create 10,000 rows 262.7 ms vs React 401.0 ms (but 1.23x vanilla JavaScript's 213.3 ms).
+- Pages where first paint and download size matter more than heap: first paint 137.3 ms vs 226.6 ms and 31.8 kB vs 51.4 kB brotli-compressed against React.
+
+**Skip it when:**
+- You need the fastest possible DOM updates: spair is slower than hand-written vanilla JavaScript on all 9 CPU rows (1.205x geometric-mean time) and slower than the suite's hand-written wasm-bindgen entry (0.584x React), and it is effectively tied with React on create 1,000 rows (24.6 vs 23.6 ms).
+- Memory-constrained pages: ready memory 1.70 MB vs React 1.19 MB, run memory 4.97 vs 4.37 MB, and memory after creating and clearing rows 3.54 vs 1.98 MB (spair-qr 2.99 MB).
+- Production apps that need a stable API, SSR, event delegation, real routing, documentation or a community: the README lists all of these as missing and the main branch was redesigned again in January 2026.
+- Sites with a strict Content Security Policy: the suite flags both spair entries with issue #1139 (Function/eval-style code in the generated bundle).
+- You want the benchmarked code: the numbers are for crates.io 0.0.8 (November 2022); the main branch (0.0.10, unpublished) is a complete redesign the README says has no benchmarks yet.
+
+**Integration:** crate · wasm-bindgen, js-sys, web-sys, wasm-bindgen-futures, log, rustc-hash, and the spair-macros proc-macro crate (syn 2, quote, proc-macro2); examples are built with Trunk · main branch uses Rust edition 2024 (Rust 1.85 or newer) with the wasm32-unknown-unknown target; the benchmarked 0.0.8 crate's minimum is not documented · Browsers only (wasm32-unknown-unknown with web-sys DOM bindings); tests run under wasm-pack test --headless --firefox
+
+**Vs siblings:** Among the Rust/Wasm siblings measured by the same suite, pick spair (preferably its queue-render mode) over mogwai when keyed-list update speed is the deciding factor (0.616-0.662x React vs mogwai's 0.719x); pick mogwai or the more established Rust frameworks when you need a published, documented API, since spair's fast build is a 2022 release and its current code is an unbenchmarked rewrite.
+
+**Gotchas:**
+- The published crate and the benchmark lag the repository: crates.io stops at 0.0.9 (2022-11-20) and the js-framework-benchmark entry pins 0.0.8, while main is an unpublished 0.0.10 rewrite with a different macro API, so code written from the current README will not match either the crate or the measured build.
+- The benchmark bundle is prebuilt: build-prod is a no-op that serves the checked-in Trunk output last rebuilt by the author on 2022-11-19, so the Rust and wasm-bindgen versions behind the Chrome 154 numbers are those of late 2022 and are not recorded.
+- The view syntax depends on attribute macros rewriting Rust code that looks like function calls; the README warns this 'is a kind of abusing Rust, and may become invalid by changes in Rust in the future'. HTML names that clash with Rust keywords need raw identifiers (r#type, r#for).
+- The spair-qr benchmark's swap handler calls swap(1, 998).unwrap_throw() without the bounds guard the plain spair version has, so it throws if fewer than 999 rows exist; this does not affect the suite's 1,000-row runs but shows the queue-render API returns errors the caller must handle.
+
+**Status:** Single-author MPL-2.0 project still committed to in February 2026, but the actively developed main branch is an unpublished, undocumented rewrite while the benchmarked and published versions date from November 2022, so treat it as experimental rather than production-ready.
+
+[repo](https://github.com/aclueless/spair) · [benchmark](https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/webdriver-ts-results/src/results.ts)
+
 ### compression-and-encoding
 
 #### entropy-coders
@@ -100658,6 +102939,49 @@ C3's c3c compiler at -O0 builds a 40,000-function generated file 1.8-3.7x faster
 
 [repo](https://github.com/c3lang/c3c) · [benchmark](https://raw.githubusercontent.com/nordlow/compiler-benchmark/master/README.md)
 
+##### Free Pascal 3.2.2: compile throughput in nordlow/compiler-benchmark  `Pascal`  `GPL-2.0-or-later`  `active`  `Tier A`
+
+Free Pascal 3.2.2 compiles a generated 40,000-function file 1.9-3.9x faster than GCC at -O0; clang still wins.
+
+**Beats:** C (gcc-15 15.3.0, gcc 16.2.1, clang 23.1.1) and C++ (g++-15 15.3.0, g++ 16.2.1, clang++ 23.1.1) compiling the same generated arithmetic translation unit (200 call chains of depth 200, 40000 functions) with default optimization (no -O flag) — In one run of nordlow/compiler-benchmark (tables updated 2026-10-09) on an AMD Ryzen AI 7 350 under Arch Linux, the harness compiled a generated program of 200 x 200 Int64 add-chain functions. fpc 3.2.2 at -O- built it (GNU as plus ld) in 137 us per function and compiled it to an object in 103.6. The same C program at default -O0 with -Wall -Wextra took 392 Total and 193.8 object-only with gcc 15.3.0, 454 and 400.1 with gcc 16.2.1, and 303 and 269.6 with g++ 15.3.0. clang 23.1.1 was faster than fpc (118 Total, 77.9 object-only).
+
+**Known shortcoming:** Wins over GCC only: clang C beats it on the link-free Compile column (77.9 vs 103.6 us per function) and clang++ on Compile (82.4) and templated Total (107); Total cells are noisy and linking is not uniform across toolchains (same caveats as the Odin, Zig and rustc rows); cbench builds gcc and clang at default -O0 and fpc at -O-; FPC last commit unverifiable (gitlab.com).
+
+**Known shortcoming:** Enricher: bm_Pascal runs the same `fpc -Cn -O-` command for Check and Compile, so the Check cell (98.7 us/f) is a full compile; Build adds -Aas (GNU as) while Compile uses fpc's internal ELF writer; the 'most compact output' figure (68.8 B/f) is probably a stripping artifact (the stock fpc.cfg adds -Xs, gcc and clang get no strip flag; the machine's fpc.cfg is unpublished). Conservative ratio: about 1.4x over gcc-15's object-only compile. The README summary now quotes clang at 118 and its section 3 GCC figures differ from the table.
+
+**Independent measurement:** verifier batch-117 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** The benchmark gives no Pascal-specific reason. The FPC 3.2.2 source shows that x86-64 Linux defaults to the internal ELF64 object writer (assem: as_x86_64_elf64 in compiler/systems/i_linux.pas), so the link-free Compile step ('fpc -Cn -O-') skips the textual-assembly round trip through GNU as that 'gcc -c' always pays. Inference, not measured: fpc reads precompiled units (.ppu) instead of preprocessed headers and at -O- does far less intermediate-representation work than GCC, whose GIMPLE and RTL pipeline still runs at -O0.
+
+**Use it when:**
+- You already write Pascal (Free Pascal or Lazarus code) and care about debug-build turnaround: on this file fpc's object-only compile (103.6 us per function) is about 1.9x faster than gcc 15 (193.8) and 2.6x faster than g++ 15 (269.6).
+- Large generated sources such as tables or state machines, where an unoptimized GCC build dominates the edit-compile loop and clang is not an option.
+- Projects that want one self-contained compiler and runtime with no libc dependency, across Linux, Windows, macOS and the BSDs.
+- As a reference point when comparing toolchains: on this workload fpc sits between clang (faster) and every GCC row (slower).
+
+**Skip it when:**
+- When clang is available: clang C compiled the same file faster (77.9 against 103.6 us/f object-only, 118 against 138 Total), and clang++ was faster object-only (82.4).
+- For release builds: only -O- was measured, so there is no number for fpc -O2 or -O3 against gcc -O2.
+- To predict real project builds: the workload is one synthetic file of 40,000 Int64 add-chain functions that uses only the System unit and no headers.
+- When you need to compile existing C or C++: fpc is a different language, and interop goes through external declarations.
+- When the exact compiler version matters: 3.2.2 is the 2021 stable release (tag release_3_2_2, 2021-05-15); 3.2.4-rc2 (2026-08-26) and the 3.3.1 main branch were not measured.
+
+**Integration:** compiler toolchain (command-line compiler 'fpc'; distribution packages or a source build) · GNU ld on Linux (linkextern ld_linux in i_linux.pas); GNU as only when -Aas is passed, as in this benchmark's build step; no libc by default · fpc 3.2.2 as measured (stable release, tagged 2021-05-15) · x86-64 targets in 3.2.2 include Linux, Win64, Darwin, FreeBSD, NetBSD, OpenBSD, DragonFly, Solaris, AROS and embedded (option list in compiler/msg/errore.msg); measured only on x86-64 Arch Linux
+
+**Vs siblings:** Among the nordlow/compiler-benchmark siblings, dmd (13 us/f Total) and Zig (110) build faster, while Odin (147), Hare (150), C3 (153) and rustc (187) are close or slower. fpc has a link-free Compile figure (103.6) below every GCC row and the smallest binaries in the table (probably helped by stripping). Pick it when you already use Pascal; for raw compile speed dmd or clang win.
+
+**Gotchas:**
+- Harness: fpc's Check and Compile cells run the same command. bm_Pascal in cbench passes '-Cn -O-' for both 'check' and 'compile', so the 98.7 us/f Check cell is a full object compile, not a syntax check, and its 5% gap to the 103.6 Compile cell is run-to-run noise between identical commands. Each fpc step takes 4 to 5.5 s, so the adaptive rule keeps the minimum of only 2 runs.
+- Inside fpc's own row the two columns use different assemblers: Compile uses fpc's default internal ELF writer, while Build adds -Aas and pushes a textual .s file through GNU as before GNU ld, so the 33 us/f gap between Build (137) and Compile (103.6) is extra assembling plus linking, which works against fpc in the Total column. Conversely, the Compile column sets fpc's internal object writer against 'gcc -c', which emits assembly and runs GNU as (clang uses an integrated assembler). Even taken conservatively, fpc's full build with GNU as and ld (137) is still about 1.4x faster than gcc 15's object-only compile (193.8) (derived from page data).
+- The '68.8 B/f, most compact machine code' figure is probably not like for like. The stock fpc.cfg template (utils/fpcmkcfg/fpc.cft in 3.2.2) adds -Xs (strip all symbols) whenever DEBUG is not defined, and cbench passes no strip flag to gcc or clang, so on a stock install the Pascal binary is stripped while the C binaries keep symbol tables for 40,000 functions. The benchmark machine's fpc.cfg was not published. The same template also turns on -Sgic, -l and -viwn.
+- Noise and baselines: tasks run concurrently, one pinned worker per core on a hybrid Zen 5 and Zen 5c part, and nothing checks the built program's output or exit code. Sibling enrichers found gcc 15's Total (392) at twice its own Compile (193.8). The 3.3x to 3.9x ratios against gcc 16.2.1 rest on a GCC 15-to-16 slowdown that the README itself flags as a regression, and the README's section 3 quotes different figures (226.7 to 382.6 us/f) from its table (193.8 to 400.1). The gcc 15 Compile column (about 1.9x) is the safer comparison.
+
+**Status:** Free Pascal is actively developed: GitLab main had commits on 2026-10-12, 3.2.4-rc2 was tagged 2026-08-26, and the compiler is GPL-2.0-or-later per the verification record. The measured 3.2.2 is the 2021 stable release, and the evidence is one single-machine run of a public MIT harness whose fpc Check cell repeats the Compile command and whose size column probably compares a stripped Pascal binary with unstripped C binaries.
+
+[repo](https://gitlab.com/freepascal.org/fpc/source) · [benchmark](https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/README.md)
+
 #### web-and-serving
 
 ##### cardigan  `Java`  `MPL-2.0`  `active`  `Tier A`
@@ -100741,6 +103065,50 @@ Bison-style generator that emits pthreads-parallel operator-precedence parsers, 
 **Status:** Abandoned: no commits since 2015-04-20, GPL-2.0 licensed, one open GitHub issue and no CI/releases; small enough (a handful of C files plus a Python 2.x code generator) to vendor and maintain yourself if you accept the OPG grammar restriction.
 
 [repo](https://github.com/PAPAGENO-devels/papageno) · [benchmark](https://re.public.polimi.it/retrieve/handle/11311/971391/67830/papaj-final.pdf)
+
+#### text-search-and-indexing
+
+##### ucg (UniversalCodeGrep)  `C++`  `GPL-3.0-only`  `active`  `Tier B`
+
+Ack-style recursive source-code grep using PCRE2 JIT and threaded traversal; about 3.7x faster than egrep -R on a kernel-tree search.
+
+**Beats:** GNU grep (egrep -R with --include filters) — In the ripgrep 0.8.0 README, ripgrep's author ran a whole-word [A-Z]+_SUSPEND search over a built Linux kernel tree, restricted to C files, on an Intel i7-6900K. ucg took 0.163 s, GNU grep (egrep -R with --include filters) 0.611 s and ripgrep 0.079 s, so ucg was about 3.7x faster than grep (derived from page data). ucg searched slightly fewer files (390 lines against 404) and compiler flags for ucg and grep are not given. The same suite's 2018 single-file runs against grep 3.1 are mixed. ucg's own first-party Boost table (Fedora 25, average of 10 runs) shows ucg 0.229 s against grep 2.26 at 0.370 s and ripgrep 0.168 s.
+
+**Known shortcoming:** The 0.163 s vs GNU grep 0.611 s row comes from the ripgrep 0.8.0 README, run by a competitor's author with optimisation flags unstated, and ucg searched fewer files than egrep -R (symlinks, issue #106). The same suite's 2018 single-file runs have ucg slower than grep 3.1 on several patterns, and ripgrep beats ucg everywhere.
+
+**Known shortcoming:** Enricher (code reading): src/File.cpp's read loop `while((retval = read(fd, file_data, file_size)) > 0);` never advances its pointer, so any short read (every file over 2,147,479,552 bytes, or a short read on FUSE or NFS) overwrites the start of the buffer and leaves the tail unread, giving wrong or missed matches; EINTR is not retried. Published numbers unaffected (small files). The README says gcc 4.8+ but configure.ac requires C++20; matching is byte-only (PCRE2_NEVER_UTF, NEVER_UCP); ripgrep is faster in every source.
+
+**Independent measurement:** verifier batch-21 (wave 3 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Regex matching runs in PCRE2 with JIT compilation over the whole file buffer, not line by line, and newlines are counted only around matches. Directory traversal runs on its own threads (default 2, --dirjobs) and feeds a queue of scanner threads (default one per core, -j). A literal-prefix analysis of the pattern drives hand-written SSE2/SSE4.2/POPCNT prefilters (PCMPESTRI find_first_of over first-possible code units, PCMPEQB plus movemask for single bytes and newline counting) that skip ahead to candidate positions. The ISA variant is chosen at load time, with scalar fallbacks. Files are read whole with posix_fadvise(SEQUENTIAL) and 128 KB to 1 MB I/O sizing.
+
+**Use it when:**
+- Interactive regex searches over large multi-language source trees (kernel- or Boost-sized) on multi-core x86-64 Linux, filtered by language type.
+- You want ack's command-line conventions or PCRE syntax (lookarounds, backreferences) and something faster than egrep -R --include or ag.
+- Machines where ripgrep is unavailable and a GPL-3.0 tool is acceptable (Fedora Copr, AUR and Homebrew packages exist).
+
+**Skip it when:**
+- ripgrep is installed: it beats ucg in every published comparison (0.079 s vs 0.163 s on the kernel whitelist search; 0.168 s vs 0.229 s on ucg's own Boost table).
+- Single large files with weak or no literal anchors: in ripgrep's 2018-01-08 suite ucg was slower than GNU grep 3.1 on subtitles_en_surrounding_words (3.567 vs 1.070 s), subtitles_en_no_literal (5.394 vs 3.446 s) and the Russian literal patterns (about 2.2x slower).
+- Files larger than about 2 GiB, or filesystems that return short reads: the whole-file read loop does not advance its buffer pointer, so such files are searched incorrectly (see gotchas).
+- You need .gitignore handling, context lines (-A/-B/-C, open issue #113), match counts (-c, open issue #61), or a non-x86 build (open issue #123: HEAD does not compile on ARM; #122: 0.3.3 fails on NetBSD).
+- You need an embeddable library or a permissive licence: ucg is a GPL-3.0-only CLI with no library API.
+
+**Integration:** built command-line binary (autotools: configure && make); no library API · libpcre2-8 >= 10.20 (preferred) or libpcre >= 8.21; argp-standalone on macOS · C++20 compiler (configure.ac requires AX_CXX_COMPILE_STDCXX(20, ext, mandatory) and C18); the README's 'gcc 4.8 or greater' line is stale · x86-64 fully supported (SSE2/SSE4.2/POPCNT paths picked at load time, scalar fallbacks); historically tested on Linux, macOS, TrueOS/FreeBSD and Cygwin; ARM build broken at HEAD (issue #123); Fedora 44 test failures open (issue #148)
+
+**Vs siblings:** The indexed siblings (ngi, trigrep, frg, ugrep with ugrep-indexer) need an index build before they are fast. ucg needs no index and fits one-off searches with ack syntax. For unindexed search, ripgrep, a non-catalogued incumbent, is faster than ucg in every published source, so choose ucg mainly for its ack-compatible interface.
+
+**Gotchas:**
+- Whole-file read bug in src/File.cpp: 'while((retval = read(file_descriptor, file_data, file_size)) > 0);' never advances the destination pointer. A short read, which Linux always produces for files above 2,147,479,552 bytes and which can happen on FUSE or network filesystems, makes the next read overwrite the start of the buffer while the tail stays unread. Matches in such files are then wrong or missing. EINTR is not retried. The kernel and Boost benchmark files are small, so the published numbers are not affected.
+- Defaults differ from grep: --smart-case is on, so an all-lowercase pattern matches case-insensitively, and -k/--known-types is on, so files with unrecognized extensions are silently skipped. Patterns are compiled with PCRE2_NEVER_UTF and PCRE2_NEVER_UCP, so matching is byte-wise: '.', \w and case folding have no Unicode semantics for UTF-8 text.
+- Multithreaded traversal skips directories already reached through a symlink (issue #106), so ucg can search fewer files than grep -R. This is why it printed 390 lines against 404 in the ripgrep benchmark row.
+- PCRE2 JIT needs writable-then-executable memory; PaX MPROTECT hardening is unsupported (open issue #101). The mmap read path is disabled in the source as 'very broken'.
+
+**Status:** Low-activity single-maintainer project: the last source change was 2024-12-28 (new --null, --line-number and --with-filename options), and the 2026-09-14 commits only touch CI, m4 macros and the perf-comparison setup. It is GPL-3.0-only and usable as a packaged CLI, but the published numbers date from 2016-2018 and a large-file read bug is present at HEAD.
+
+[repo](https://github.com/gvansickle/ucg) · [benchmark](https://github.com/BurntSushi/ripgrep/blob/0.8.0/README.md)
 
 ### runtime-and-systems
 
@@ -102843,6 +105211,50 @@ Hand-written NEON straight-alpha BGRA overlay for Raspberry Pi; 3.5x its own sca
 
 [repo](https://github.com/tttapa/ARM-NEON-Compositor) · [benchmark](https://github.com/tttapa/ARM-NEON-Compositor)
 
+##### bolt  `C++`  `MPL-2.0`  `abandoned`  `Tier C`
+
+AVX2 vector-quantization library that encodes float vectors into 4-bit codes and computes approximate distances and dot products far faster than PQ or exact float math.
+
+**Beats:** Eigen dense float matrix multiply (`out.noalias() = X * Q`, the repo's 'matmul' rows; README and slides call it BLAS) and the repo's own product quantization (PQ, OPQ) encoders; FAISS is not benchmarked — First-party Catch timing dumps (best of 5, 10 repetitions; the paper snippet names one thread on a 2013 MacBook Pro with a 2.6 GHz Core i7-4960HQ and Clang/Xcode builds) show Bolt with 8-byte codes computing an approximate uint16 N x N product 1.4x (N = 128) to 57x (N = 8192) faster than an exact float32 Eigen GEMM, and encoding 10,000 128-dimensional vectors in 2.29 ms against 39.8 ms for the repo's own PQ; Eigen's 13.19 s at N = 8192 is about 83 GFLOP/s, consistent with one AVX2/FMA core (derived from page data).
+
+**Known shortcoming:** Medians match the result files (57x vs Eigen at N=8192), but approximate uint16 output is compared with exact float GEMM, the PQ baselines are the repo's own code, codes are random, no CPU or flags are stated, and the project is abandoned since 2022; the KDD 2017 paper could move it to B.
+
+**Known shortcoming:** Enricher: profile_bolt.cpp's anti-DCE check reads the caller's untouched output while Bolt writes into a by-value copy, so nothing proves the scan ran (times do scale with M); the 'bolt scan uint16 safe' row calls bolt_scan<(M, true)>, a comma expression giving NBytes=1; bolt.hpp's SignedLUTs uint16 path computes even lanes as srai(srai(x,8),8), wrong scores on half the rows (not benchmarked); with fixed 8-32 B codes one code covers 512 dimensions per codebook at N=8192, so the speedup grows with N and accuracy is never measured. The paper ran one thread on a 2013 i7-4960HQ (snippet).
+
+**Independent measurement:** verifier batch-126 (wave 13 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** Product-quantization style encoding with K = 16 centroids per subspace instead of PQ's 256, so each code is 4 bits and a 16-entry lookup table fits in one 128-bit lane; the scan does table lookups with vpshufb (_mm256_shuffle_epi8) on 32 codes at a time, accumulating with saturating 8-bit or 16-bit adds and writing with non-temporal stores. Query lookup tables are quantized from float to uint8 with a learned per-table offset and scale (quantile-based, so outliers do not blow the range), and codes are stored in 32-row column-major blocks so one 256-bit load feeds 32 rows. Much of the encoding and table-build speedup over PQ is the K = 16 choice itself: for D = 128 and 16 bytes, Bolt evaluates 32 codebooks x 16 centroids x 4 dimensions (2,048 multiply-adds) against PQ's 16 x 256 x 8 (32,768), a 16x reduction in work before any SIMD (derived from the profile constants).
+
+**Use it when:**
+- Large collections of mostly dense float vectors (embeddings, descriptors) where approximate L2 distances or dot products are acceptable and memory or scan throughput is the bottleneck: the repo's D = 128, 16-byte run scans about 1.26 billion uint8 distances per second (1e6 codes in 0.79 ms) on one core.
+- Batch encoding of many vectors: 10,000 128-dimensional vectors encode to 16-byte codes in 2.29 ms (about 4.4 million vectors/s, about 2.2 GB/s of float input, derived) against 39.8 ms for the repo's own PQ encoder.
+- Candidate generation for nearest-neighbour or maximum-inner-product search, followed by exact re-ranking of the top hits, since the slides say Bolt has to retrieve more points than PQ/OPQ for a given compression level.
+- Approximate matrix products where one operand is reused many times and the error is tolerable: the square matmul timings run 5.8x faster than single-threaded Eigen at N = 512 and 57x at N = 8192 without re-encoding (3.4x and 38x when the matrix is encoded inside the timed call).
+- x86-64 servers or desktops with AVX2 (Haswell, 2013, or later) where you can build C++14 sources directly.
+
+**Skip it when:**
+- You need exact results or float outputs: Bolt returns quantized uint16 scores, its dot products are 'slightly less accurate than others' per the authors' slides, and 8-bit scans saturate at 255.
+- Small problems: below N = 128 the square matmul is slower than Eigen (N = 64: 0.024 ms with encoding vs 0.009 ms), and the speedup needs enough rows to amortize table construction.
+- ARM, Apple Silicon or any non-AVX2 target: the kernels are AVX2-only; the README invites ARM contributions (issue #2), issue #23 asking for other vector instruction sets is still open, and issue #25 reports an install failure on an M1 Mac.
+- Python-first projects that need a working package: the README says the Python wrapper 'seems to be no longer building' for many people (issues #4, #15, #31, #37), and it is slower than the C++ path.
+- You need a maintained library: the last commit is from June 2022, open issues from 2022 to 2025 (#35, #37, #39, #40, #41) have no fix, and FAISS was never benchmarked against it in the repo.
+
+**Integration:** source-drop · Eigen (vendored in cpp/src/external); SWIG and NumPy for the Python wrapper; Bazel for the provided build (or the Xcode project the author used) · C++14 (Bazel copts: -O3 -march=native -mavx -ffast-math -std=c++14); only tested with Clang on OS X per experiments/README · x86-64 with AVX2 only
+
+**Vs siblings:** Pick Bolt over PQ Fast Scan or Quick ADC (technicolor-research) when encoding speed and approximate dot products or matrix products matter as much as scan speed, since Bolt also vectorizes encoding and quantizes its lookup tables with learned offsets; pick PQ Fast Scan when you must return exactly the same results as a standard PQ scan, which Bolt's 4-bit codes and 8-bit tables do not.
+
+**Gotchas:**
+- Layout and size constraints: bolt_encode requires nrows to be a multiple of 32, ncols divisible by 2 x NBytes and a 32-byte-aligned output buffer, and bolt_scan writes with _mm256_stream_si256, so its output must be 32-byte aligned too; issue #35 (open) reports a general protection fault from an aligned _mm256_load_ps in the repo's AVX sgemm helper when given a non-aligned stride.
+- The square-matmul speedups grow with N partly because code length is fixed: Bolt's cost is about N^2 x (16 + M) against GEMM's N^3, so at N = 8192 Bolt<8> represents each 8,192-float row with 16 four-bit codes (512 dimensions per codebook). The profile runs on random codes, centroids and offsets and measures speed only, so accuracy at those sizes is never shown.
+- Harness weaknesses in cpp/test/quantize/profile_bolt.cpp: _run_bolt_matmul takes the centroid, code, lookup-table and output matrices by value (the ColMatrix codes are even converted to RowMatrix on each call, and the 134 MB uint16 output is copied at N = 8192), so the product is written into a temporary copy while the anti-dead-code check prevent_optimizing_away_dists reads the caller's untouched out matrix; nothing proves the scan ran, although times rising with code length (231, 252 and 306 ms for 8, 16 and 32 bytes at N = 8192) suggest it did. The 'bolt scan uint16 safe' row is written bolt_scan<(M, true)>(...), a comma expression that sets NBytes to 1, so in the current source that row times a 1-byte scan (it is not one of the catalogued numbers).
+- Correctness bug in an unbenchmarked path: in the uint16 bolt_scan with SignedLUTs = true, the even-indexed lanes are computed as _mm256_srai_epi16(_mm256_srai_epi16(x, 8), 8), which yields the sign of the odd byte instead of the sign-extended low byte (_mm256_srai_epi16(_mm256_slli_epi16(x, 8), 8)), so half of the rows get wrong scores with signed lookup tables; the matmul and scan timings use unsigned tables and are unaffected.
+
+**Status:** Abandoned research code since June 2022 (the MADDNESS successor 'mithral' lives in the same repo) but MPL-2.0 and small enough to vendor as C++14 source for AVX2 machines; the Python package is not reliably buildable.
+
+[repo](https://github.com/dblalock/bolt) · [benchmark](https://raw.githubusercontent.com/dblalock/bolt/HEAD/experiments/results/matmul/square_matmul_results.txt)
+
 ##### faster (Rust SIMD iterators)  `Rust`  `MPL-2.0`  `abandoned`  `Tier D`
 
 Rust iterator-style explicit SIMD (simd_iter/simd_map/simd_reduce) with scalar polyfills; author's 2017-18 runs beat scalar iterators 1.15-8x.
@@ -103671,6 +106083,48 @@ Go ChaCha20 stream cipher written with experimental simd/archsimd (AVX2/AVX-512/
 **Status:** Actively developed: 15 commits to the chacha20 path from 2026-07-23 to 2026-08-24. It is untagged, has 3 stars, is self-described as not production-ready and depends on an experimental Go feature; it is small enough to vendor for experiments once the MIT-versus-AGPL license question is settled.
 
 [repo](https://github.com/skerkour/stdx-go/tree/main/chacha20) · [benchmark](https://kerkour.com/golang-chacha20-encryption-simd-archsimd)
+
+##### TgCrypto (pyrogram/tgcrypto)  `C`  `LGPL-3.0-or-later`  `abandoned`  `Tier D`
+
+Archived C extension for Python giving Pyrogram AES-256-IGE/CTR/CBC; replaces pure-Python pyaes, does not beat OpenSSL.
+
+**Beats:** OpenSSL AES-256-IGE / AES-256-CBC (no comparison found) — Nothing was measured: the repository, README, tests and commit history contain no timings and no OpenSSL or pyaes comparison. The only numbers are the third-party aesige PyPI README (no CPU named, x86_64, 1 KB per call): tgcrypto 14.8 us decrypt and 24.3 us encrypt against aesige's AES-NI IGE at 7.4 and 7.7 us, i.e. tgcrypto is 2-3.2x slower than hardware AES; aesige's GitHub homepage now returns 404.
+
+**Known shortcoming:** No benchmark anywhere; it is a T-table AES with no AES-NI, and aesige's PyPI numbers show it 2-3.2x slower than AES-NI IGE; its real incumbent is pure-Python pyaes. Archived 2024-12-23.
+
+**Known shortcoming:** Enricher (code reading): tgcrypto.c truncates the Py_ssize_t length to uint32_t but Py_BuildValue copies the full length, a heap over-read at 4 GiB and above; malloc is unchecked; CTR and CBC write the IV and state back through read-only y* buffer views; Py_buffer objects leak (CTR never releases state, error paths release nothing); GET/PUT byte-swap with no endian check.
+
+**Independent measurement:** verifier batch-56 (wave 7 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** It moves AES out of Python into C: a portable 32-bit T-table AES (Te0-Te3/Td0-Td3 lookups, rounds written out inline) with the mode loops (IGE chaining, CTR counter increment, CBC) also in C. It releases the GIL around each call. There is no AES-NI, ARMv8 Crypto or bitsliced path, so the gain is only over interpreted Python, not over OpenSSL's hardware AES.
+
+**Use it when:**
+- Maintaining an existing Pyrogram (or Pyrogram-fork) Telegram client on Python 3.7-3.11, where installing it replaces the pyaes fallback for MTProto IGE traffic and file transfers.
+- You need AES-256-IGE as a single call from Python and accept LGPL-3.0-or-later linking terms.
+- Platforms where prebuilt wheels exist for release 1.2.5 (Linux x86_64/i686, Windows, macOS x86_64/arm64/universal2, PyPy 3.7-3.9) and no compiler is available.
+
+**Skip it when:**
+- New projects: the repository was archived on 2024-12-23 and the README says it is no longer maintained or supported; the last PyPI release is 1.2.5 from 2022-11-11 with no cp312+ or Linux aarch64 wheels.
+- Anything where side channels matter: T-table AES leaks key-dependent cache accesses, and the README says the implementations are 'for educational purposes only'.
+- Bulk AES-CTR or AES-CBC: an AES-NI backed library will be faster; the third-party aesige package (Apache-2.0, AES-NI and ARM Crypto Extensions) reports tgcrypto 2-3.2x slower than itself on 1 KB IGE calls.
+- Inputs of 4 GiB or more, or code that passes immutable or shared bytes objects as the CTR/CBC IV or state (see gotchas).
+- Big-endian hosts: the block load/store macros byte-swap unconditionally with no endianness check, and CI only builds and tests little-endian targets.
+
+**Integration:** module · none at runtime (CPython or PyPy C API); building from the sdist needs setuptools, wheel and a C compiler · Python 3.7+ (python_requires ~=3.7); wheels for CPython 3.7-3.11 and PyPy 3.7-3.9; no extra compiler flags are set in setup.py · Little-endian targets (x86, x86-64, arm64); wheels for Linux x86_64/i686, Windows win32/amd64 and macOS x86_64/arm64/universal2; other platforms build from source
+
+**Vs siblings:** None of the catalogued aead-and-ciphers siblings (libaegis, chacha20poly1305-simd, Mbed TLS, Botan, intel-ipsec-mb) provide AES-IGE to Python; pick TgCrypto only when you are tied to Pyrogram's IGE/CTR/CBC API, and otherwise prefer an AES-NI backed library such as Botan or Mbed TLS for the same modes.
+
+**Gotchas:**
+- Inputs of 4 GiB or more misbehave: the bindings pass the Py_ssize_t length to C functions that take uint32_t, so the C side allocates and processes length mod 2^32 bytes, while Py_BuildValue('y#', buf, data.len) then copies the full original length out of that smaller heap buffer (heap over-read or crash). malloc results are never checked for NULL either.
+- CTR and CBC write the updated counter, stream position and chaining IV back into the caller's buffers through read-only 'y*' views, including immutable bytes objects: the README and tests pass bytes(1) as the CTR state and rely on it being changed in place, so reusing a bytes constant as IV or state silently changes it.
+- Py_buffer leaks: every argument-validation error path returns without PyBuffer_Release, and ctr256_encrypt/decrypt never release the state buffer even on success, so a bytearray passed there stays export-locked (resizing it raises BufferError) and its reference is leaked.
+- Block input and output go through type-punned uint32_t loads and stores (GET/PUT) with an unconditional byte swap, so the code assumes a little-endian host and unaligned-access tolerance; the key is re-expanded on every call, so per-call cost dominates small messages.
+
+**Status:** Archived 2024-12-23 and declared unmaintained, LGPL-3.0-or-later, with NIST and pyca vectors for CBC and CTR run by CI on Linux and macOS (tests skipped on Windows); usable as a legacy Pyrogram accelerator, but it carries an unfixed 4 GiB length-truncation over-read, in-place mutation of immutable IV/state buffers and buffer leaks, so it should not be adopted for new code.
+
+[repo](https://github.com/pyrogram/tgcrypto)
 
 #### crypto-hashes
 
@@ -106663,6 +109117,49 @@ Embedded C++20 query engine over memory-mapped OpenStreetMap GOL files; claims 5
 
 [repo](https://github.com/clarisma/libgeodesk) · [benchmark](https://github.com/clarisma/libgeodesk)
 
+##### giotto-ph (giotto-ai)  `C++`  `AGPL-3.0`  `stale`  `Tier C`
+
+Multithreaded lock-free Vietoris-Rips persistent homology (Python API, C++ backend) that outruns single-threaded Ripser v1.2 when given several cores.
+
+**Beats:** Ripser v1.2 (Ripser/ripser by Ulrich Bauer); also compared with GPU Ripser++ according to the release notes — The only numbers in the repository are the README figure, which is giotto-ph's own thread scaling (every curve is exactly 1.00 at one thread; the paper describes its scaling figure as giotto-ph with more worker threads), reaching 23.7x on fractal, 14.2x on o3_4096 and 10x to 13x on o3_1024, random16 and torus4 at 48 threads but only 1.7x on sphere3 and 1.06x on dragon (derived from the SVG path data), with no CPU, compiler or flags given. The comparison with Ripser v1.2 (parity on one thread, faster with more) and the claim of beating GPU Ripser++ with 5 to 10 CPU cores come from the arXiv 2107.05412 paper and the v0.1.0 notes, seen here only through search snippets.
+
+**Known shortcoming:** The README speedup SVG is self-relative thread scaling (every curve 1.0 at 1 thread, read from path coordinates), not a head-to-head with Ripser; the Ripser and Ripser++ wins are first-party only (paper snippet, v0.1.0 notes). No CPU, compiler, flags or benchmark code. AGPL-3.0.
+
+**Known shortcoming:** Enricher: the README figure is confirmed self-relative (all curves 1.00 at 1 thread) and the dragon dataset drops from 1.51x to 1.07x past 12 threads; no bench code or hardware in the repo. Issue #68 (flaky multithread-vs-single tests with assertion errors) is open and the code has a TODO on memory orders; default n_threads is 1; float32 only; index cap 2^55-1 (#74); wheels only for CPython 3.8-3.12; last commit 2024-05-30.
+
+**Independent measurement:** verifier batch-180 (wave 8 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** It reimplements Morozov and Nigmetov's lock-free Ripser: worker threads from a thread pool reduce coboundary-matrix columns concurrently, columns live in a vector of std::atomic pointers with epoch-based memory reclamation, and the pivot table is a Junction leapfrog concurrent hash map updated by insert or compare-and-update instead of locks. Ripser v1.2's apparent (zero-persistence) pair shortcut is searched in parallel chunks, column lists are sorted with a parallel sort, and an optional edge collapse (reimplemented from GUDHI) shrinks the 1-skeleton before the flag complex is built. Dimension 0 (union-find) stays sequential.
+
+**Use it when:**
+- Large Vietoris-Rips problems with homology dimension 2 or higher on a many-core CPU, where the README figure shows 10x to 24x self-relative scaling at 48 threads (fractal 23.7x, o3_4096 14.2x, random16 12.9x, o3_1024 10.2x, torus4 10.1x).
+- Python topological data analysis pipelines, especially with giotto-tda or pyflagser, that today call ripser.py single-threaded.
+- You need flag persistence generators (vertices and edges creating or killing bars), weighted or DTM-reweighted Rips filtrations, or coefficients other than Z/2.
+- Pushing to higher homology dimensions on dense point clouds where edge collapse removes enough edges to make the computation fit.
+
+**Skip it when:**
+- Small or shallow computations: the README figure shows sphere3 at 1.7x and dragon (dimension 1 only) at 1.06x even with 48 threads; dragon drops from 1.51x at 11 threads to 1.07x at 13 and never recovers (derived from the SVG), so more threads can hurt.
+- Closed-source or network-served products that cannot accept AGPL-3.0; a different licence is only available on request from L2F.
+- Any filtration other than Vietoris-Rips (cubical, alpha, witness complexes), or when you need a C++ API: the backend is a pybind11 extension and the header pulls in the preshing Junction and Turf submodules.
+- Python 3.13 or newer, Linux aarch64 or other platforms without wheels: PyPI 0.2.4 ships only CPython 3.8 to 3.12 wheels for manylinux2014 x86_64, macOS universal2 and win_amd64, and source-build issues #72 and #75 (Clang needs explicit atomic linking) are open.
+- Many points at high maxdim: simplex indices are capped at 2^55 - 1, so issue #74 (2,000 points, maxdim=5) fails with OverflowError, and point clouds without a threshold go through a dense O(n^2) pairwise distance matrix.
+
+**Integration:** module · Python >= 3.7 with NumPy >= 1.19.1, SciPy >= 1.5.0, scikit-learn >= 0.23.1; source builds need CMake >= 3.9, a C++14 compiler, pybind11, preshing Junction and Turf (git submodules) · C++14 (CMakeLists.txt); prebuilt wheels for CPython 3.8 to 3.12 · x86-64 Linux (manylinux2014), macOS universal2 (x86-64 and Apple Silicon), Windows x86-64; other platforms only via source build
+
+**Vs siblings:** The geometry-spatial siblings are spatial indexes, meshing and geometry kernels, none of which compute persistent homology; the closest catalogued project is Ripserer.jl (filed elsewhere), a Julia reimplementation that runs at or below single-threaded Ripser speed, so pick giotto-ph when you have many cores, a Python pipeline and a large or deep Vietoris-Rips computation, and stay with single-threaded Ripser for small or shallow problems or when AGPL terms are unacceptable.
+
+**Gotchas:**
+- ripser_parallel defaults to n_threads=1, which per the paper performs about like Ripser v1.2; pass n_threads=-1 (all hardware threads) or an explicit count to get any speedup.
+- Issue #68 (open since 2022-08-17, help wanted) reports intermittent failures in the tests that compare multithreaded with single-threaded results, including assertion errors and not only deadline timeouts; the lock-free reduction code itself notes that its consistency check is weaker than the original lock-free paper's and carries a TODO to think through memory orders. Cross-check important barcodes with n_threads=1.
+- Filtration values are float32 inside the backend and in the returned diagrams (release 0.2.1), and the GCC/Clang release build compiles the edge collapser with -Ofast, which assumes finite, non-NaN values; precomputed matrices with inf entries fed through collapse_edges are outside what that flag guarantees.
+- No benchmark code, datasets, CPU model, compiler or flags are in the repository (reproducibility issue #20 is open), so the published scaling cannot be rerun from the repo alone.
+
+**Status:** Stale: the last commit and the last PyPI releases (0.2.3 and 0.2.4) date from 2024-05-30, with no wheels beyond CPython 3.12 and 10 open issues including build failures and flaky multithreaded tests; AGPL-3.0, so it is copyable only on AGPL terms.
+
+[repo](https://github.com/giotto-ai/giotto-ph) · [benchmark](https://raw.githubusercontent.com/giotto-ai/giotto-ph/main/docs/images/multithreading_speedup.svg)
+
 ##### Hob3l  `C`  `GPL-3.0`  `stale`  `Tier C`
 
 C command-line tool that turns SCAD/CSG models into layered STL for 3D printing, 50-350x faster than OpenSCAD's CGAL render.
@@ -107865,6 +110362,48 @@ Rust cut alternative with reordering, negative indices and multi-character or re
 
 #### systems-and-safety
 
+##### Hare 0.26.0.1: compile throughput in nordlow/compiler-benchmark  `Hare`  `GPL-3.0-only AND MPL-2.0`  `active`  `Tier C`
+
+Hare 0.26 toolchain (harec plus QBE) builds a generated 40,000-function program 2.6-3.0x faster than gcc -O0; clang wins.
+
+**Beats:** C (gcc-15 15.3.0, gcc 16.2.1, clang 23.1.1) and C++ (g++-15 15.3.0, g++ 16.2.1, clang++ 23.1.1) compiling the same generated arithmetic translation unit (200 call chains of depth 200, 40000 functions) with default optimization (no -O flag) — In one run of nordlow/compiler-benchmark (tables updated 2026-10-09) on an AMD Ryzen AI 7 350 under Arch Linux, hare 0.26.0.1 in default debug mode built a generated program of 200 x 200 i64 add-chain functions, link included, in 150 us per function. The same C program at -O0 with -Wall -Wextra took 392 us/f with gcc 15.3.0 (193.8 object-only) and 454 with gcc 16.2.1. The C++ version took 303 with g++ 15.3.0, 486 with g++ 16.2.1 and 236 with clang++ (untemplated). clang 23.1.1 C was faster than Hare at 118.
+
+**Known shortcoming:** Wins over GCC, g++ and clang++ only; clang C is faster (118 vs 150 us per function). Synthetic source, a single sample per cell with parallel tasks, and the README's Conclusions numbers drift about 30% from the tables; cbench builds gcc at -O0, which favours the baseline. Hare's licence and last commit unverified (git.sr.ht unreachable).
+
+**Known shortcoming:** Enricher: HARECACHE is wiped per operation, not per repetition, and builds keep the minimum of 2 runs, so the reported Build probably reused stdlib modules compiled in run 1 (C compilers get no such cache); the Check cell (135.9) is a second hare build, about 10% noise against Build (150); default debug mode pulls in the debug:: runtime; hare -j follows the affinity mask, so builds run serially under the harness pin; peak RSS about 4.4 GB. Conservative ratio: about 1.3x over gcc-15's object-only compile. Licence read from a GitHub mirror (Angluca/hare); last commit unverified.
+
+**Independent measurement:** verifier batch-118 (wave 14 seed pass, 2026-10-13)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
+
+**How:** The benchmark gives no Hare-specific reason. Inference, not measured: harec lowers straight to QBE's SSA IL, and QBE runs a short fixed pass list with no optimization levels, while GCC at -O0 still lowers through GENERIC, GIMPLE and RTL. The default build caches compiled standard-library modules (rt, os and the debug:: runtime that debug mode imports) in HARECACHE, and the reported minimum is over two repetitions, so the faster run probably reused modules compiled by the first, much as a C build links a prebuilt libc.
+
+**Use it when:**
+- You already write Hare and want default debug builds of large generated files to stay cheaper than GCC -O0 builds: 150 us per function against 303 to 486 for the gcc and g++ rows.
+- Static, libc-free binaries on Linux or FreeBSD (x86-64, aarch64, riscv64 per the 2022 announcement; the current platform list could not be checked) where a small toolchain is preferred.
+- Toolchain comparisons: Hare lands next to Odin (147) and C3 (153) on this Total column.
+
+**Skip it when:**
+- When clang is available: clang C built the same program faster (118 us/f Total, 77.9 object-only), and so did clang++ on the templated variant (107).
+- On memory-limited build hosts: the sampled peak RSS, summed over the process tree, was 110.8 kB per function, about 4.4 GB for this file (derived from page data), against 17.2 to 17.6 kB/f for the gcc builds and 6.8 for clang.
+- On Windows or macOS: the project has no official support for non-free platforms (2022 announcement); only a community macOS port exists.
+- For optimized-build or code-quality comparisons: only the default debug mode was measured (no -R), and QBE output was not compared with gcc -O2.
+- To predict real project builds: the workload is one synthetic file of 40,000 i64 add-chain functions.
+
+**Integration:** compiler toolchain (the 'hare' build driver plus harec, qbe and binutils; distribution packages such as Arch's hare 0.26.0.1 per search snippets, or a source build) · harec, qbe, an assembler and linker (as, ld); no libc by default · hare 0.26.0.1 as measured (0.26.0 announced on the Hare blog 2026-02-13 per search results) · Linux and FreeBSD on x86-64, aarch64 and riscv64 per the 2022 announcement (later BSD ports not confirmed); no official Windows or macOS; measured only on x86-64 Arch Linux
+
+**Vs siblings:** On this Total column Hare (150) ties Odin (147) and C3 (153) and trails Zig (110), Free Pascal (138, 103.6 object-only) and dmd (13), while using about 3x Odin's and 13x Zig's build memory per function (derived from page data). Pick Hare for a small, libc-free toolchain, not for the fastest builds.
+
+**Gotchas:**
+- Harness: Hare's Check cell is a second full build. bm_Hare's 'check' runs 'hare build -o <tmp>', the same command as 'build' apart from the output path, so Check (135.9 us/f) against Build (150) shows about 10% noise between identical commands, and the two RSS cells match (110.8). Hare has no link-free Compile number. Taken conservatively, Hare's full build including the link (150) against GCC's object-only compiles is about 1.3x faster than gcc 15 (193.8), 1.8x than g++ 15 (269.6) and 2.7x than gcc 16.2.1 (400.1), while clang++ object-only (82.4) is 1.8x faster than Hare (derived from page data).
+- Cache and repetitions: HARECACHE is wiped once per operation, not per repetition. Every repetition compiles byte-identical source (cbench draws its random-constant pool once per process and restarts the index for each file) under a new file name, and builds of about 6 s keep the minimum of only 2 runs. The 6 s minimum shows the main module was rebuilt, but the standard-library modules compiled by the first run were probably reused.
+- Unequal work, mostly against Hare: default (non -R) mode imports the debug:: runtime-support module (hare-build man page per search snippets) and QBE always runs its passes, while the C side builds at -O0 with only -Wall -Wextra added. The 222 B/f output size includes that debug runtime.
+- One noisy run: tasks run concurrently, one pinned worker per core on a hybrid Zen 5 and Zen 5c part, and nothing checks the program's output. The 1.6x lead over clang++ rests on clang++'s untemplated Total (236), which is 2.9x its own Compile (82.4), while its templated Total is 107. The README summary now quotes the table's figures (clang 118), so the record's note about it citing clang 87 is out of date, but its section 3 still quotes GCC compile figures (226.7 to 382.6 us/f) that differ from the table (193.8 to 400.1).
+
+**Status:** Hare is actively released (0.26.0 on 2026-02-13 per search results, and 0.26.0.1 is packaged by Arch and Alpine per search snippets), but git.sr.ht, harelang.org and the distro package pages are unreachable from this sandbox. The licence split (GPL-3.0-only for hare and harec, MPL-2.0 for the standard library) is taken from a GitHub mirror's README, and the last commit is unverified. The evidence is one single-machine run of a public harness in which Hare's Check column is just a second full build.
+
+[repo](https://git.sr.ht/~sircmpwn/hare) · [benchmark](https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/README.md)
+
 ##### Lightpanda  `Zig`  `AGPL-3.0`  `active`  `Tier C`
 
 Zig headless browser (V8 JS, no rendering) for CDP automation; vendor crawl 9.7x faster, 16x less memory than headless Chrome.
@@ -107963,9 +110502,13 @@ Rust log and metrics pipeline whose 2019 first-party tests beat Fluent Bit 1.1.0
 
 **Known shortcoming:** Harness flaw: the File to TCP 2.2x is 'Disk Thrpt', dstat's disk_read_avg (bin/compare), not bytes delivered: Vector read 4.6 GiB and sent 2.3 GiB while Fluent Bit read 2 GiB and sent 2 GiB, so on bytes sent the gap is about 1.15x (derived); the configs differ too (json_lines vs text). Fluent Bit 1.1.0 sits at about 50 CPU usr (one core) in every row while Vector uses about 95 (both cores); the 2019 rows cannot be rerun. Third-party data (VictoriaMetrics/log-collectors-benchmark, results/2026-09-17): at about 10.8k logs/s Vector 0.58.0 used 0.288 cores against Fluent Bit 5.0.9's 0.204; peak Vector 32,057 logs/s with 0 lost, Fluent Bit 41,222 then OOMKilled with 1,133,131 lost.
 
+**Known shortcoming:** Contradicting evidence (VictoriaMetrics log-collectors-benchmark, found by the vlagent enricher, 2026-10-13): in that harness Vector v0.58.0 does worse than Fluent Bit (0.288 cores at 10k logs/s, 32k logs/s peak), the opposite of Vector's own harness.
+
 **Independent measurement:** verifier batch-69 (wave 14)
 
 **Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**Independent measurement:** enricher (seed pass, 2026-10-13)
 
 **How:** Each DAG node is an async task on the multi-threaded Tokio runtime, connected by bounded channels with backpressure by default. Stateless transforms such as remap are inlined into the source task, and each source defines its own unit of concurrency (the socket source per open connection, the file source per tailed file), so throughput spreads over all vCPUs without tuning. In the harness the advantage is mostly that parallelism: on the 2-vCPU c5.large, Vector's system-wide CPU usr peaks at 93.5-96.5 while Fluent Bit 1.1.0 peaks at 49.8-53.2, about one core. The project's sizing guide also says VRL compiles to machine code; that claim was not checked here.
 
