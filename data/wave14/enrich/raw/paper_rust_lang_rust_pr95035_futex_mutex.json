@@ -1,0 +1,58 @@
+{
+  "id": "paper:rust-lang-rust-pr95035-futex-mutex",
+  "one_liner": "Rust's std::sync::Mutex on Linux since 1.62: an inline three-state futex word with a short spin, replacing a boxed glibc pthread_mutex_t.",
+  "what_it_does": "PR 95035 (m-ou-se, merged by bors for 1.62.0, tracking issue 93740) replaced the Linux implementation behind std::sync::Mutex and Condvar. The old version heap-allocated a pthread_mutex_t (type PTHREAD_MUTEX_NORMAL) in a Box and called glibc or musl through libc; the new one is a single AtomicU32 stored inline with a const constructor. The public API did not change, so every Rust program using std::sync::Mutex picked it up on recompilation; today the same futex mutex (library/std/src/sys/sync/mutex/futex.rs) also backs Android, FreeBSD, OpenBSD, DragonFly, Windows (non-win7 targets, WaitOnAddress with a 1-byte state), wasm with atomics, Hermit and WASI p3, while macOS and other Unix targets keep pthread.",
+  "how_it_is_fast": "It is the classic three-state futex lock (0 unlocked, 1 locked, 2 locked with waiters): lock and unlock are one inlined compare_exchange and one swap, and the kernel is entered only when the state is 2. Unlike glibc 2.35's normal mutex, which is the same three-state algorithm without spinning (__lll_lock_wait goes straight to futex_wait) and also writes __owner and __nusers on every lock, the Rust lock first spins up to 100 iterations of hint::spin_loop with plain loads, stops early when the state becomes 0 or 2, and spins again after each wake-up. It also removes the Box indirection, so the lock word sits next to the protected data instead of in a separate heap allocation.",
+  "when_to_use": [
+    "Any Rust code on Linux that needs a plain mutex: it is the default std::sync::Mutex since Rust 1.62, so there is nothing to add; just build with a current toolchain.",
+    "Short critical sections under moderate or heavy contention with fewer runnable threads than cores, where the 100-iteration spin catches most hand-offs (the PR's 32 threads on a 128-thread Threadripper: heavy contention 1.82 ms versus 8.11 ms for the glibc-based version).",
+    "Many small locks (one per object or bucket): no per-lock heap allocation and 4 bytes of state (1 byte on Windows) instead of a separate pthread_mutex_t allocation.",
+    "Statics and const contexts: the constructor is const, so no lazy initialisation or OnceLock wrapper is needed."
+  ],
+  "when_not_to_use": [
+    "Real-time or priority-sensitive code: it has no priority inheritance or robust-mutex mode; the tracking issue keeps pthread on non-futex Unix 'to maintain priority inheritance'. Note that the old Linux std Mutex never set PTHREAD_PRIO_INHERIT either, so use a pthread wrapper with the PI attribute if you need it.",
+    "Oversubscribed systems (more runnable threads than cores) or long critical sections: the fixed spin burns CPU while the owner may be descheduled; the only numbers are from 32 threads on 128 hardware threads, and lock-bench's own README on a 4-core i7-7820HQ found spinning locks much worse than a good mutex.",
+    "Light or no contention where every nanosecond counts: in the same PR run parking_lot::Mutex (0.695 ms, 0.940 ms) and spin::Mutex (0.605 ms, 0.765 ms) beat it (0.784 ms, 1.19 ms).",
+    "Workloads needing fairness: lock hand-off is unfair (an unlock sets 0 and wakes one waiter, and a spinning thread can barge in first), so a waiter can starve; the tracking issue notes pthread and SRW locks are not fair either.",
+    "C or C++ code: it is not a pthread_mutex_t replacement and has no C ABI; it only speeds up Rust programs."
+  ],
+  "integration": {
+    "form": "module (part of the Rust standard library, std::sync::Mutex)",
+    "dependencies": "none (Linux futex syscall via libc::syscall; WaitOnAddress on Windows; _umtx_op on FreeBSD)",
+    "min_toolchain": "Rust 1.62 for the Linux futex version (PR milestone 1.62.0); const construction on all platforms came with the later PR 97791",
+    "platforms": "Linux, Android, FreeBSD, OpenBSD, DragonFly, Windows (non-win7 targets), wasm with atomics, Hermit, WASI p3; macOS and other Unix keep pthread, Fuchsia has its own",
+    "thread_safety": "Mutex<T> is Sync for T: Send; poisoning on panic is kept at the std::sync layer; re-locking from the owning thread deadlocks",
+    "drop_in_for_baseline": "partial: for Rust code it replaced the pthread-based std::sync::Mutex with the same API, transparently; it cannot replace pthread_mutex_t in C or C++ programs"
+  },
+  "gotchas": [
+    "Harness flaw (lock-bench src/main.rs): each lock is wrapped in crossbeam CachePadded, but the 1.60 std Mutex holds only a Box pointer there; the pthread_mutex_t lives in a separate unpadded heap allocation made in a tight loop, so neighbouring old-std locks can share cache lines (false sharing) while the new futex word, parking_lot and spin are padded. Part of the extreme- and heavy-contention gap is therefore layout, not lock algorithm (likely, not measured).",
+    "Harness flaw: the timed region runs from start_barrier to end_barrier, and std::sync::Barrier is itself a std Mutex plus Condvar (1.60 barrier.rs), so every round includes 32 threads waking from a Condvar and re-acquiring the Barrier's mutex, done with the old pthread pair in the old build and the new futex pair in the new one. At about 1 to 3 ms per round this fixed cost is not separated from the 'no contention' result, and the PR also replaced Condvar, so that row mixes the two changes.",
+    "In the 1,000,000-lock 'no contention' case the old version needs two dependent cache misses per operation (padded slot, then boxed pthread_mutex_t) against one for the inline futex word, so its 2.5x gap mostly reflects memory layout.",
+    "After any contention the woken thread always sets the state to 2 (by design, so other waiters are not lost), so the next unlock makes a FUTEX_WAKE syscall even when nobody is waiting any more; the spin count is a fixed 100 iterations of hint::spin_loop on every CPU, with no adaptive tuning."
+  ],
+  "pick_this_over_siblings_when": "No mutex is catalogued among this category's siblings; Cynosure RingBuf and Myelon remove locking for single-producer queues and IPC instead, and Tokio or Embassy schedule tasks rather than guard data. Use this whenever a Rust program needs a blocking mutex; for C or C++ code the catalogued lock entries are Cosmopolitan Libc's pthread_mutex_t and AlexeyAB's contention_free_shared_mutex in the concurrency-queues-locks category.",
+  "verified_claims_summary": "In one run posted on the PR by its author on a 64-core/128-thread AMD Threadripper (model, rustc version, glibc and musl versions not stated), matklad/lock-bench with 32 threads and 10,000 lock operations per thread averaged 27.6 ms versus 58.5 ms (glibc) and 89.1 ms (musl) per round on 2 locks, 1.82 versus 8.11 ms on 64 locks, 0.784 versus 2.80 ms on 1,000 locks and 1.19 versus 2.98 ms on 1,000,000 locks, against the earlier Rust std Mutex built on boxed pthread_mutex_t. The baseline is glibc reached through Rust's boxed wrapper, not a C program, and the measured gap includes layout and barrier effects of the harness as well as the spin-then-park algorithm.",
+  "status_note": "Active and shipped: part of rust-lang/rust (Apache-2.0 OR MIT), unchanged in algorithm from 1.62.0 to current main apart from a 1-byte state on Windows and a move to library/std/src/sys/sync/mutex/futex.rs; usable by every Rust program, with the evidence a single first-party run on one machine.",
+  "sources_read": [
+    "https://github.com/rust-lang/rust/pull/95035",
+    "https://github.com/rust-lang/rust/issues/93740",
+    "https://github.com/rust-lang/rust/pull/99505",
+    "https://github.com/rust-lang/rust/tree/main/library/std/src/sys/sync",
+    "https://raw.githubusercontent.com/rust-lang/rust/1.62.0/library/std/src/sys/unix/locks/futex.rs",
+    "https://raw.githubusercontent.com/rust-lang/rust/1.60.0/library/std/src/sys/unix/mutex.rs",
+    "https://raw.githubusercontent.com/rust-lang/rust/1.60.0/library/std/src/sys_common/mutex.rs",
+    "https://raw.githubusercontent.com/rust-lang/rust/1.60.0/library/std/src/sync/barrier.rs",
+    "https://raw.githubusercontent.com/rust-lang/rust/HEAD/library/std/src/sys/sync/mutex/futex.rs",
+    "https://raw.githubusercontent.com/rust-lang/rust/HEAD/library/std/src/sys/sync/mutex/mod.rs",
+    "https://raw.githubusercontent.com/rust-lang/rust/HEAD/library/std/src/sys/sync/futex/mod.rs",
+    "https://raw.githubusercontent.com/rust-lang/rust/HEAD/library/std/src/sys/sync/futex/unix.rs",
+    "https://raw.githubusercontent.com/rust-lang/rust/HEAD/library/std/src/sys/sync/futex/windows.rs",
+    "https://raw.githubusercontent.com/matklad/lock-bench/HEAD/README.md",
+    "https://raw.githubusercontent.com/matklad/lock-bench/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/matklad/lock-bench/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/bminor/glibc/glibc-2.35/nptl/lowlevellock.c",
+    "https://raw.githubusercontent.com/bminor/glibc/glibc-2.35/sysdeps/nptl/lowlevellock.h",
+    "https://raw.githubusercontent.com/bminor/glibc/glibc-2.35/nptl/pthread_mutex_lock.c"
+  ],
+  "confidence": 0.6
+}

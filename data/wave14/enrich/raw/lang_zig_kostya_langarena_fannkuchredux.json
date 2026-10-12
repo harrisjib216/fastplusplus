@@ -1,0 +1,65 @@
+{
+  "id": "lang:zig/kostya/langarena#fannkuchredux",
+  "one_liner": "Bounds-checked Zig fannkuch-redux kernel, about 6% faster than GCC -O2 C in LangArena at n = 8.",
+  "what_it_does": "A LangArena task, not a library: count pancake flips over all 8! = 40,320 permutations of 8 elements with the Computer Language Benchmarks Game fannkuch-redux algorithm (single-threaded, alternating-sign checksum plus maximum flips), 700 timed calls after 140 untimed warm-up calls. Fannkuchredux.fannkuchredux(n) in zig/src/fannkuchredux.zig keeps perm1, perm and count in [32]i32 stack arrays, copies perm1 into perm with @memcpy, reverses each prefix with a two-index swap loop and rotates perm1 with a shift loop, the same steps as c/src/fannkuchredux.c. Reusing it means copying a 60-line Zig function; nothing links into C or C++.",
+  "how_it_is_fast": "No distinctive technique: same algorithm and arrays on both sides, with n read from run.js at run time. The Zig flip loop runs while (i < j) with j counting down where the C precomputes the trip count k2 = (k + 1) >> 1, and the Zig row is compiled by LLVM for the host CPU in ReleaseSafe with bounds, cast and overflow checks kept. The margin looks like loop code-generation variance rather than a language effect: on identical C source C/Clang -O2 (1.174 s) is 13% slower than C/Gcc -O2 (1.036 s), every -O3 -march=native C and C++ row (1.137-1.364 s) is slower than C/Gcc -O2, and Zig's own ReleaseFast build (1.024 s) is slower than its checked build (0.977 s); no disassembly was published to pin the cause.",
+  "when_to_use": [
+    "Tight integer loops over small fixed-size stack arrays in Zig where you want bounds and overflow checks left on: here the checked ReleaseSafe build beat ReleaseFast in all five monthly runs (0.972-0.989 s vs 1.024-1.054 s).",
+    "New code you would otherwise write in C for permutation or combinatorial kernels, when Zig is acceptable: idiomatic checked Zig matched or beat every GCC and Clang C/C++ build on this kernel.",
+    "As a data point that Zig's safe release mode need not cost speed on branchy integer code, provided you measure your own kernel."
+  ],
+  "when_not_to_use": [
+    "To speed up existing C or C++: a 1.04-1.07x edge on one tiny kernel does not justify a rewrite, and the C rows themselves spread by 32% across flag sets on the same source.",
+    "If you want the fastest row on this test: V/Clang (0.875 s), Gossamer (0.913 s), Nim/Clang (0.918 s) and Nim/NLVM (0.944 s) beat Zig's 0.977 s in the same run.",
+    "As a proxy for the real Benchmarks Game workload: this is n = 8 (about 1.4 ms per call) single-threaded, while the CLBG uses n = 12 with threads, so it says nothing about larger n or parallel scaling.",
+    "For portable binaries: the measured Zig binary targets the build host's CPU (b.standardTargetOptions default), whereas the headline C prod build is generic x86-64."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (Zig std builtins only: @memcpy, @memset, @max, @intCast)",
+    "min_toolchain": "The suite needs Zig 0.16 std APIs (std.process.Init, std.Io); measured with Zig 0.16.0 (July to September 2026) and 0.17.0 (2026-10-05)",
+    "platforms": "Measured on x86-64 Linux (AMD Ryzen 7 3800X), built for the host CPU; nothing platform-specific in the kernel",
+    "thread_safety": "The kernel is a pure function over its own stack arrays, so it is reentrant; the benchmark runs it single-threaded",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Latent crash outside the measured configuration: runImpl does @as(u32, @intCast(result.checksum * 100 + result.max_flips)), which panics in ReleaseSafe (and is undefined in ReleaseFast) when the sum is negative. A Python replay of the algorithm gives a negative value for n = 2 (checksum -1, max flips 1, so -99); n = 8 gives +161,622. The C version casts to uint32_t and wraps, and runImpl also silently skips n > 16 where the C clamps n to 32.",
+    "Checksum reproduces: the same replay gives checksum 1616 and 22 maximum flips for n = 8, and run.js's expected 135762480 equals 161,622 times 840 calls (140 untimed warm-up plus 700 timed); the results file does not record checksum status.",
+    "Same algorithm, not same source: the C++ row uses std::reverse and std::rotate (1.128 s Clang++, 1.199 s G++ prod), the C row a k2-count swap loop and the Zig row an i < j loop. The 4-7% Zig lead held in all five monthly runs with code unchanged since before the first (zig/src/fannkuchredux.zig last changed 2026-02-23, c/src/fannkuchredux.c 2026-04-21), but the author's own LLVM-based C compiler row (C/mycc/LLVM/Default, 1.026 s) is within 5%, so a compiler update could flip the order.",
+    "One timing per configuration per monthly run, no variance reported; the suite README says its ranking reflects 50 tasks and is 'not my pick for a single test', and calls itself subjective with AI-assisted translations."
+  ],
+  "pick_this_over_siblings_when": "The catalogued V/Clang (0.875 s) and Nim/Clang (0.918 s) rows for the same test are faster in the same run; pick the Zig row's approach when you want the measured build itself to keep runtime safety checks (ReleaseSafe) without a C backend, not for raw speed. Whether the V and Nim production rows keep runtime checks was not checked.",
+  "verified_claims_summary": "On an AMD Ryzen 7 3800X (results 2026-10-05), Zig 0.17.0 ReleaseSafe ran 700 n = 8 fannkuch-redux calls in 0.977 s against 1.036 s for C/Gcc prod (GCC 16.0.1, -O2 with stack protector and frame pointers), the best of the 16 GCC 16.0.1 and Clang 22.1.8 C and C++ builds, and 1.137-1.364 s for the -O3 -march=native rows: about 1.06x, derived from page data. The four earlier monthly runs (Zig 0.16.0) give 1.059x, 1.067x, 1.038x and 1.059x.",
+  "status_note": "Active MIT-licensed suite (41 stars, last commit 2026-10-08, monthly reruns); no harness flaw behind the numbers (C, C++ and Zig time run_all with a monotonic clock after the same 20% untimed warm-up and check the same checksum), but the edge is a 4-7% code-generation effect on one tiny kernel, and the Zig port has a latent ReleaseSafe panic for n = 2 (negative checksum cast to u32) that the n = 8 configuration never hits.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/run.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/build.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/build.zig.zon",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/src/main.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/src/benchmark.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/src/helper.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/src/fannkuchredux.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/fannkuchredux.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/benchmark.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/benchmark.h",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/fannkuchredux.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/fannkuchredux.hpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/benchmark.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/benchmark.hpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/crystal/main.cr",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-09-18-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-09-03-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-08-14-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-07-14-kostya-ms7c37.js",
+    "https://github.com/kostya/LangArena/commits/master/zig/src/fannkuchredux.zig",
+    "https://github.com/kostya/LangArena/commits/master/c/src/fannkuchredux.c",
+    "https://github.com/kostya/LangArena/issues?q=is%3Aissue",
+    "https://github.com/kostya/LangArena/issues/1",
+    "https://github.com/kostya/LangArena/tree/master/crystal"
+  ],
+  "confidence": 0.7
+}

@@ -1,0 +1,73 @@
+{
+  "id": "lang:v/kostya/langarena#fannkuchredux",
+  "one_liner": "V's fannkuch-redux in kostya's LangArena, built through clang, runs 1.18x faster than the suite's fastest C build, but loses under gcc.",
+  "what_it_does": "LangArena is a 50-task, 26-language benchmark suite. Every row is measured once per monthly run on one AMD Ryzen 7 3800X, inside per-language Docker images built on Ubuntu 26.04. v/fannkuchredux.v is its V version of the Computer Language Benchmarks Game fannkuch-redux kernel: it walks all n! permutations with a count array, flips each prefix by pairwise swaps until element 0 is 0, and returns the alternating checksum and the maximum flip count. It is a benchmark program, not a library. A Fannkuchredux struct implements the suite's IBenchmark interface (prepare, run, checksum) and is driven by v/benchmark.v. That harness times 700 calls with n = 8 after 140 untimed warm-up calls and compares the accumulated checksum (840 x 161,622 = 135,762,480) with run.js.",
+  "how_it_is_fast": "There is no language-level mechanism. V transpiles to one C file and hands it to the same clang 22.1.8 binary as the C rows: the V and C Clang images both derive from langarena:base_clang, built from the llvm.org 22.1.8 release tarball. V 0.5.1's -prod adds -O3 -flto, and so does -fno-strict-aliasing for gcc only (vlib/v/builder/cc.v at tag 0.5.1). The two sources run the same algorithm with 32-int stack arrays, but they are shaped differently. The C file copies the permutation with a runtime-length memcpy and swaps through a pointer helper. The V file uses plain index loops, and V 0.5.1 wraps every non-literal fixed-array index in builtin__v_fixed_index, a bounds check that panics (vlib/v/gen/c/index.v, vlib/builtin/builtin.c.v), because no @[direct_array_access] or -no-bounds-checking is used. So V wins with bounds checks on. A plausible explanation, inferred from the sources and not measured, is that the checks keep clang from turning the copy and rotate loops into libc memcpy and memmove calls or vectorising tiny-trip-count loops. No assembly or profile is published, and the same V source is slower than C under gcc.",
+  "when_to_use": [
+    "As a data point on how V 0.5.1's generated C compiles under clang on a branchy, permutation-heavy integer kernel, compared with C, C++, Nim, Zig and Rust in one harness with one checksum.",
+    "As a readable, MIT-licensed, bounds-checked V fannkuch-redux (fixed [32]int arrays, no unsafe blocks, no attributes) to copy or port.",
+    "When you already ship V with -cc clang -prod and want evidence that idiomatic, bounds-checked V integer loops need not cost speed against hand-written C."
+  ],
+  "when_not_to_use": [
+    "As evidence that V beats C in general: across all 50 LangArena tests in the 2026-10-05 run V/Clang totals 99.3 s against 56.5 s for C/Gcc and 54.3 s for C/Clang, and it beats both C prod rows in only 8 tests.",
+    "With the GCC backend: V/GCC 1.126 s and V/GCC/Perf 1.08 s are both slower than C/Gcc at 1.036 s on this same test.",
+    "If you expect -march=native to help: V/Clang/Perf (0.912 s) is slower than plain V/Clang -prod (0.875 s), and every -O3 -march=native C/C++ row (1.137-1.364 s) is slower than gcc -O2 C (1.036 s). The kernel is sensitive to code generation and layout, so a compiler update can move it either way.",
+    "For production fannkuch or permutation work: n is fixed at 8 (40,320 permutations per call), the code is single-threaded, and V only panics, rather than clamping as the C version does, when n > 32."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "V standard library plus the suite's benchmark and helper modules (config from run.js); v.mod also lists srackham.pcre2 for other tests",
+    "min_toolchain": "V 0.5.1 (release v_linux.zip, build 0c3183c) with clang 22.1.8; flags -enable-globals -cc clang -prod",
+    "platforms": "any platform V supports; results published only for x86-64 Linux (AMD Ryzen 7 3800X, Docker images on Ubuntu 26.04)",
+    "thread_safety": "single-threaded; run() mutates the struct's result_val; not documented otherwise",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "This is a backend result, not a V result. Under clang, V's generated C beats hand-written C (0.875 s vs 1.174 s). Under gcc 16, the same V source loses (1.126 s vs 1.036 s), so which C compiler V calls decides the sign. The suite's own v/run script builds with -cc gcc.",
+    "The fair C baseline is C/Gcc prod (gcc -O2 with -fstack-protector-strong and -fno-omit-frame-pointer, 1.036 s), not the -O3 -march=native rows. On this test the hardened -O2 build beats every -O3 C build, and C/Clang/Unsafe (no stack protector, -fomit-frame-pointer) is no faster than clang -O2 prod, so the hardening flags do not explain V's lead.",
+    "The two backends run in different images. The gcc images use Ubuntu's packaged gcc 16 (version string 'Ubuntu 16-20260322-1ubuntu1', a trunk snapshot) and the clang images use the upstream llvm.org 22.1.8 release tarball. V/Clang vs C/Clang, with the same clang binary and the same base image, is therefore the cleanest pair, and V leads it by 1.34x.",
+    "There is one measurement per row per run, with no repeats or variance. The order held in the 2026-09-18 and 2026-10-05 files read here (V/Clang 0.871 and 0.875 s, C/Gcc 1.047 and 1.036 s), and the verifier reports the same order in five monthly runs."
+  ],
+  "pick_this_over_siblings_when": "Compared with the Nim/Clang (0.918 s) and Zig (0.977 s) LangArena Fannkuchredux entries, this has the largest margin over C on this test. Like Nim, though, it is a C-emitting language whose lead depends on clang, while Zig's lead comes from its own LLVM pipeline. Use the Zig row for a non-transpiled comparison, and this one only as a V-on-clang data point.",
+  "verified_claims_summary": "LangArena's 2026-10-05 run on an AMD Ryzen 7 3800X measured each row once over 700 timed calls of fannkuch-redux with n = 8, checksum-gated. V 0.5.1 built with -cc clang -prod (clang 22.1.8, -O3 -flto) took 0.875 s, against 1.036 s for C with gcc 16.0.1 -O2 prod (1.18x, derived from page data), 1.174 s for C with clang -O2 prod (1.34x) and 1.278 s for clang -O3 -march=native C (1.46x). The V/GCC build took 1.126 s, slower than C/Gcc.",
+  "status_note": "Active suite (MIT, 41 stars, 16 forks, 622 commits, monthly result files through 2026-10-05). The V file is small and copyable, but its lead over C is a clang code-generation artefact that has held over five runs without an explanation, so treat it as a toolchain snapshot.",
+  "sources_read": [
+    "https://github.com/kostya/LangArena",
+    "https://github.com/kostya/LangArena/tree/master/v",
+    "https://github.com/kostya/LangArena/commits/master/v",
+    "https://github.com/kostya/LangArena/issues?q=is%3Aissue+fannkuch+OR+vlang+OR+%22V%2FClang%22",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/README.md",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/LICENSE",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/run.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/xtime.rb",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/benchmarks.rb",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/docker-compose.yaml",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/build-docker.sh",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/docker/base",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/docker/base_clang",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/docker/base_gcc",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/docker/v_clang",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/docker/v_gcc",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/v/fannkuchredux.v",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/v/benchmark.v",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/v/base_benchmark.v",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/v/main.v",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/v/run",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/v/test",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/v/v.mod",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/c/src/fannkuchredux.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/c/src/benchmark.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/c/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/src/fannkuchredux.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/src/fannkuchredux.hpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/zig/src/fannkuchredux.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/results/2026-10-05-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/results/2026-09-18-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/vlang/v/0.5.1/doc/docs.md",
+    "https://raw.githubusercontent.com/vlang/v/0.5.1/vlib/v/builder/cc.v",
+    "https://raw.githubusercontent.com/vlang/v/0.5.1/vlib/v/gen/c/index.v",
+    "https://raw.githubusercontent.com/vlang/v/0.5.1/vlib/builtin/builtin.c.v"
+  ],
+  "confidence": 0.75
+}

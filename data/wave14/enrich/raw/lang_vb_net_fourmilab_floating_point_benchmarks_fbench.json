@@ -1,0 +1,54 @@
+{
+  "id": "lang:vb.net/fourmilab/floating_point_benchmarks#fbench",
+  "one_liner": "A 2005-era VB.NET port of John Walker's fbench ran in 0.866 of C's time, but its trig code differs from the C build's.",
+  "what_it_does": "fbench is John Walker's 1980 optical ray-tracing benchmark. It traces marginal and paraxial rays through a four-surface achromat with heavy use of sin, asin and tan, and prints focal lengths and aberrations to 11 decimals. src/visualbasic/vbnet is Jim White's July 2005 VB6 port run through the Visual Studio .NET upgrade wizard. It is a WinForms app: the user types an iteration count, clicks a button, and fbench_run times the loop with kernel32 GetTickCount and lists the results for manual comparison. It is a benchmark program, not a library, and this entry is about the CLR-JIT-compiled VB.NET run, not reusable code.",
+  "how_it_is_fast": "No mechanism is published, and the source points to different work rather than a better compiler. The timed loop in modFBENCH.vb takes the file's #Else branch (INTRIG is not defined there), so sines come from fSin. fSin is the benchmark's own range-reduced polynomial in fbench_lib.vb. Arcsines go through the internal rational aTan plus System.Math.Sqrt (that file sets #Const INTRIG = True), and only cotangents call the .NET library (1 / System.Math.Tan). Per iteration that is about 35 polynomial sines, 24 internal arcsines and 12 library tangents (derived from the code; all four lens surfaces are curved, so the flat-surface System.Math.Cos path never runs). The C reference row instead calls libm for all of them. The plausible reason for 0.866, inferred and not measured, is that this mix of cheap polynomials plus a library square root costs less than both C modes. C INTRIG also replaces tan and uses a Newton-Raphson square-root loop.",
+  "when_to_use": [
+    "As a historical data point: a straight VB6-to-VB.NET translation, JIT-compiled by an early CLR, landed in the same range as compiled C on a trig-heavy loop, and ahead of the VB6 native-code build of the same port (1.132).",
+    "As a cautionary example when reading cross-language tables: check which math library each port's hot loop actually calls before comparing ratios.",
+    "As a readable VB.NET reference of the fbench algorithm, for example to port it to modern .NET and rerun it against C on one machine."
+  ],
+  "when_not_to_use": [
+    "As evidence that the .NET JIT beats C on floating-point code: the two sides evaluate sine and arcsine differently, ran on different OSes, and the C build, CPU and date behind the 0.866 are not named.",
+    "For current .NET performance: the project is a Visual Studio .NET 7.0 file (ProductVersion 7.0.9955), which implies .NET Framework 1.x (inference), and it needs conversion before a modern SDK can build it.",
+    "Outside Windows: it is a System.Windows.Forms app that P/Invokes kernel32 GetTickCount and references Microsoft.VisualBasic.Compatibility.",
+    "When you need a permissive licence: the repository is CC BY-SA 4.0, which is share-alike and not an OSI software licence."
+  ],
+  "integration": {
+    "form": "source-drop (Visual Studio .NET WinForms project: modFBENCH.vb, fbench_lib.vb, fbench.vb)",
+    "dependencies": ".NET Framework with System.Windows.Forms and Microsoft.VisualBasic.Compatibility; kernel32 GetTickCount via Declare",
+    "min_toolchain": "Visual Studio .NET project format ProductVersion 7.0.9955 (Release config: Optimize=true, RemoveIntegerChecks=true); .NET Framework version not stated",
+    "platforms": "Windows only as written; the published row ran on Windows XP (CPU not named)",
+    "thread_safety": "not applicable; all state lives in module-level variables driven from the UI thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the number: the VB.NET loop computes sine with fSin and arcsine with the internal aTan2/aTan, with Math.Sqrt as the only library call, while the C reference row (src/c/Makefile 'gcc -Wall -O3 -lm', -DINTRIG commented out) uses libm for sin, asin and tan. The page's own Pentium 4 row shows the two C modes differ by 1.25x (0.00862 vs 0.01074 s per 1000 iterations), and the VB.NET mix matches neither mode, so 0.866 is not a same-work ratio.",
+    "Latent correctness bugs in the port's maths library (fbench_lib.vb, also in the VB6 original). LibInitialise, which fills the atanc arctangent table, is never called, so the table stays all zeros. The table also stores 0.982793723247329 in atanc(4) where its own comment says 1.1071487177940905. And aInt converts with VB's round-half-even Integer conversion instead of truncating. aTan therefore returns wrong values for any argument of 0.25 or more, which means any arcsine of an argument above about 0.2425. The fbench lens never reaches that range, so the published results are still correct, but any other lens or steeper ray would give wrong results without warning.",
+    "There is no automatic accuracy check. Unlike fbench.c, which compares its output with reference strings, the VB.NET app only lists the numbers, and fbench.html says such ports leave the comparison to the user.",
+    "The comparison crosses machines and toolchains. The C row is labelled 'GCC 3.2.3 -O3, Linux' while the VB.NET row ran on Windows XP. The page says each language was compared with C on the same machine, but it names neither the machine nor the C compiler used on Windows. Timing is GetTickCount, which is fine for the page's roughly five-minute runs."
+  ],
+  "pick_this_over_siblings_when": "Do not pick it as evidence. Like the JavaScript fbench sibling (Firefox's trig memo cache) and the xemantic Java Math.sin-versus-libm sibling, the win comes from different math work rather than better code generation. For current .NET JIT-versus-C++ evidence with the same algorithm on both sides, use the LangArena C# rows (Distance::NGram, Graph::AStar) or the benchLANG .NET binary-trees entry.",
+  "verified_claims_summary": "fbench.html's language table gives Visual Basic .NET ('All optimisations, Windows XP') a relative time of 0.866 against C = 1 (labelled GCC 3.2.3 -O3, Linux), about 1.15x faster (derived from page data). VB6 on the same OS is 1.132. Each language was run for about five minutes and divided by the C time per iteration on the same, unnamed, machine, and no CPU, .NET version or date is given beyond the port's July 2005 header.",
+  "status_note": "Abandoned (last commit 2021-09-24, page last updated the same day) and CC BY-SA 4.0. The VB.NET project is a 2002/2003-era WinForms upgrade-wizard conversion, so this is a reference data point only, with nothing to adopt.",
+  "sources_read": [
+    "https://github.com/Fourmilab/floating_point_benchmarks/commits/master",
+    "https://github.com/Fourmilab/floating_point_benchmarks/tree/master/src/visualbasic",
+    "https://github.com/Fourmilab/floating_point_benchmarks/tree/master/src/visualbasic/vb6",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/master/README.md",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/master/LICENSE.md",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/master/Web_pages/fbench.html",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/master/src/c/Makefile",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/master/src/c/fbench.c",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/master/src/visualbasic/vbnet/fbench.vbproj",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/master/src/visualbasic/vbnet/fbench.log",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/master/src/visualbasic/vbnet/modFBENCH.vb",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/master/src/visualbasic/vbnet/fbench_lib.vb",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/master/src/visualbasic/vbnet/fbench.vb",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/master/src/visualbasic/vb6/fbench.vbp",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/master/src/visualbasic/vb6/fbench.bas",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/master/src/visualbasic/vb6/fbench_lib.bas",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/master/src/visualbasic/vb6/fbench.frm"
+  ],
+  "confidence": 0.7
+}

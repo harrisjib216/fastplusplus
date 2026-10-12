@@ -1,0 +1,63 @@
+{
+  "id": "lang:zig/kostya/langarena#distance-ngram",
+  "one_liner": "Zig std.AutoHashMap counting 4-grams; 1.58x faster than the best C/C++ build (libstdc++ std::unordered_map) in LangArena Distance::NGram.",
+  "what_it_does": "A LangArena task, not a library. There are 10 fixed string pairs over the letters a-j, 1,382 to 19,121 characters each (213,051 characters in all, from my replay of the generator). For each pair, every 4-byte window is packed into a u32, the first string's grams are counted in one std.AutoHashMap(u32, u32) and the second's in another while the overlap is counted, and the score is intersection / (distinct1 + distinct2) times 1000, floored. The Zig side is NGram.ngramCalc in zig/src/distance.zig, about 55 lines, unchanged since its first commit on 2026-02-27. Nothing here links into C++; the takeaway for C++ users is which container lost.",
+  "how_it_is_fast": "The gap is the hash table. Zig's std.HashMap uses open addressing with linear probing: one metadata byte per slot (a 7-bit fingerprint and a used bit) checked before any key comparison, keys and values in flat arrays from one allocation, power-of-two capacity at a default 80% maximum load, and a Wyhash of the key bytes for AutoContext (hash_map.zig, last GitHub copy). ensureTotalCapacity(len) sizes each table from the string length, never from the distinct-gram count. The largest strings get 32,768 slots for at most 8,647 distinct keys (26% load), and the worst case is 63% (1,292 keys in 2,048 slots for the 1,382-character string), per my replay. There is no rehash during the loop and only two table allocations per call. libstdc++'s std::unordered_map<uint32_t,int> allocates one heap node per distinct key and maps a hash to a bucket with a modulo (_Mod_range_hashing returns __num % __den). That is 122,691 node allocations and frees per iteration in my replay, about 12.3 million in the timed loop. Zig wins even though it hashes every key with Wyhash while C++ uses the identity hash, which points at allocation and pointer chasing rather than hashing (inference). Safety checks cost 60%: ReleaseFast (Zig/Unchecked) runs the same code in 0.325 s against 0.52 s for ReleaseSafe.",
+  "when_to_use": [
+    "Zig code that builds many short-lived maps keyed by small integers, with the size known up front so ensureTotalCapacity avoids rehashing.",
+    "As a data point when arguing to replace std::unordered_map<uint32_t,...> in a C++ counting loop with an open-addressing table: same algorithm and same pre-reserve, 1.58x from the container and language together.",
+    "Memory-tight counting: Zig peaked at 3.4 MB RSS against 6.6-7.1 MB for the C++ rows (excluding instrumented PGO builds) and about 4 MB for C with uthash.",
+    "When ReleaseSafe's bounds and overflow checks must stay on: the safe build still beat every one of the 16 C/C++ configurations, including -O3 -march=native and PGO."
+  ],
+  "when_not_to_use": [
+    "Inside a C++ codebase: you cannot link this. Swap the container instead; absl::flat_hash_map or boost::unordered_flat_map would be the C++ analogue, but the suite never measured one, so the expected gain is an inference.",
+    "Large or cache-hostile key sets: 10 letters give only 10,000 possible 4-grams, so each table stays in cache, and behaviour with millions of keys is not tested here.",
+    "Delete-heavy workloads: std.HashMap deletes with tombstones, and its own doc comment warns that a map can become fragmented over time until it is rehashed.",
+    "Concurrent updates: std.HashMap is not synchronized, and the benchmark is single-threaded.",
+    "When raw speed matters more than safety checks: ReleaseFast reaches 0.325 s, and Rust's MaxPerf/Unsafe build reaches 0.382 s."
+  ],
+  "integration": {
+    "form": "source-drop (Zig standard library only)",
+    "dependencies": "none (std.AutoHashMap; the benchmark executable links libc)",
+    "min_toolchain": "Zig 0.17.0 as measured; the same source ran on Zig 0.16.0 in the August and September runs (0.567-0.575 s)",
+    "platforms": "any Zig target; measured on x86-64 Linux (AMD Ryzen 7 3800X), and build.zig's standardTargetOptions with no -Dcpu presumably builds for the host CPU",
+    "thread_safety": "not documented for this code; std.HashMap has no locking (its SafetyLock only guards pointer stability in safe builds), and each call builds and frees its own two maps",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Small, cache-resident workload: no map ever holds more than 8,647 keys, and every run computes the same per-run score of 3,312. My Python replay reproduces run.js's checksum 397440 as 120 runs (20 warm-up plus 100 timed), so all languages do the same work. It is not a large-key hash-map test.",
+    "Part of the latest lead comes from the toolchain and host, not the code. Zig went from 0.567-0.575 s on Zig 0.16.0 (2026-08-14 to 2026-09-18) to 0.52 s on Zig 0.17.0 on 2026-10-05 with unchanged source, and that run also moved the host from Ubuntu to Arch Linux. The best C++ row moved between 0.805 and 0.848 s over the same runs, so the ratio drifted from 1.41x to 1.58x.",
+    "In safe builds, getOrPut and ensureTotalCapacity lock and unlock a pointer-stability SafetyLock (hash_map.zig, last GitHub copy, which may differ from Zig 0.17.0), and every s1[i + 3] access is bounds-checked. That is part of the 0.52 s against 0.325 s gap between ReleaseSafe and ReleaseFast. The allocator is init.gpa from Zig's 'juicy main', and which implementation backs it in release builds is not documented in the sources reachable here; with two allocations per call it hardly matters.",
+    "Harness check, no flaw found: the Zig, C and C++ harnesses reset the LCG, warm up for 20% of the iterations, reset again and time the loop with a monotonic clock, and the checksum is verified. The C++ loop bound s1.size() - 4 would underflow for strings shorter than 4 characters, which the generator never produces; Zig returns 0.0 early. Each configuration is measured once, with no variance figure."
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued Distance::NGram rows, Zig ReleaseSafe (0.52 s, 3.4 MB) is level with C#/JIT (0.516 s, 40.6 MB) and ahead of Rust (0.533 s, 4.3 MB) and Go (0.603 s, 12.0 MB). Pick it when you want explicit allocators and the smallest footprint; its ReleaseFast build (0.325 s) is the fastest row in the suite. For string-keyed counting, see the Zig Etc::Words sibling.",
+  "verified_claims_summary": "In LangArena's 2026-10-05 run on an AMD Ryzen 7 3800X (Linux), Zig 0.17.0 in ReleaseSafe took 0.52 s for 100 iterations. The best of the 16 C/C++ configurations, C++/Clang++/PGO (Clang 22.1.8 with libstdc++ std::unordered_map), took 0.822 s. C++/G++ at -O2 (GCC 16.0.1 snapshot) took 0.863 s and C/Clang with uthash took 1.811 s. Zig was about 1.58x faster than the best C/C++ row (derived from page data), and it led by 1.41-1.50x in the three earlier monthly runs on Zig 0.16.0.",
+  "status_note": "The MIT-licensed suite is active (41 stars, monthly reruns, last commit 2026-10-08 per the verifier), and the Zig NGram code has not changed since 2026-02-27. The routine is short and copyable, but the result says more about std::unordered_map than about Zig code generation, since Rust, C#, Go, Julia and others also beat every C++ row.",
+  "sources_read": [
+    "https://github.com/kostya/LangArena/commits/master/zig/src/distance.zig",
+    "https://github.com/kostya/LangArena/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/src/distance.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/distance.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/distance.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/build.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/src/main.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/src/benchmark.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/src/helper.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/benchmark.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/benchmark.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/run.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-09-18-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-09-03-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-08-14-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/ziglang/zig/master/lib/std/hash_map.zig",
+    "https://raw.githubusercontent.com/ziglang/zig/master/lib/std/start.zig",
+    "https://raw.githubusercontent.com/ziglang/zig/master/lib/std/process.zig",
+    "https://raw.githubusercontent.com/ziglang/zig/master/README.md",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/master/libstdc++-v3/include/bits/hashtable_policy.h"
+  ],
+  "confidence": 0.75
+}

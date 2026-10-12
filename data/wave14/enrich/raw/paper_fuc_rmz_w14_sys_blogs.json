@@ -1,0 +1,67 @@
+{
+  "id": "paper:fuc-rmz-w14-sys-blogs",
+  "one_liner": "Parallel Rust rm for Linux trees: about 1.8-4x faster than GNU rm -r on nested trees, parity on flat ones.",
+  "what_it_does": "rmz deletes files and directory trees (recursion is implicit): `rmz PATH...`, with only -f (ignore missing operands) and --no-preserve-root. It is not option-compatible with coreutils rm: there is no -i/-I, no --one-file-system, no -v, and it never prompts. Symlink operands are removed, not followed. The engine is the fuc_engine crate (RemoveOp builder), whose README says it is 'not currently designed' for library use.",
+  "how_it_is_fast": "On Linux each directory is a task on an unbounded crossbeam channel; a root worker plus lazily spawned workers (up to available_parallelism) read entries with raw getdents64 into a 16 MiB mmap'd NORESERVE buffer per thread, unlink non-directories at once with unlinkat relative to the directory fd using d_type (no stat; EISDIR redirects unknown types), and send subdirectories on as new tasks that hold an Arc to their parent. Whoever finishes a parent's last child rmdirs the empty chain bottom-up, so no second pass is needed. Each thread unshares its file-descriptor table and filesystem context (unshare CLONE_FILES|CLONE_FS), which the author says speeds up directory processing (issue #34). The gain is parallelism, not Rust codegen: single-threaded std::fs::remove_dir_all (rm_stdlib) matches GNU rm (9.345 s vs 9.491 s at 1M files), and the scheduler puts rmz 12-41% ahead of a plain rayon version on nested trees (rm_rayon still wins the 10-file 1 GiB row, 15.9 vs 17.3 ms, and the flat 1 GiB row).",
+  "when_to_use": [
+    "Deleting deep, nested trees of many files on a local Linux filesystem (node_modules, build directories, CI workspaces, test fixtures): 1.8-4x faster than rm -r in the author's tables (4.711 s vs 9.491 s for 1M empty files).",
+    "Trees whose files carry data: the gap widens when extents must be freed (1M files totalling 1 GiB: 6.559 s vs 23.354 s, 3.56x).",
+    "Machines with idle cores where wall-clock time matters more than total CPU.",
+    "Scripts that delete trees you own and control, where rm's prompts and safety options are not needed."
+  ],
+  "when_not_to_use": [
+    "One huge flat directory: work is split per directory, so a single directory is emptied by one thread (flat 100,000-file row: user+system 801.1 ms for 830.7 ms wall, derived from page data), giving parity with rm -r (830.7 vs 847.1 ms at 0 B; 1.115 vs 1.129 s at 1 GiB).",
+    "As root on trees that untrusted users can write to, or anywhere rm's guard rails matter: there is no interactive mode, no write-protected-file prompt, no --one-file-system, and the preserve-root check can be bypassed (see gotchas).",
+    "Directories that other processes keep writing into: the ENOTEMPTY retry loop is now unbounded (commit 2d4687f removed the 4,096-attempt cap that 5722542 had added to stop a file-creating process from causing an endless loop).",
+    "Busy or shared machines: at 1M files rmz used 19.19 s user+system against 9.23 s for rm -r (derived from page data).",
+    "Docker containers with the default seccomp profile, which blocks unshare: rmz fails with 'failed to unshare' unless the undocumented NO_UNSHARE environment variable is set (issue #34)."
+  ],
+  "integration": {
+    "form": "CLI binary (rmz crate, prebuilt release binaries, distro packages); engine is the fuc_engine crate",
+    "dependencies": "fuc_engine (crossbeam-channel, bon, thiserror; rustix on Linux, rayon on other Unix, remove_dir_all on Windows), clap, error-stack; optional tracing/indicatif for the progress feature",
+    "min_toolchain": "Published crates declare rust_version 1.88 (rmz 3.2.1); building the git master needs nightly because fuc_engine uses #![feature(lazy_cell_into_inner)] on Linux (issue #51, 'you just can't install from source on stable'; releases are patched to polyfill it)",
+    "platforms": "Linux is the target (getdents64, unlinkat, unshare); other Unix systems use a rayon fallback equivalent to the benchmarked rm_rayon, and Windows uses the remove_dir_all crate's parallel mode",
+    "thread_safety": "Not applicable for the CLI; fuc_engine spawns its own worker threads per operation and is not documented for concurrent library use",
+    "drop_in_for_baseline": "partial: `rmz PATH...` behaves like `rm -rf` without the prompts for write-protected files, but -f only ignores missing operands, and there is no -i/-I/-d/-v/--one-file-system/--preserve-root=all"
+  },
+  "gotchas": [
+    "Preserve-root is only a path-equality test (`file == Path::new(\"/\")` in schedule_deletions), so an operand such as '/..' or '/usr/..' passes the check and is deleted recursively. GNU rm refuses any operand whose last component is '.' or '..' and compares the operand's device and inode with those of / (coreutils src/remove.c). Found by code reading; not reported in the issue tracker.",
+    "Symlink race: Linux workers reopen every queued directory by its full path (openat(CWD, path, O_NOFOLLOW|O_DIRECTORY)) and rmdir it by path, and O_NOFOLLOW guards only the last component. A user who can write inside the tree could swap an intermediate directory for a symlink mid-run and redirect deletion outside it, the TOCTOU class of CVE-2022-21658 that Rust 1.58.1 fixed in the std::fs::remove_dir_all used by the rm_stdlib comparison. GNU rm walks with fts FTS_CWDFD. Found by code reading.",
+    "Benchmark staleness and setup: the tables are from March 2023 and predate the 2026 changes (the getdents buffer grew from 8 KiB to 16 MiB in 1095d9d, and an ENOTEMPTY retry loop was added). Each timed run deletes a tree that ftzz regenerated just before it with no sync, on one SATA XFS partition with a warm cache.",
+    "With NO_UNSHARE set (the Docker workaround) the threads share one working directory, and the fallback for paths of 4,096 bytes or more calls set_current_dir while other threads still resolve CWD-relative paths. A relative operand could then resolve against the wrong directory (code reading; no report)."
+  ],
+  "pick_this_over_siblings_when": "Pick rmz for deleting nested trees on Linux; cpz is the copy counterpart on the same engine, and dumac and cligen/dents only walk trees (du, find, ls). Prefer plain rm -r for flat directories, where rmz gains nothing.",
+  "verified_claims_summary": "These are first-party hyperfine runs from March 2023 (--warmup 3, tree regenerated by ftzz before every run) on an Intel i7-7700 with 15 GiB RAM, a RHEL 9 5.14 kernel and /tmp on XFS over SATA. rmz deleted 1M empty files in 4.711 s against 9.491 s for the distro GNU rm -r (2.01x) and 1M files totalling 1 GiB in 6.559 s against 23.354 s (3.56x). Single-threaded Rust std::fs::remove_dir_all matched rm -r, and a flat 100,000-file directory showed parity (830.7 vs 847.1 ms).",
+  "status_note": "The project is actively maintained (rmz 3.2.1 on crates.io 2026-10-04, Apache-2.0, about 214k downloads) and fine for deleting build or scratch trees you own, but the 2023 numbers predate the 2026 deletion rewrite, and the code has unhardened safety edges found by code reading (preserve-root bypass via '/..', path-based reopen open to symlink swaps, unbounded ENOTEMPTY retries), so do not alias it to rm or run it as root on untrusted trees.",
+  "sources_read": [
+    "https://github.com/SUPERCILEX/fuc",
+    "https://github.com/SUPERCILEX/fuc/commits/master",
+    "https://github.com/SUPERCILEX/fuc/issues?q=is%3Aissue",
+    "https://github.com/SUPERCILEX/fuc/issues?page=2&q=is%3Aissue",
+    "https://github.com/SUPERCILEX/fuc/issues/51",
+    "https://github.com/SUPERCILEX/fuc/issues/34",
+    "https://github.com/SUPERCILEX/fuc/commit/1095d9d",
+    "https://github.com/SUPERCILEX/fuc/commit/5722542",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/README.md",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/comparisons/README.md",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/Cargo.toml",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/rust-toolchain",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/fuc_engine/Cargo.toml",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/fuc_engine/README.md",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/fuc_engine/src/lib.rs",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/fuc_engine/src/ops/mod.rs",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/fuc_engine/src/ops/remove.rs",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/rmz/README.md",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/rmz/src/main.rs",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/comparisons/rm_stdlib/src/main.rs",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/comparisons/rm_rayon/src/lib.rs",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/comparisons/rm_rayon/src/main.rs",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/comparisons/rm_remove_dir_all/src/main.rs",
+    "https://crates.io/api/v1/crates/rmz",
+    "https://raw.githubusercontent.com/coreutils/coreutils/master/src/remove.c",
+    "https://raw.githubusercontent.com/coreutils/coreutils/master/src/rm.c",
+    "https://raw.githubusercontent.com/coreutils/coreutils/master/doc/coreutils.texi",
+    "https://blog.rust-lang.org/2022/01/20/cve-2022-21658/ (WebSearch result snippet only)"
+  ],
+  "confidence": 0.85
+}

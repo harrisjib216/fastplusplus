@@ -1,0 +1,72 @@
+{
+  "id": "lang:zig/kostya/langarena#csv-parse",
+  "one_liner": "Zig csv-zero field iterator plus std.fmt.parseFloat in LangArena CSV::Parse; 2.3x faster than the best C/C++ row, mostly from float conversion.",
+  "what_it_does": "A LangArena task, not a library: build a 100,000-row CSV once (7.53 MB, 75.3 bytes per row, every float written as '0.' plus 10 digits), then on each iteration walk it with csv-zero's Iterator over a fixed std.Io.Reader, convert fields 1, 3 and 5 with std.fmt.parseFloat, append the points to an ArrayList and average them. The Zig code is about 150 lines in zig/src/csv_parse.zig; the C side is a hand-written byte loop with strtod and the C++ side uses lazycsv with std::stod. The reusable parts are csv-zero (its own catalogue entry) and Zig's standard float parser, not this file.",
+  "how_it_is_fast": "The suite gives no reason, but its history isolates one. Before commit 4b17587 'unify csv bench' (2026-09-09) the Zig test had no csv-zero: it split the buffer with std.mem.splitScalar on '\\n' and ran a scalar per-byte loop that toggled an in_quotes flag, which is the same kind of scan as the current C loop, plus the same std.fmt.parseFloat. That version already ran in 1.03 s (2026-08-14) and 1.028 s (2026-09-03) against 2.28-2.43 s for the C and C++ prod rows. The csv-zero version took 1.119 s on 2026-09-18 with the same Zig 0.16.0, so the SIMD scanner is not where the lead comes from. What both Zig versions share is the float parser. Zig's parseFloat tries convertFast (Clinger's fast path) before Eisel-Lemire. For f64 that path accepts mantissas up to 2^53 and decimal exponents from -22 to 22 (FloatInfo.zig in the last GitHub copy of the Zig tree, which has since moved to Codeberg), so every field here (mantissa below 10^10, exponent -10) is one integer-to-float conversion and one exact division. The C and C++ rows call glibc strtod 300,000 times per iteration, C++ through std::stod on a std::string copy of each cell. fast_float's README measures strtod at 9.10 Mfloat/s (about 110 ns per value) on random [0,1) doubles. At that rate the 21 million timed calls would cost about 2.3 s, the order of the whole C runtime (my estimate: different machine and digit count, not measured here).",
+  "when_to_use": [
+    "Zig programs reading large numeric CSV: here csv-zero plus parseFloat reached about 540 MB/s in ReleaseSafe and about 900 MB/s in ReleaseFast on one Ryzen 7 3800X core (7.53 MB per iteration at 13.9 ms and 8.4 ms, derived from page data).",
+    "As evidence when profiling a C or C++ text-to-number pipeline: if strtod or std::stod dominates, replace the float conversion before the tokenizer. libstdc++'s std::from_chars for double is built on fast_float when float and double are IEEE binary32/binary64 (src/c++17/floating_from_chars.cc, USE_LIB_FAST_FLOAT); fast_float itself is another option.",
+    "Well-formed RFC 4180 input with short decimal fields that fit Clinger's fast path (for f64, a mantissa up to 2^53 and a decimal exponent within plus or minus 22), where zero-copy field slices avoid per-field allocation.",
+    "Single-threaded batch parsing of in-memory buffers; peak RSS was 13.1 MB, the same as the C rows (12.7-15.0 MB) and below C++ lazycsv (19.9-21.6 MB)."
+  ],
+  "when_not_to_use": [
+    "Inside a C or C++ codebase: none of this links in directly. csv-zero can be built as a C library (per its catalogue entry), but the float-conversion win comes from Zig's std.fmt.parseFloat, which you would replace with std::from_chars or fast_float.",
+    "Untrusted or malformed CSV: the csv-zero entry documents a strict-mode hole in which a stray quote inside an unquoted field silently mis-splits fields instead of returning InvalidQuotes. This benchmark also maps any parseFloat error to 0.0 (catch 0.0).",
+    "Inputs that leave the fast path (17-digit values, large exponents, many-digit mantissas): parseFloat falls back to Eisel-Lemire or a slow path, and the suite does not measure how much of the lead survives.",
+    "When you want the fastest row: Rust with simd-csv (0.881 s) beats Zig's ReleaseSafe build (0.974 s) in the same run, and Zig/Unchecked (ReleaseFast) at 0.585 s gives up the runtime safety checks.",
+    "Multi-line quoted fields, CRLF input or ragged rows: the generator writes a literal backslash-n, LF endings and exactly six fields per row, so none of these cases are exercised."
+  ],
+  "integration": {
+    "form": "source-drop (benchmark file) using the csv-zero module, fetched by zig build --fetch from build.zig.zon",
+    "dependencies": "csv-zero 0.2.0 pinned at commit a687d508 (zig/build.zig.zon); Zig standard library; the executable also links libc and pcre2-8 for other tests",
+    "min_toolchain": "Zig 0.17.0 as measured (Zig 0.16.0 in the September runs); the code uses the 0.16+ std.Io.Reader and std.process.Init APIs",
+    "platforms": "Measured on x86-64 Linux (AMD Ryzen 7 3800X). build.zig uses standardTargetOptions with no -Dcpu, so the build presumably targets the host CPU; csv-zero picks its SIMD width at compile time from the target and has a scalar fallback",
+    "thread_safety": "Not documented; the iterator mutates its reader and cached bitmask, and the benchmark is single-threaded",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Correction to the record: the 2026-08-14 and 2026-09-03 leads (2.24x and 2.18x) were measured before commit 4b17587, with a hand-written Zig splitter instead of csv-zero, a different C parser (per-line parse_csv_line) and a checksum of 194814688. The current test's checksum, 1071523081, also hashes the CSV text. My Python replay of the generator reproduces both checksums as 84 runs (14 warm-up plus 70 timed) over identical data, so the workload did not change, but only the 2026-09-18 and 2026-10-05 runs measure csv-zero. Those older runs support the float-parsing explanation rather than the SIMD-library one.",
+    "C++ baseline bug hidden by the checksum: lazycsv's row.cells(1, 3, 5) returns [x, z, y], but cpp/src/csv_parse.cpp assigns z = cells[2] (column 5) and y = cells[1] (column 3). The checksum adds the three averages, so the swap goes undetected; timing is unaffected.",
+    "The C++ and C baselines are weak choices rather than broken ones. std::stod copies each trimmed cell into a std::string (short enough for SSO) and calls strtod, while the C loop copies each field into a 64-byte stack buffer for strtod. Neither uses std::from_chars or fast_float. The -O3 -march=native C/C++ rows (2.378-2.645 s) and the PGO rows (2.443-2.592 s) are no faster than -O2, which is consistent with time spent inside libc rather than in compiled loops (inference).",
+    "Harness check, no timing flaw found: the Zig, C and C++ harnesses all reset the LCG, run 20% of the iterations as warm-up, reset again and time the loop with a monotonic clock (std.Io.Clock .awake, clock_gettime CLOCK_MONOTONIC, std::chrono::steady_clock). There is one measurement per configuration and no variance figure, and ReleaseSafe safety checks cost Zig 66% here (0.974 s against 0.585 s for ReleaseFast)."
+  ],
+  "pick_this_over_siblings_when": "For the parser itself, use the csv-zero entry, whose csv-race harness isolates field splitting against zsv and lazycsv. This row only shows that in a real numeric-CSV job the float conversion, not the splitter, decided the outcome. Among the LangArena text rows it is the one where the gap traces to a standard-library routine (strtod) rather than a container, unlike the Distance::NGram and Etc::Words siblings.",
+  "verified_claims_summary": "In LangArena's 2026-10-05 run on an AMD Ryzen 7 3800X (Linux), Zig 0.17.0 in ReleaseSafe parsed a 7.53 MB, 100,000-row CSV 70 times in 0.974 s using csv-zero and std.fmt.parseFloat. The best C/C++ row, C/Clang 22.1.8 at -O2 (a hand-written byte loop with glibc strtod), took 2.223 s, and C++/Clang++ with lazycsv, std::stod and libstdc++ took 2.348 s, so Zig was about 2.3x faster (derived from page data). Every one of the 16 GCC 16 and Clang C/C++ configurations was at least 2.2x slower.",
+  "status_note": "The MIT-licensed suite is active (41 stars, monthly reruns, last commit 2026-10-08 per the verifier), and this test was rewritten on 2026-09-09. The Zig file is copyable but is a measurement, not a component. Its csv-zero dependency is young, single-author and pinned to a commit, and its strict-validation hole is still open per the csv-zero entry.",
+  "sources_read": [
+    "https://github.com/kostya/LangArena/commits/master/zig/src/csv_parse.zig",
+    "https://github.com/kostya/LangArena/commit/4b17587",
+    "https://github.com/kostya/LangArena/issues?q=is%3Aissue",
+    "https://github.com/kostya/LangArena/issues/3",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/src/csv_parse.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/1d5f7f6/zig/src/csv_parse.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/1d5f7f6/run.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/csv.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/csv_parse.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/csv_parse.hpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/rust/src/benchmarks/csv_parse.rs",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/build.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/build.zig.zon",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/src/main.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/src/benchmark.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/src/helper.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/benchmark.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/benchmark.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/run.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-09-18-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-09-03-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-08-14-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-zero/a687d508e57b1cd62dc1efa7d90f268055e1ca46/src/iterator.zig",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-zero/a687d508e57b1cd62dc1efa7d90f268055e1ca46/README.md",
+    "https://raw.githubusercontent.com/ziglang/zig/master/lib/std/fmt/parse_float.zig",
+    "https://raw.githubusercontent.com/fastfloat/fast_float/main/README.md",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/master/libstdc++-v3/src/c++17/floating_from_chars.cc",
+    "https://raw.githubusercontent.com/ziglang/zig/master/lib/std/fmt/parse_float/convert_fast.zig",
+    "https://raw.githubusercontent.com/ziglang/zig/master/lib/std/fmt/parse_float/FloatInfo.zig"
+  ],
+  "confidence": 0.7
+}

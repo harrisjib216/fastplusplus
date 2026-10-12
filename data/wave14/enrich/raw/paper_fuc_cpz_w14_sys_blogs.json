@@ -1,0 +1,69 @@
+{
+  "id": "paper:fuc-cpz-w14-sys-blogs",
+  "one_liner": "Parallel Rust cp for Linux directory trees; about 3.4-4.8x faster than GNU cp -r on nested small-file trees.",
+  "what_it_does": "cpz copies files and directory trees (recursion is implicit): `cpz SRC... DST`, with only -f (overwrite/merge), -t (destination first), -L (dereference) and -l (hard links instead of copies). It is deliberately not option-compatible with coreutils cp: there is no -p/-a, so timestamps, ownership, xattrs and ACLs are not copied; files and directories get the source mode bits. The scheduling engine is published as the fuc_engine crate (CopyOp builder), but its README says it is 'not currently designed' for library use.",
+  "how_it_is_fast": "On Linux each directory is a task on an unbounded crossbeam channel; a root worker plus lazily spawned workers (up to available_parallelism) read entries with raw getdents64 (rustix RawDir, 32 KiB stack buffer), use d_type to skip stat calls, create entries with fd-relative openat/mkdirat, and move file data with copy_file_range. Each worker thread unshares its file-descriptor table (unshare CLONE_FILES), which the author says speeds up directory processing (issue #34). The gain is parallelism, not Rust codegen: the single-threaded Rust cp_stdlib in the same tables is as slow as GNU cp (19.496 s vs 18.436 s at 1M files), and its scheduler puts cpz 15-30% ahead of a plain rayon version on most nested trees (cp_rayon wins at 5 files per directory with 1 GiB: 0.733 s vs 0.775 s).",
+  "when_to_use": [
+    "Duplicating nested trees of many small files on a local Linux filesystem (10,000 to 1M files): 3.4-4.8x faster than cp -r in the author's tables (for example 0.379 s vs 1.632 s for 100,000 empty files).",
+    "Scratch, build-output, test-fixture or dataset copies where mode bits are enough and timestamps, ownership and xattrs need not be preserved.",
+    "Machines with idle cores: the wall-clock win comes from running up to available_parallelism threads, at the cost of more total CPU.",
+    "Building hard-link farms of a tree with -l (supported since May 2025, issue #46)."
+  ],
+  "when_not_to_use": [
+    "One huge flat directory: work is split per directory, so a single directory is copied by one thread (flat 100,000-file row: user+system 1.338 s for 1.365 s wall, derived from page data); there cpz is only 1.19x faster than cp -r and loses to the Rust xcp (1.133 s vs 1.365 s at 0 B; 1.209 s vs 2.080 s at 1 GiB).",
+    "Backups or migrations that need cp -a/-p semantics: no timestamps, ownership, xattrs or ACLs, and sparse files are not handled (issue #37 open since 2024; the maintainer will not implement it himself but would accept a PR).",
+    "Trees with read-only directories copied as a non-root user: the destination directory is created with the source mode before its contents, so writing into it fails; the author's own commit message (11d5469) says a final chmod would be needed 'but whatever'.",
+    "Docker containers with the default seccomp profile, which blocks unshare: cpz fails with 'failed to unshare' unless the undocumented NO_UNSHARE environment variable is set (issue #34).",
+    "Shared or busy machines and network mounts: at 1M files cpz used 26.48 s user+system against 18.10 s for cp -r (derived from page data), and a copy to an sshfs mount never finished (issue #26, closed for inactivity without a fix)."
+  ],
+  "integration": {
+    "form": "CLI binary (cpz crate, prebuilt release binaries, distro packages); engine is the fuc_engine crate",
+    "dependencies": "fuc_engine (crossbeam-channel, bon, thiserror; rustix on Linux, rayon on other platforms), clap, error-stack; optional tracing/indicatif for the progress feature",
+    "min_toolchain": "Published crates declare rust_version 1.88 (cpz 3.2.1); building the git master needs nightly because fuc_engine uses #![feature(lazy_cell_into_inner)] on Linux (issue #51; the maintainer patches releases to polyfill it, RUSTC_BOOTSTRAP=1 also works)",
+    "platforms": "Linux is the target (statx, getdents64, copy_file_range, unshare); macOS and Windows use a rayon fallback equivalent to the benchmarked cp_rayon",
+    "thread_safety": "Not applicable for the CLI; fuc_engine spawns its own worker threads per operation and is not documented for concurrent library use",
+    "drop_in_for_baseline": "partial: same `SRC... DST` shape as cp -r, but `cpz src existing_dir` fails with AlreadyExists (or merges into existing_dir with -f) instead of creating existing_dir/src unless DST ends in '/', missing parent directories are created silently, and no other cp options exist"
+  },
+  "gotchas": [
+    "Harness: the '1 GiB' rows do not measure data copying. In the 10-file 1 GiB row cpz takes 1.3 ms and cp -r 1.9 ms while the tar pipe needs 304.3 ms and rsync 1042.4 ms, so on this XFS cp, cpz and the Rust tools cloned extents rather than copying bytes (derived from page data). Every table is therefore a warm-cache metadata benchmark on one SATA partition with no sync, and says nothing about byte-copy throughput on ext4, across devices or over the network.",
+    "Mode bits: prep_regular_file passes the full source st_mode, including set-user-ID and set-group-ID bits, to openat(O_CREAT), and directories get their source mode via mkdirat. The GNU cp manual says new files are created with the source mode minus the set-user-ID, set-group-ID and sticky bits unless attributes are preserved. Issue #52, a private report about 'preserving privileged mode bits', was closed on 2026-06-21 with links only to two directory-mode commits (from code reading; avoid running cpz as root on untrusted trees).",
+    "Only EXDEV from copy_file_range triggers the read/write fallback. Any other error aborts the copy; an earlier EINVAL on a 4.14 kernel needed a length fix (issue #31). Holes in sparse files are not preserved.",
+    "Destination semantics differ from cp: without a trailing slash DST is the copy itself, so an existing DST is an error unless -f, and -f merges the source's contents into it."
+  ],
+  "pick_this_over_siblings_when": "Pick cpz when the job is duplicating a nested small-file tree on Linux; rmz is the deletion counterpart built on the same engine, and dumac and cligen/dents only walk trees (du, find, ls) rather than copy them.",
+  "verified_claims_summary": "These are first-party hyperfine runs from March 2023 (--warmup 3, warm page cache) on an Intel i7-7700 with 15 GiB RAM, a RHEL 9 5.14 kernel and /tmp on XFS over SATA. Copying ftzz-generated trees, cpz took 5.076 s against 18.436 s for the distro GNU cp -r with 1M empty files (3.63x), 7.593 s against 28.173 s with 1M files totalling 1 GiB (3.71x) and 0.379 s against 1.632 s with 100,000 empty files (4.30x). The single-threaded Rust cp_stdlib matched cp -r, and in a flat directory cpz led cp -r by only 1.19x and trailed xcp.",
+  "status_note": "The project is actively maintained (cpz 3.2.1 on crates.io 2026-10-04, Apache-2.0, about 28.6k downloads) and usable from releases or crates.io, but the benchmark tables date from March 2023 and their 1 GiB rows measure extent cloning on reflink XFS rather than byte copying (derived from page data), so read the 3.4-4.8x as a warm-cache small-file metadata result.",
+  "sources_read": [
+    "https://github.com/SUPERCILEX/fuc",
+    "https://github.com/SUPERCILEX/fuc/commits/master",
+    "https://github.com/SUPERCILEX/fuc/issues?q=is%3Aissue",
+    "https://github.com/SUPERCILEX/fuc/issues?page=2&q=is%3Aissue",
+    "https://github.com/SUPERCILEX/fuc/issues/52",
+    "https://github.com/SUPERCILEX/fuc/issues/51",
+    "https://github.com/SUPERCILEX/fuc/issues/37",
+    "https://github.com/SUPERCILEX/fuc/issues/31",
+    "https://github.com/SUPERCILEX/fuc/issues/34",
+    "https://github.com/SUPERCILEX/fuc/issues/26",
+    "https://github.com/SUPERCILEX/fuc/commit/11d5469",
+    "https://github.com/SUPERCILEX/fuc/commit/bb571ec",
+    "https://github.com/SUPERCILEX/fuc/commit/1095d9d",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/README.md",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/comparisons/README.md",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/Cargo.toml",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/rust-toolchain",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/fuc_engine/Cargo.toml",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/fuc_engine/README.md",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/fuc_engine/src/lib.rs",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/fuc_engine/src/ops/mod.rs",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/fuc_engine/src/ops/copy.rs",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/cpz/README.md",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/cpz/Cargo.toml",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/cpz/src/main.rs",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/comparisons/cp_stdlib/src/lib.rs",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/comparisons/cp_stdlib/src/main.rs",
+    "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/comparisons/cp_rayon/src/lib.rs",
+    "https://crates.io/api/v1/crates/cpz",
+    "https://raw.githubusercontent.com/coreutils/coreutils/master/doc/coreutils.texi"
+  ],
+  "confidence": 0.85
+}
