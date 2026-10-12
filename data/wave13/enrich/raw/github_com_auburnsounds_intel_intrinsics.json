@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/auburnsounds/intel-intrinsics",
+  "one_liner": "D library exposing the Intel _mm_* intrinsics API (MMX to AVX2, SHA, BMI2) on LDC, DMD and GDC, emulated on ARM.",
+  "what_it_does": "Gives D code the Intel intrinsics API (types __m128, __m256i and friends, functions such as _mm_add_ps or _mm_sha256rnds2_epu32) with one syntax across the three D compilers, and maps the same calls to NEON on AArch64 and 32-bit ARM under LDC. It is a building block, not a hashing library: the faster SHA-256 behind the README's '18x faster SHA-256 vs Phobos' line is a public-domain example program (examples/sha256) built from these intrinsics, not an API you can call in place of std.digest.sha.",
+  "how_it_is_fast": "Each intrinsic is lowered to the compiler's own vector builtins (LDC's ldc.gccbuiltins_x86 or LLVM IR, GDC's gcc.builtins, DMD's D_SIMD) when the target feature is enabled at compile time, so the compiler emits the corresponding SIMD instruction; otherwise a portable D fallback keeps the same semantics. The SHA-256 example's speed comes from the dedicated x86 SHA extensions (sha256rnds2, sha256msg1, sha256msg2), following the Intel/Sean Gulley SHA-NI kernel as ported in Crypto++, against Phobos' portable scalar transformSHA2.",
+  "when_to_use": [
+    "Writing or porting SIMD kernels in D (audio DSP, image processing, parsing) and wanting the same source to build with LDC, DMD and GDC.",
+    "Porting existing C or C++ intrinsics code to D almost line for line, since the function names and type erasure match the Intel guide.",
+    "Shipping x86 intrinsics code to Apple Silicon or other AArch64 targets through LDC without rewriting it in NEON, with rounding-mode semantics preserved through FPCR.",
+    "Hashing large buffers in D on x86 CPUs with SHA extensions: copy the public-domain examples/sha256 kernel and build with LDC -mattr=+sha in an optimized build."
+  ],
+  "when_not_to_use": [
+    "C or C++ projects: this is a D library; use the native intrinsics headers, SIMDe, EVE or the Vector Class Library instead.",
+    "AVX-512 code: the supported set stops at AVX2 plus F16C, BMI2 and SHA.",
+    "One binary that must pick the instruction set at run time: feature selection is compile time only (__traits(targetHasFeature) on LDC, __traits(compiles) on GDC), and the README recommends targeting SSE3 for consumer reach.",
+    "Code that needs a guaranteed exact instruction: the README promises semantics, not instruction selection, and accepts slower code to keep semantics.",
+    "SHA-256 on ARM, on DMD, or on LDC without -mattr=+sha: shaintrin.d then runs a scalar D emulation of each SHA instruction, so the 18x figure does not carry over (there is no mapping to the ARMv8 SHA2 instructions)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (optional nurt runtime for no-druntime builds)",
+    "min_toolchain": "CI covers DMD 2.098.1+, LDC 1.28.1+ and GDC 12; avoid LDC 1.32.0 (no SIMD builtins, slow path with a compile-time warning)",
+    "platforms": "x86 and x86-64 (DMD, LDC, GDC; GDC vector paths disabled on 32-bit x86), AArch64 and 32-bit ARM (LDC), WebAssembly SIMD partial and still being verified",
+    "thread_safety": "not documented; intrinsics are stateless functions, and the ARM MXCSR emulation keeps the rounding mode in FPCR, which is per thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw: examples/sha256/dub.json sets dflags-ldc but no buildType, so a plain 'dub run' gives dub's default debug build, and the README records neither the build command nor the CPU, LDC version or timings. Phobos' SHA-256 is a template compiled with the example's flags, and Phobos issue #10423 (open since 2020) reports SHA256 and SHA512 taking up to 26x longer in unoptimized builds than with ldc2 -O3, so the 18x ratio cannot be separated from a debug-build artifact.",
+    "Harness flaw: on Windows the example's getTickUs defaults to precise=true, which reads QueryThreadCycleTime (thread CPU cycles) and returns 1000 * cycles / QPC frequency labelled as microseconds, although its own comment says this mode 'is not reliable and should never be the default'; both rows share the timer, so only the ratio is usable.",
+    "Masked loads and stores must address fully readable memory even where the mask is zero (pad buffers); AVX float compares do not honour the signalling-NaN option; F16C float-to-half conversions ignore the rounding mode.",
+    "Wrong-result fixes are still landing: on 2026-10-10 _mm256_extract_epi16 and _mm256_extract_epi8 were fixed to zero-extend instead of sign-extend, and _mm_blend_epi32 and _mm_adds_epi32 were fixed under DMD 32-bit after a fuzzing review; open issues include #138 (_mm_pow_ps with small numbers) and DMD/GDC performance gaps (#114, #116)."
+  ],
+  "pick_this_over_siblings_when": "Pick intel-intrinsics only for D code: EVE and the Vector Class Library give C++ portable SIMD types with their own APIs, while intel-intrinsics keeps the Intel _mm_* names across D compilers and emulates them on ARM, which suits porting existing intrinsics code into D.",
+  "verified_claims_summary": "The one measured claim is the README's '18x faster SHA-256 vs Phobos': examples/sha256 hashes a 1,024,000-byte buffer of 'a' 1000 times with Phobos sha256Of (portable scalar transformSHA2) and with an SHA-NI kernel written with inteli's _mm_sha256* intrinsics, both built by LDC with -mattr=+sha,+sse4.2,+popcnt, and prints elapsed time and both digests. No CPU, LDC version, build type or output is recorded, the default dub build is unoptimized, and the gain mostly reflects dedicated SHA hardware instructions rather than generic SIMD.",
+  "status_note": "Actively maintained (fuzzing-driven fixes on 2026-10-10; CI on Linux, Windows and macOS across DMD, LDC and GDC), BSL-1.0 and source-only, so easy to vendor into D projects; irrelevant to C++ codebases except as a model for porting.",
+  "sources_read": [
+    "https://github.com/AuburnSounds/intel-intrinsics",
+    "https://github.com/AuburnSounds/intel-intrinsics/commits",
+    "https://github.com/AuburnSounds/intel-intrinsics/issues?q=is%3Aissue+is%3Aopen",
+    "https://github.com/AuburnSounds/intel-intrinsics/tree/master/.github/workflows",
+    "https://raw.githubusercontent.com/AuburnSounds/intel-intrinsics/HEAD/README.md",
+    "https://raw.githubusercontent.com/AuburnSounds/intel-intrinsics/HEAD/dub.json",
+    "https://raw.githubusercontent.com/AuburnSounds/intel-intrinsics/HEAD/COPYING",
+    "https://raw.githubusercontent.com/AuburnSounds/intel-intrinsics/HEAD/examples/sha256/source/main.d",
+    "https://raw.githubusercontent.com/AuburnSounds/intel-intrinsics/HEAD/examples/sha256/dub.json",
+    "https://raw.githubusercontent.com/AuburnSounds/intel-intrinsics/HEAD/source/inteli/shaintrin.d",
+    "https://raw.githubusercontent.com/AuburnSounds/intel-intrinsics/HEAD/source/inteli/internals.d",
+    "https://raw.githubusercontent.com/AuburnSounds/intel-intrinsics/HEAD/source/inteli/package.d",
+    "https://raw.githubusercontent.com/AuburnSounds/intel-intrinsics/HEAD/.github/workflows/x86_64.yml",
+    "https://raw.githubusercontent.com/AuburnSounds/intel-intrinsics/HEAD/.github/workflows/gdc.yml",
+    "https://raw.githubusercontent.com/dlang/phobos/HEAD/std/digest/sha.d",
+    "https://github.com/dlang/phobos/issues/10423",
+    "WebSearch: intel-intrinsics sha256 SHA-NI Phobos 18x (snippet of issues.dlang.org bug 20939)"
+  ],
+  "confidence": 0.65
+}

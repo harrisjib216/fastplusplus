@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/atomicincrement/asmjson",
+  "one_liner": "Experimental Rust JSON parser with a hand-written AVX-512BW assembly inner loop; about 1.6x sonic-rs on string-heavy synthetic JSON.",
+  "what_it_does": "Parses a &str into one of two forms. The first is a flat tape DOM (Dom of 16-byte DomEntry records, navigated with JsonRef/DomRef cursors: get, index_at, object_iter, as_i64, as_str). The second drives a SAX-style Sax trait whose callbacks receive borrowed slices. dom_parser() and sax_parser() pick the AVX-512BW assembly or a portable SWAR path by CPUID, unsafe parse_to_dom_zmm and parse_with_zmm call the assembly directly, and an optional serde feature deserializes from the tape (from_taperef). It is not a drop-in for serde_json::Value or sonic_rs::Value: the API is its own and is marked unstable.",
+  "how_it_is_fast": "Each step loads 64 input bytes and classifies them with AVX-512BW compares into mask registers: whitespace (any byte at or below 0x20), quote, backslash, comma, '}' and ']'. tzcnt over those masks then skips whole whitespace runs and string bodies at once, and the tail uses a masked load, so nothing is read past the input. The state machine is direct-threaded assembly that writes tape entries straight into a pre-sized Vec (or calls the SAX vtable). Strings and numbers are recorded as borrowed source slices, with unescaping only when escapes are present and no numeric conversion at parse time; short integers are validated with a SWAR digit test. The portable path does the same 64-byte classification with u64 SWAR bit tricks.",
+  "when_to_use": [
+    "Large string-heavy JSON (logs, JSON Lines, tokenizer or config dumps) on Zen 4/Zen 5 or Ice Lake+ servers, where you read strings and keys and rarely need numeric values.",
+    "Single-pass SAX extraction (counting, filtering keys, copying string spans) with no per-document tape allocation.",
+    "Parallel parsing of mmapped JSON Lines with Rayon: the author's mmap_parallel example reports 26.6 GiB/s on a 1 GiB file.",
+    "Research or teaching on bit-parallel JSON classification (AVX-512BW mask registers versus u64 SWAR) in Rust."
+  ],
+  "when_not_to_use": [
+    "Production or untrusted input: the README says experimental and not production ready, the assembly is unaudited for adversarial input, and two hot-path string-scanning bugs were fixed only in April 2026.",
+    "When you need strict RFC 8259 validation: it accepts every control byte below 0x20 as whitespace and does not reject unescaped control characters inside strings.",
+    "Number-heavy documents whose values you will actually read: numbers stay as text until as_i64/as_f64 is called, so the published mixed-workload lead (which never converts a number) overstates the end-to-end gain.",
+    "Nesting deeper than 64 levels (MAX_JSON_DEPTH = 64), or frequent keyed lookups: get(key) walks the object linearly.",
+    "C++ projects (Rust crate only; the assembly entry points are internal and there is no C header, so use simdjson or sonic-cpp), and non-Linux x86-64 targets (see gotchas)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "none at runtime (serde optional via the 'serde' feature); build-dependency cc assembles asm/x86_64/parse_json_zmm_sax.S and parse_json_zmm_dom.S on every x86_64 target",
+    "min_toolchain": "Rust edition 2024 (rustc 1.85+); a C toolchain whose assembler accepts GNU Intel-syntax ELF .S files on x86_64",
+    "platforms": "x86-64 Linux with AVX-512BW for the assembly path (Ice Lake+ or Zen 4+); the portable SWAR path compiles on any target; CI runs only cargo test on ubuntu-latest, so x86-64 macOS and Windows are untested",
+    "thread_safety": "Parsers are reentrant free functions; Dom borrows the source string; DomEntry has unsafe impl Send and Sync over its raw pointer. Concurrency is otherwise not documented.",
+    "drop_in_for_baseline": "false — own tape/SAX API rather than a Value tree or serde_json::from_str; the serde feature deserializes from the tape via from_taperef"
+  },
+  "gotchas": [
+    "The README and JOSS-draft table (single core, 10 MiB synthetic JSON) was measured at commit 855c37c, before later assembly changes: the SAX escape-path fixes (f6bd9f4, 2026-03-17), the raw-escaped-string SAX contract (9c2d164), the carry-free eq_byte fix in the SWAR classifier (e77a521, 2026-04-09; the old has-zero-byte trick reported a quote followed by '#' as a closing quote and failed on a real 6 MB tokenizer.json) and the backslash-parity rewrite of both .S files (7d3c7a1, 2026-04-09). Before that rewrite, a string ending in an escaped backslash such as \"a\\\\\" was mis-scanned and rejected, and the rewrite adds a parity byte check to every string close in the hot loop. None of the numbers were re-run after these changes.",
+    "The benchmark's 'full traversal' only sums string and key lengths. asmjson/sax and asmjson/dom never convert a number, while sonic-rs, serde_json and simd-json parse every number into i64/u64/f64 while building their Value, so the 2.5x (sax) and 1.9x (dom) mixed-workload leads include skipped work. The string_object document is one object with about 102,800 members whose keys repeat after key99999, so serde_json pays for BTreeMap inserts and deduplication. simd-json also clones the 10 MiB input on every iteration.",
+    "The author's own log (doc/conversation.md) shows the sonic-rs string-array figure moving from 11.0 GiB/s (session 13, ahead of asmjson's 8.36) to 7.37 and then 6.92 GiB/s in later runs, with no recorded explanation. On mixed data the two were tied in session 18 (370 vs 368 MiB/s). The 1.6x headline depends on which run is quoted.",
+    "The DOM path reserves src.len()/4 tape entries of 16 bytes (about 4x the input size) unless you pass a capacity, and re-parses from scratch with doubled capacity on overflow. The .S files use ELF-only directives (.type @function, .section .rodata) and System V argument registers, yet build.rs assembles them for every x86_64 target. The unsafe *_zmm entry points raise SIGILL on CPUs without AVX-512BW."
+  ],
+  "pick_this_over_siblings_when": "None of the hand-written-assembly siblings is a JSON parser. Against the catalogued JSON parsers, pick asmjson only for Rust on AVX-512BW hardware with string-heavy input where you accept lax validation. Prefer sonic-rs (catalogued, wave 4) or serde_json for robust Rust parsing, and simdjson or yyjson from C++.",
+  "verified_claims_summary": "The author's criterion runs used one core of an AMD Ryzen 9 9955HX (Zen 5; the CPU is named only in doc/paper/paper.md, not the README), RUSTFLAGS -C target-cpu=native and an unstated rustc, on 10 MiB of synthetic escape-free JSON with string and key lengths summed after parsing. On a string array asmjson/sax reached 10.78 and asmjson/dom 10.93 GiB/s versus sonic-rs 6.92 GiB/s (about 1.6x); on a string object 8.29 versus 4.06 GiB/s; on mixed records 1.17 GiB/s versus 478 MiB/s, a lead that excludes the number conversion the baselines perform.",
+  "status_note": "Active through 2026-04-09 (v0.2.6, MIT, 6 stars, 550 crates.io downloads, no issues filed) but self-described as experimental. The published numbers predate the April 2026 assembly correctness fixes, so treat it as a research crate, not a serde_json or sonic-rs replacement.",
+  "sources_read": [
+    "https://github.com/atomicincrement/asmjson",
+    "https://github.com/atomicincrement/asmjson/commits",
+    "https://github.com/atomicincrement/asmjson/tree/master/src",
+    "https://github.com/atomicincrement/asmjson/tree/master/doc",
+    "https://github.com/atomicincrement/asmjson/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/atomicincrement/asmjson/HEAD/README.md",
+    "https://raw.githubusercontent.com/atomicincrement/asmjson/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/atomicincrement/asmjson/HEAD/.cargo/config.toml",
+    "https://raw.githubusercontent.com/atomicincrement/asmjson/HEAD/benches/parse.rs",
+    "https://raw.githubusercontent.com/atomicincrement/asmjson/HEAD/build.rs",
+    "https://raw.githubusercontent.com/atomicincrement/asmjson/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/atomicincrement/asmjson/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/atomicincrement/asmjson/HEAD/src/sax.rs",
+    "https://raw.githubusercontent.com/atomicincrement/asmjson/HEAD/src/dom/mod.rs",
+    "https://raw.githubusercontent.com/atomicincrement/asmjson/HEAD/asm/x86_64/parse_json_zmm_sax.S",
+    "https://raw.githubusercontent.com/atomicincrement/asmjson/HEAD/asm/x86_64/parse_json_zmm_dom.S",
+    "https://raw.githubusercontent.com/atomicincrement/asmjson/HEAD/doc/conversation.md",
+    "https://raw.githubusercontent.com/atomicincrement/asmjson/HEAD/doc/dev.md",
+    "https://raw.githubusercontent.com/atomicincrement/asmjson/HEAD/doc/paper/paper.md",
+    "https://raw.githubusercontent.com/atomicincrement/asmjson/HEAD/AGENTS.md",
+    "https://raw.githubusercontent.com/atomicincrement/asmjson/HEAD/.github/workflows/ci.yml",
+    "https://crates.io/api/v1/crates/asmjson"
+  ],
+  "confidence": 0.8
+}

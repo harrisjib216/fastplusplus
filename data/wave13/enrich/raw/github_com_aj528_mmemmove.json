@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/aj528/mmemmove",
+  "one_liner": "Hand-written Thumb-1 memmove for Cortex-M0+/M4 that beats newlib-nano's byte-loop memmove; separate memmove_() symbol.",
+  "what_it_does": "A single assembly file (common/src/mmemmove.s) that implements memmove semantics, including overlapping copies in both directions, for ARMv6-M and ARMv7-M microcontrollers. You copy the .s file into a firmware project, declare extern void* memmove_(void*, const void*, size_t), and call memmove_() explicitly; it is not exported as memmove and does not replace the C library symbol. The rest of the repository is an STM32WL55 dual-core test bench (Greatest tests, UART output).",
+  "how_it_is_fast": "It picks a copy direction once (forward when dest < src or the ranges do not overlap, backward otherwise), then uses three loops: a 16-byte word loop (four LDR/STR pairs per iteration) when at least 16 bytes remain and source and destination are co-aligned (dest - src a multiple of 4, with the source start for forward copies or the source end for backward copies 4-byte aligned), a byte loop unrolled four times, and a single-byte tail loop. Loop heads are aligned with .balign 4/8 and padding NOPs to suit flash fetch. The gain comes mostly from the incumbent being weak: newlib's generic memmove.c compiles to a plain byte-at-a-time loop under -Os/__OPTIMIZE_SIZE__ (how newlib-nano is usually built), and newlib's ARM machine directory has an assembly memcpy but no assembly memmove.",
+  "when_to_use": [
+    "Cortex-M0/M0+ firmware linked against newlib-nano (--specs=nano.specs) where memmove sits on a hot path, e.g. ring buffers, packet reassembly or in-place shifts of arrays",
+    "Co-aligned moves of 16 bytes or more (word-aligned structs or buffers shifted by a multiple of 4 bytes): only these hit the word loop, which is where the largest gains should come from",
+    "Code-size-constrained parts: the routine is under 230 bytes per the README, roughly the size of a small C memmove",
+    "Cortex-M4/M3 projects that also use newlib-nano's memmove (which has no assembly fast path), as long as GPL-3.0 is acceptable"
+  ],
+  "when_not_to_use": [
+    "Proprietary firmware that cannot ship GPL-3.0 code: the licence is copyleft and the file would be linked into the image",
+    "Misaligned copies (dest - src not a multiple of 4): the code never does unaligned or shift-and-merge word accesses, so these stay byte-at-a-time with only 4x unrolling and the gain is loop overhead only",
+    "Projects on full newlib built for speed, picolibc, or a vendor or toolchain memmove that already has word-copy paths: the measured gap is against newlib-nano and has not been shown against anything faster",
+    "Non-Cortex-M targets (Cortex-A, AArch64, RISC-V, x86): it is Thumb-only assembly",
+    "Anywhere you need a link-time drop-in: compiler-generated memmove calls (struct assignment, __aeabi_memmove) still go to the C library"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (the test bench needs arm-none-eabi-gcc, the STM32WL LL drivers submodule and Greatest; the routine itself needs nothing)",
+    "min_toolchain": "Any GNU-compatible ARM assembler accepting .syntax unified Thumb code (arm-none-eabi-gcc used; version not stated)",
+    "platforms": "ARMv6-M and ARMv7-M Cortex-M cores; tested by the author on the STM32WL55 Cortex-M4 and Cortex-M0+",
+    "thread_safety": "Reentrant leaf function with no global state (uses only r0-r6 and the stack); not otherwise documented",
+    "drop_in_for_baseline": "partial — same signature and memmove semantics, returns dest, but it is named memmove_ and must be called explicitly; renaming it to memmove would clash with the C library symbol"
+  },
+  "gotchas": [
+    "The README claim predates the current code: 'more than 7x faster' was written on 2025-02-02 for an earlier Thumb-2, Cortex-M4-only version (under 350 bytes); the routine was rewritten for Cortex-M0+ on 2025-02-17 and the claim was trimmed to '7x', but no cycle counts for any version are committed.",
+    "Correctness fix on 2025-02-24 (commit 92a9735): the backward word path tested whether the source START was 4-byte aligned instead of the source END, so backward overlapping copies of 16+ bytes whose length was not a multiple of 4 issued unaligned LDR/STR. That hard-faults on Cortex-M0+ (no unaligned access) and runs slower on Cortex-M4; any earlier M4 timing of backward copies came from that buggy path. Use the current file only.",
+    "Harness flaw: the committed test_config.h sets TEST_CM0PLUS to 1, and on the M0+ core get_cycle_count() is an IPCC round trip to the Cortex-M4, which samples its DWT counter from a -O0 polling loop. The printed 'min cycles' handshake overhead is never subtracted and the polling phase adds jitter of the same order as the 'only a few cycles faster' differences at 1-20 bytes, and counts are M4 cycles, not M0+ cycles.",
+    "Every timed figure is one warm call per case printed over UART, and the explicit 1/10/20/50-byte cases all use offsets with dest - src not a multiple of 4 (0x81 to 0x7E, 0x82, 0x102), so they exercise only the unrolled byte loop; the word loop is reached only by the slide tests (e.g. 0x15, 0x200 and 0x201 bytes with dest at src - 4 or src + 4)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over gamesun memcpy_fast (Cortex-M4 word/doubleword memcpy) when you need overlap-safe memmove or must run on Cortex-M0+, which has no unaligned access; arm-mem, copies-and-fills and Arm Optimized Routines target Cortex-A/AArch64 Linux and do not apply to Cortex-M firmware.",
+  "verified_claims_summary": "The author reports that memmove_() was always faster than the toolchain memmove on an STM32WL55 (Cortex-M4 at 48 MHz, flash at 2 wait states, with the Cortex-M0+ core also testable), from 'a few cycles' up to 7x, timed with the DWT cycle counter around one warm call per case; the baseline is very likely newlib-nano's byte-loop memmove (both Makefiles use --specs=nano.specs), compiler version, core and copy size for the 7x are not stated, and no results are committed.",
+  "status_note": "Stale since 2025-02-24 (all visible commits fall between 2025-02-02 and 2025-02-24; 0 stars, no open issues), but it is one self-contained 130-line assembly file that passes its own overlap and offset sweep, so it is easy to vendor if GPL-3.0 is acceptable.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/AJ528/mmemmove/HEAD/README.md",
+    "https://raw.githubusercontent.com/AJ528/mmemmove/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/AJ528/mmemmove/HEAD/Makefile",
+    "https://raw.githubusercontent.com/AJ528/mmemmove/HEAD/cm4/Makefile",
+    "https://raw.githubusercontent.com/AJ528/mmemmove/HEAD/cm0plus/Makefile",
+    "https://raw.githubusercontent.com/AJ528/mmemmove/HEAD/common/src/main.c",
+    "https://raw.githubusercontent.com/AJ528/mmemmove/HEAD/common/src/mmemmove.s",
+    "https://raw.githubusercontent.com/AJ528/mmemmove/HEAD/common/inc/test_config.h",
+    "https://raw.githubusercontent.com/AJ528/mmemmove/HEAD/cm4/STM32WL_FLASH_CM4.ld",
+    "https://raw.githubusercontent.com/AJ528/mmemmove/HEAD/cm0plus/STM32WL_FLASH_CM0P.ld",
+    "https://raw.githubusercontent.com/AJ528/mmemmove/HEAD/cm4/src/startup_stm32wl55xx_cm4.s",
+    "https://github.com/AJ528/mmemmove/commits/main",
+    "https://github.com/AJ528/mmemmove/commits/main/common/src/mmemmove.s",
+    "https://github.com/AJ528/mmemmove/commits/main/README.md",
+    "https://github.com/AJ528/mmemmove/issues",
+    "https://raw.githubusercontent.com/AJ528/mmemmove/3e2426eb2f50cfb0fa6c129a6862207e368a8032/common/src/mmemmove.s",
+    "https://raw.githubusercontent.com/AJ528/mmemmove/138c559635d05a4c46bfc4c5e98074df88bf1ec4/src/mmemmove.s",
+    "https://raw.githubusercontent.com/AJ528/mmemmove/138c559635d05a4c46bfc4c5e98074df88bf1ec4/README.md",
+    "https://raw.githubusercontent.com/AJ528/mmemmove/66efe00d2671473d7c0a4cde6eea893d4d1ceef7/README.md",
+    "https://raw.githubusercontent.com/AJ528/mmemmove/6148851aba20bae175c1416cf0024fade3de8682/README.md",
+    "https://raw.githubusercontent.com/mirror/newlib-cygwin/master/newlib/libc/string/memmove.c",
+    "https://raw.githubusercontent.com/mirror/newlib-cygwin/master/newlib/libc/machine/arm/Makefile.inc",
+    "https://raw.githubusercontent.com/AJ528/mmemcpy/HEAD/README.md"
+  ],
+  "confidence": 0.55
+}

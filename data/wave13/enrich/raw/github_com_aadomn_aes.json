@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/aadomn/aes",
+  "one_liner": "Fixsliced and barrel-shiftrows constant-time AES-128/256 in Cortex-M and RV32I assembly; claims bitsliced AES speed records on 32-bit microcontrollers.",
+  "what_it_does": "Supplementary code for the TCHES 2021/1 paper 'Fixslicing AES-like Ciphers': AES-128 and AES-256 encryption only (no decryption, no modes) as Thumb-2 assembly for ARM Cortex-M, RV32I assembly, and portable C (opt32). The fixsliced API encrypts exactly two 16-byte blocks per call (aes128_encrypt_ffs/sfs(ctext0, ctext1, ptext0, ptext1, rkeys[88])) from round keys precomputed by a separate key-schedule function; the barrel-shiftrows API encrypts eight blocks (128 bytes) per call. A first-order masked Cortex-M4 variant (Two Random Bits scheme) is included. It is a set of source files, not a drop-in for any AES library interface: the caller builds CTR/GCM or other modes on top.",
+  "how_it_is_fast": "Bitslicing packs two blocks into eight 32-bit words so the S-box becomes a fixed Boolean circuit (the S-box code is credited to Ko-/aes-armcortexm in the source) with no table lookups. Fixslicing then never performs ShiftRows explicitly: it lets the state drift through four alternative representations and folds the correction into four specialised MixColumns routines (mixcolumns_0..3), resynchronising once at the end with double_shiftrows; the paper reports 52% fewer linear-layer operations than the previous fastest 32-bit bitsliced AES. The semi-fixsliced variant uses fewer MixColumns variants for smaller code; barrel-shiftrows reorders 8 blocks so ShiftRows becomes register renaming, which wins on register-rich RV32I.",
+  "when_to_use": [
+    "Constant-time AES-128/256 encryption on Cortex-M3/M4 or RV32I cores without AES hardware, where table-based AES would leak through timing or cache",
+    "CTR, GCM or CCM style modes that need only the forward cipher and can batch two blocks (fixsliced) or eight blocks (barrel-shiftrows) per call",
+    "RAM-constrained parts: fixsliced round keys take 352 bytes (AES-128) or 480 bytes (AES-256), a quarter of barrel-shiftrows' 1408/1920 bytes",
+    "Bulk encryption on RV32I (E31-class) cores, where barrel-shiftrows is fastest in the README table (78.9 cpb for AES-128)",
+    "As a reference for porting fixsliced AES; RustCrypto's aes crate soft backend is adapted from this repo's C code"
+  ],
+  "when_not_to_use": [
+    "Decryption (ECB/CBC decrypt, AES key unwrap): no inverse cipher in any directory; RustCrypto's port added one if you need it",
+    "Single-block or latency-bound use: every call costs two blocks (fixsliced) or eight (barrel-shiftrows), so one-block calls roughly halve or eighth the effective throughput",
+    "Cores with AES instructions (Armv8-M with crypto, Armv8-A, Zkne RISC-V): hardware AES is far faster; this code targets 32-bit cores without it",
+    "When you need a tested, maintained library with KATs, modes and a build system: the repo has no test vectors, no harness and no build files, and the last code change is from 2022",
+    "Side-channel-hardened deployments relying on the masked variant: the README itself warns no practical security evaluation was done and the RNG code is hard-wired to the STM32F407VG"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (masked variant needs the STM32F407VG hardware RNG at 0x50060804/0x50060808)",
+    "min_toolchain": "GNU as with .syntax unified Thumb-2 for Cortex-M; RV32I GNU toolchain for riscv/*.S; opt32 C needs GCC or Clang (SWAPMOVE uses a GNU statement expression)",
+    "platforms": "ARM Cortex-M3/M4 (Thumb-2, Armv7-M), RV32I (benchmarked on SiFive E31), any 32-bit or 64-bit target via the opt32 C code",
+    "thread_safety": "Reentrant: functions keep state on the stack and in caller-supplied buffers (not documented, from reading the assembly)",
+    "drop_in_for_baseline": "partial — encryption-only two-block (or eight-block) raw-block API with separate key schedule; no mbedTLS/OpenSSL-style interface, modes or decryption"
+  },
+  "gotchas": [
+    "Bug found this session: in armcortexm/fixslicing/aes_keyschedule.s all four bitsliced key schedules (aes128/aes256 _ffs/_sfs) load the first key twice (ldr from [r1] for both halves) and never read key1, although aes.h declares key0/key1 and the comments say two different keys are supported; the RISC-V and opt32 versions read both keys. Issue #3 reported the same 'first input key was loaded twice' bug in the masked key schedule in Nov 2022 and only that file was fixed. Passing two distinct keys on Cortex-M silently encrypts block 1 under key0. Single-key use (key0 == key1) and the published cycle counts are unaffected.",
+    "The *_lut key schedules (the only key schedule for barrel-shiftrows on every ISA) index an S-box table with key bytes, so key expansion is not constant-time on cores with data caches or timing-variable memory; only the bitsliced fixsliced key schedules are table-free.",
+    "API differs per ISA: barrel-shiftrows takes (ctext, rkeys, ptext) on ARM but (out, in, rkeys) on RISC-V and (ctext, ptext, rkeys) in opt32; the riscv and opt32 fixsliced aes.h declare AES-256 key arguments as [16] instead of [32] (harmless in C, misleading).",
+    "RV32I code reads plaintext and keys with lw, so buffers should be 4-byte aligned (misaligned lw traps or is emulated slowly on E31-class cores); the Cortex-M encryption code was changed to plain ldr for unaligned inputs in PR #1 (Dec 2020)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over AVR-AES-faster when the target is a 32-bit Cortex-M or RV32I core rather than 8-bit AVR and constant time matters, and over libgcrypt or Nettle assembly when the core has no AES instructions and you want a small, freestanding, table-free source drop rather than a full library.",
+  "verified_claims_summary": "Only the authors' own cycle counts are in the repo: non-unrolled AES-128 at 84.3 (fully-fixsliced), 87.1 (semi) and 94.8 (barrel-shiftrows) cycles per byte on a Cortex-M3 and 89.3, 93.4 and 78.9 on a SiFive E31, with precomputed round keys; no baseline row, compiler, flags or harness. The TCHES paper's abstract (search snippet only) reports 80 and 91 cpb for unrolled code and 21% and 26% gains over earlier bitsliced AES records, which are hand-written assembly rather than a compiler or stdlib baseline.",
+  "status_note": "Stale (last commit 2024-10-17 README only, last code fix 2022-11-30, issue #2 closed 2026-05-30 without code change); MIT, 72 stars, small enough to vendor, but the unfixed Cortex-M two-key bug and missing tests mean you should add your own known-answer tests.",
+  "sources_read": [
+    "https://github.com/aadomn/aes",
+    "https://github.com/aadomn/aes/commits",
+    "https://github.com/aadomn/aes/tree/master/armcortexm/fixslicing",
+    "https://github.com/aadomn/aes/tree/master/riscv/fixslicing",
+    "https://github.com/aadomn/aes/tree/master/opt32/fixslicing",
+    "https://github.com/aadomn/aes/issues?q=is%3Aissue",
+    "https://github.com/aadomn/aes/issues/2",
+    "https://github.com/aadomn/aes/issues/3",
+    "https://raw.githubusercontent.com/aadomn/aes/HEAD/README.md",
+    "https://raw.githubusercontent.com/aadomn/aes/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/aadomn/aes/HEAD/armcortexm/fixslicing/aes.h",
+    "https://raw.githubusercontent.com/aadomn/aes/HEAD/armcortexm/fixslicing/aes_encrypt.s",
+    "https://raw.githubusercontent.com/aadomn/aes/HEAD/armcortexm/fixslicing/aes_keyschedule.s",
+    "https://raw.githubusercontent.com/aadomn/aes/HEAD/armcortexm/fixslicing/aes_keyschedule_lut.s",
+    "https://raw.githubusercontent.com/aadomn/aes/HEAD/armcortexm/barrel_shiftrows/aes.h",
+    "https://raw.githubusercontent.com/aadomn/aes/HEAD/armcortexm/1storder_masking/aes.h",
+    "https://raw.githubusercontent.com/aadomn/aes/HEAD/armcortexm/1storder_masking/aes_keyschedule.s",
+    "https://raw.githubusercontent.com/aadomn/aes/HEAD/riscv/fixslicing/aes.h",
+    "https://raw.githubusercontent.com/aadomn/aes/HEAD/riscv/fixslicing/aes_keyschedule.S",
+    "https://raw.githubusercontent.com/aadomn/aes/HEAD/riscv/fixslicing/aes_encrypt.S",
+    "https://raw.githubusercontent.com/aadomn/aes/HEAD/riscv/barrel_shiftrows/aes.h",
+    "https://raw.githubusercontent.com/aadomn/aes/HEAD/opt32/fixslicing/aes.h",
+    "https://raw.githubusercontent.com/aadomn/aes/HEAD/opt32/fixslicing/aes_encrypt.c",
+    "https://raw.githubusercontent.com/aadomn/aes/HEAD/opt32/fixslicing/aes_keyschedule.c",
+    "https://raw.githubusercontent.com/aadomn/aes/HEAD/opt32/fixslicing/internal-aes.h",
+    "https://raw.githubusercontent.com/aadomn/aes/HEAD/opt32/fixslicing/aes_keyschedule_lut.c",
+    "https://raw.githubusercontent.com/aadomn/aes/HEAD/opt32/barrel_shiftrows/aes.h",
+    "https://github.com/RustCrypto/block-ciphers/tree/master/aes/src",
+    "https://raw.githubusercontent.com/RustCrypto/block-ciphers/master/aes/src/backends/soft.rs",
+    "https://raw.githubusercontent.com/RustCrypto/block-ciphers/master/aes/src/backends/fixslice/mod.rs",
+    "WebSearch: \"Fixslicing AES-like Ciphers\" Cortex-M3 cycles per byte previous record (snippets of tches.iacr.org/index.php/TCHES/article/view/8739)"
+  ],
+  "confidence": 0.75
+}

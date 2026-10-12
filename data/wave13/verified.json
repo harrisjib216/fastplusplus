@@ -1393,12 +1393,12 @@
     "language": "ARM Thumb assembly (Cortex-M4 and M0+) with a C test harness",
     "domain": "assembly-simd-kernels-and-wasm",
     "category": "asm-level-string-and-memory",
-    "baseline": "The arm-none-eabi toolchain's newlib-nano memmove: cm4/Makefile and cm0plus/Makefile link with --specs=nano.specs and -fno-builtin. The README calls it 'my standard memmove()' and names no library or version. Newlib's generic memmove.c takes a byte-at-a-time path when built with -Os (__OPTIMIZE_SIZE__), as newlib-nano usually is, which would explain a 7x gap (inference, not confirmed for the author's toolchain).",
+    "baseline": "newlib generic memmove.c (byte loop under -Os; newlib ARM ships no assembly memmove)",
     "baseline_in_list": false,
     "metric": "latency",
     "workload": "common/src/main.c (Greatest tests) times one warm call of each function with the DWT cycle counter after a single untimed call. Sizes are 1, 10, 20 and 50 bytes at source offset 0x81 with destinations 0x7E, 0x82 and 0x102. Slide tests use 15, 21, 34, 512 and 513 bytes against overlapping and non-overlapping destinations. An iterate test up to 35 bytes checks correctness only. Cycle counts are printed over UART and none are committed; the README does not say which size or core gave the 7x.",
     "claimed_speedup": "'In my testing, memmove_() is always faster than my standard memmove(). Sometimes it's only a few cycles faster, other times it is 7x faster.' Object size 'under 230 bytes' on arm-none-eabi-gcc.",
-    "evidence_tier": "C",
+    "evidence_tier": "D",
     "benchmark_url": "https://github.com/AJ528/mmemmove",
     "baseline_stdlib": [],
     "compiler_and_flags": "arm-none-eabi-gcc (version not stated). Committed Makefiles use -mcpu=cortex-m4 (or the cm0plus equivalent) -mthumb -mfloat-abi=soft --specs=nano.specs -fno-builtin -std=gnu17 -ffunction-sections -fdata-sections, with debug = 1 so OPTIMIZE_FLAGS is -O0 -ggdb3 (-O2 when debug = 0). The flags behind the README claim are not stated. The -O0 setting affects the C harness, not the hand-written assembly or the prebuilt libc memmove.",
@@ -1442,7 +1442,15 @@
         "https://raw.githubusercontent.com/AJ528/mmemmove/HEAD/common/src/main.c"
       ],
       "page_compares_against_baseline": true,
-      "numbers_found_on_page": true
+      "numbers_found_on_page": true,
+      "retier": {
+        "from": "C",
+        "to": "D",
+        "reason": "Enricher (2026-10-12): no measurement supports the current code. The '7x' sentence was written 2025-02-02 for an earlier Thumb-2 Cortex-M4 version and kept after the 2025-02-17 Cortex-M0+ rewrite with no cycle counts committed; the committed harness (TEST_CM0PLUS=1) times the M0+ through an IPCC round trip to the M4 DWT counter polled from an -O0 loop without subtracting the handshake, and the backward path's alignment bug (fixed 2025-02-24, commit 92a9735) affected any earlier backward-copy timing; the baseline is newlib's generic byte-loop memmove under -Os.",
+        "urls_opened": [
+          "https://github.com/AJ528/mmemmove"
+        ]
+      }
     },
     "corrected_fields": {
       "baseline": "The toolchain's standard memmove() on an STM32WLxx build with arm-none-eabi-gcc (README calls it 'my standard memmove()' and does not name newlib, newlib-nano or a version)",
@@ -4220,7 +4228,7 @@
     "metric": "throughput",
     "workload": "Benchmarks-Game-style programs (binarytrees, treealloc, n-body, spectral-norm, fasta, FFT) on native output; wasm output measured as a ratio to native",
     "claimed_speedup": "Native output vs ordinary hand-written Rust on Apple M4 Pro (almide 0.62.0, 2026-09-08, median of 9 interleaved runs): binarytrees d17 134 ms vs 382 ms (0.35x time), d19 581 vs 1826 ms (0.32x); treealloc d20 112 vs 375 ms (0.30x), d21 221 vs 748 ms (0.30x). With the region window turned off (ALMIDE_REGION_OFF=1) the same Almide source is 1.10-1.26x slower than the Rust reference. ubuntu-latest CI runner (2026-10-03, almide 0.66.0 dev): binarytrees 0.581 (d17), treealloc 0.365 (d20). Arithmetic kernels (2026-07-30, rustc 1.96.1): n-body and spectral-norm 1.00x, fasta 1.16x and FFT 1.18x slower than Rust. Wasm leg: README ledger (2026-09-29, embedded wasm host vs native binary, min of 2x5 interleaved) gives wasm/native ratios of 0.67x (mapbuild) to 1.96x (listbuild_append), e.g. treealloc 1.04x, binarytrees 1.07x, nbody 1.10x, fft 1.53x; these ratios are on the README, not on BENCHMARKS.md, whose older dated wasm paragraph still describes FFT (~3,500x) and mandelbrot (~130x) cliffs.",
-    "evidence_tier": "A",
+    "evidence_tier": "C",
     "benchmark_url": "https://github.com/almide/almide/blob/develop/docs/project/BENCHMARKS.md",
     "baseline_stdlib": [],
     "compiler_and_flags": "almide --release (emits Rust, cargo release profile opt-level=3 + LTO) vs handwritten Rust built by bench.py with rustc -C opt-level=3 -C lto=yes -C codegen-units=1; median of 9 interleaved runs after warmup; byte-identical stdout verified before timing. rustc 1.96.1 is stated for the 2026-07-30 scoreboard; the 2026-09-08 victory JSON records almide 0.62.0 but no rustc version (README says CI builds with 1.96.0).",
@@ -4234,7 +4242,7 @@
     "stars_or_usage": "35 stars",
     "has_code": true,
     "tradeoffs": "Young language optimised for LLM code generation; wins on allocation-heavy rows come from a compiler-proven region (bump-arena) window the ordinary Rust program does not have. Loses on fasta and FFT.",
-    "caveats": "Off the category baseline: the comparison is native Rust output, not TypeScript/JS in V8 or C++ via Emscripten, and the wasm output is only compared with Almide's own native binary, never with JS/V8 or an Emscripten build. The whole win is one optimization (the region window, a thread-local bump arena rewound once per check(make(d)) tree) against a Rust reference that deliberately pays malloc/free per Box node; a Rust program using an arena (bumpalo/typed-arena, as Benchmarks Game Rust entries do) would close most of the gap (the same document shows a Zig arena at 88 ms vs Almide 72 ms at d16). Two workloads, one mechanism. The ratio is allocator-dependent (0.581 and 0.365 on the ubuntu-latest runner vs 0.35 and 0.30 on macOS). The M4 Pro columns were measured on 0.62.0 and not re-measured. The README's third victory row (fannkuchredux 0.21/0.12 via parallel fan) compares a threaded Almide run with a one-thread Rust reference and should not be cited. Self-reported by the project.",
+    "caveats": "Off the category baseline: the comparison is native Rust output, not TypeScript/JS in V8 or C++ via Emscripten, and the wasm output is only compared with Almide's own native binary, never with JS/V8 or an Emscripten build. The whole win is one optimization (the region window, a thread-local bump arena rewound once per check(make(d)) tree) against a Rust reference that deliberately pays malloc/free per Box node; a Rust program using an arena (bumpalo/typed-arena, as Benchmarks Game Rust entries do) would close most of the gap (the same document shows a Zig arena at 88 ms vs Almide 72 ms at d16). Two workloads, one mechanism. The ratio is allocator-dependent (0.581 and 0.365 on the ubuntu-latest runner vs 0.35 and 0.30 on macOS). The M4 Pro columns were measured on 0.62.0 and not re-measured. The README's third victory row (fannkuchredux 0.21/0.12 via parallel fan) compares a threaded Almide run with a one-thread Rust reference and should not be cited. Self-reported by the project. [retier] Baseline Rust pays malloc/free per node; a hand-written Rust arena beats Almide (issue #3586); victory JSON hand-assembled without per-run data or rustc version; fannkuchredux README row unsupported by raw files; region arena never returns memory and a wrong region-pure verdict is a silent use-after-rewind",
     "found_via": [
       "GitHub: topic webassembly filtered to Rust (updated); README performance section and docs/project/BENCHMARKS.md"
     ],
@@ -4262,7 +4270,16 @@
         "https://github.com/almide/almide/commits/develop"
       ],
       "page_compares_against_baseline": true,
-      "numbers_found_on_page": true
+      "numbers_found_on_page": true,
+      "retier": {
+        "from": "A",
+        "to": "C",
+        "reason": "Enricher (2026-10-12): first-party provenance gaps behind the A-grade table. results/2026-09-08-m4pro-victory-1330.json is a hand-assembled summary (medians and ratios only, no per-run arrays, no rustc version) rather than bench.py's output format, the README fannkuchredux 0.21/0.12 row has no matching raw file (the same JSON shows 0.964/1.058), and the binarytrees win is a bump arena against a Rust baseline that pays malloc/free per node (issue #3586: a hand-written Rust arena runs 31.3 ms vs Almide 51 ms at d19x12).",
+        "urls_opened": [
+          "https://github.com/almide/almide/issues/3586",
+          "https://github.com/almide/almide/blob/develop/results/2026-09-08-m4pro-victory-1330.json"
+        ]
+      }
     },
     "corrected_fields": {
       "claimed_speedup": "binarytrees d17 134 ms vs ordinary Rust 382 ms (0.35x time), d19 581 vs 1826 ms (0.32x); treealloc d20 112 vs 375 ms, d21 221 vs 748 ms (0.30x); n-body and spectral-norm at 1.00x; fasta 1.16x and FFT 1.18x slower than Rust; wasm/native runtime ratios 1.04x to 1.96x for most benchmarks",
@@ -8992,7 +9009,7 @@
     "baseline_in_list": true,
     "metric": "latency",
     "workload": "Nanoseconds per call from micro-benchmarks (bench/*.c) of asm_* routines against the glibc versions, best of 7 to 9 trials; function pointers are held volatile so the compiler cannot inline libc builtins.",
-    "claimed_speedup": "docs/BENCHMARKS.md (glibc 2.44, i7-10510U, best of 7-9): arena 4.36 vs 37.46 ns/op (8.59x), arena mixed 8..512B 19.80x, 2048 x 1 KiB fill+release 22.28 vs 1012.72 us (45.46x); asm_malloc heap 4.79x (1000 x 64B) and 8.08x (mixed); asm_sscanf 2.18-3.05x (sscanf %d 130.93 vs 44.78 ns, 2.92x); asm_snprintf 1.53-2.10x (mixed 159.32 vs 104.35 ns) and asm_u64toa 20.32 ns vs snprintf %llu 80.79 ns (3.98x); libm: cbrt 2.18x, asinh 1.38x, cosh 1.33x, sqrt and atan2 1.02x, the other 13 functions 0.52-0.99x (sinh 0.52x). Memory/string results are given only as README ranges: memchr about 1.1-1.2x from 128 B up, mid/large memcpy/memset/memcmp 0.95-1.2x, strlen 0.5-0.8x and strstr 0.4-0.65x (glibc faster); 'memmem is several times faster' has no benchmark (bench/bench.c does not time memmem).",
+    "claimed_speedup": "docs/BENCHMARKS.md (glibc 2.44, i7-10510U, best of 7-9): arena 4.36 vs 37.46 ns/op (8.59x) and the 64 B asm_malloc row (4.79x) are the clean comparisons; the arena mixed 8..512B 19.80x, 2048 x 1 KiB 45.46x and 8.08x rows mostly time glibc page faults after each trial's bulk free (glibc about 494 ns per malloc+free pair there, derived, 13x its 64 B figure)",
     "evidence_tier": "C",
     "benchmark_url": "https://raw.githubusercontent.com/abiiranathan/asmlib/HEAD/docs/BENCHMARKS.md",
     "compiler_and_flags": "Harnesses built by the Makefile with $(CC) and CFLAGS -O2 -Wall -Wextra (math_bench: -O2 -fno-builtin, math objects -O2 -ffreestanding -fno-builtin -ffp-contract=off); assembly via NASM. docs/BENCHMARKS.md lists GCC 16.2.1 and Clang 22.1.8 on the machine but does not say which compiler built the published runs.",
@@ -9003,7 +9020,7 @@
     "maintenance_status": "active",
     "stars_or_usage": "0 stars",
     "tradeoffs": "Drop-in asm_* API rather than libc symbols; x86-64 needs AVX2/BMI2; AArch64 port uses NEON; math is freestanding C.",
-    "caveats": "Numbers are noisy laptop best-of-N results (author says so); the memory/string results are published only as approximate ranges and glibc wins on strlen and strstr. The memchr workload in bench/bench.c searches a repeating a-z string for 'z', so every size of 26 bytes or more measures a hit at offset 25, and the '1.1-1.2x from 128 B up' figure is really a 26-byte scan; memcmp compares a buffer with itself (equal-input case only). The 'memmem several times faster' claim has no benchmark. The snprintf table (docs/BENCHMARKS.md last changed 2026-09-28) was measured on the minimal hand-written asm_snprintf, which CHANGELOG [Unreleased] says was removed on 2026-10-06 in favour of the portable C printf engine (src/libc/printf.c); the current asm_snprintf is unmeasured C. asm_u64toa is a dedicated converter timed against general snprintf(\"%llu\"). The arena and malloc-heap wins come from a different allocation model (bump arena with O(1) reset, thread-local cache), not from assembly alone. The libm routines are portable C adapted from musl (MIT), not assembly, so the cbrt/cosh/asinh wins are not asm-kernel results. Single machine; which of GCC 16.2.1 or Clang 22.1.8 built the harness is unstated. Young repo with 0 stars.",
+    "caveats": "Numbers are noisy laptop best-of-N results (author says so); the memory/string results are published only as approximate ranges and glibc wins on strlen and strstr. The memchr workload in bench/bench.c searches a repeating a-z string for 'z', so every size of 26 bytes or more measures a hit at offset 25, and the '1.1-1.2x from 128 B up' figure is really a 26-byte scan; memcmp compares a buffer with itself (equal-input case only). The 'memmem several times faster' claim has no benchmark. The snprintf table (docs/BENCHMARKS.md last changed 2026-09-28) was measured on the minimal hand-written asm_snprintf, which CHANGELOG [Unreleased] says was removed on 2026-10-06 in favour of the portable C printf engine (src/libc/printf.c); the current asm_snprintf is unmeasured C. asm_u64toa is a dedicated converter timed against general snprintf(\"%llu\"). The arena and malloc-heap wins come from a different allocation model (bump arena with O(1) reset, thread-local cache), not from assembly alone. The libm routines are portable C adapted from musl (MIT), not assembly, so the cbrt/cosh/asinh wins are not asm-kernel results. Single machine; which of GCC 16.2.1 or Clang 22.1.8 built the harness is unstated. Young repo with 0 stars. [retier] Large-burst rows dominated by glibc trim-and-refault behaviour; ASMLIB_ENABLE_LIBC_ALIASES mixes allocators (free stays on libc); math objects built with -mfma; blocks above 4080 B cost an mmap and munmap each",
     "found_via": [
       "WebSearch: github assembly language library faster than C compiler -O3 AVX2 NASM benchmark C API drop-in replacement (result asmlib)"
     ],
@@ -11145,10 +11162,10 @@
     "metric": "throughput",
     "workload": "Million noise points generated per second, 2D and 3D Value, Perlin, Simplex and Cellular noise, FastNoise2 AVX2 build against scalar noise libraries.",
     "claimed_speedup": "3D: Value 494.49 versus 64.13 (FastNoise Lite), Perlin 261.10 versus 47.93, Simplex 268.44 versus 36.83 (OpenSimplex in FastNoise Lite), Cellular 52.43 versus 12.49 million points/s; 2D: Value 776.33 versus 114.01, Perlin 624.27 versus 92.83, Simplex 466.03 versus 71.30, Cellular 194.30 versus 39.15. Ratios of roughly 4x to 8x (derived from page data).",
-    "evidence_tier": "A",
+    "evidence_tier": "C",
     "benchmark_url": "https://github.com/Auburn/FastNoise2",
     "baseline_stdlib": [],
-    "compiler_and_flags": "clang-cl 10.0.0 -m64 /O2 (README); the harness's CMakeSettings.json release configuration (x64-Clang-Release) is RelWithDebInfo",
+    "compiler_and_flags": "clang-cl 10.0.0 -m64, RelWithDebInfo (/O2 /Ob1); FastNoise2 additionally /GS- /fp:fast with its AVX2 translation unit at -mavx2 -mfma; the comparison libraries built with no extra flags (strict FP, SSE2 baseline)",
     "hardware": "Intel 7820X @ 4.9 GHz, Windows 10 x64, AVX2 build",
     "compared_against_cpp_std_directly": false,
     "license": "MIT",
@@ -11159,7 +11176,7 @@
     "stars_or_usage": "1.4k stars",
     "has_code": true,
     "tradeoffs": "Node-graph API aimed at generating arrays of noise with fused SIMD pipelines (the README argues scalar combination of separately generated arrays defeats SIMD); several SIMD feature sets are supported; a 2026-10-10 commit fixed 4D Simplex domain-warp output differing between SIMD feature sets, so outputs can vary slightly across instruction sets; not the same noise function as FastNoise Lite in every column (Simplex versus OpenSimplex).",
-    "caveats": "Benchmark harness is the author's own Auburn/NoiseBenchmarking repo (6 stars, 14 commits, last commit 2020-09-15; no results file checked in) and pins the FastNoise2 submodule at commit e191bc2 from September 2020, so the README table describes a six-year-old version of the library, not current master (which keeps receiving correctness fixes, e.g. CellularDistance double sqrt fixed 2026-10-09). The comparison is FastNoise2's bulk GenUniformGrid2D/3D into an array (AVX2 level forced) against per-point GetNoise calls wrapped in benchmark::DoNotOptimize for FastNoise Lite and the other scalar libraries, so the gain mixes SIMD and API-shape effects. The 3D 'Simplex' column compares FastNoise2's Simplex node with FastNoise Lite's OpenSimplex2 (marked with an asterisk); against the like-for-like FastNoise legacy Simplex (44.74) the 3D ratio is 6.0x (derived from page data). The author's earlier SIMD library FastNoiseSIMD is built by the harness but omitted from the README table, so no SIMD competitor is shown. Frequencies differ (0.02 for FastNoise2, FastNoise Lite default for the others). Old compiler (clang-cl 10) on Windows, single machine. The continuous-benchmark page on auburn.github.io was not reachable here.",
+    "caveats": "Benchmark harness is the author's own Auburn/NoiseBenchmarking repo (6 stars, 14 commits, last commit 2020-09-15; no results file checked in) and pins the FastNoise2 submodule at commit e191bc2 from September 2020, so the README table describes a six-year-old version of the library, not current master (which keeps receiving correctness fixes, e.g. CellularDistance double sqrt fixed 2026-10-09). The comparison is FastNoise2's bulk GenUniformGrid2D/3D into an array (AVX2 level forced) against per-point GetNoise calls wrapped in benchmark::DoNotOptimize for FastNoise Lite and the other scalar libraries, so the gain mixes SIMD and API-shape effects. The 3D 'Simplex' column compares FastNoise2's Simplex node with FastNoise Lite's OpenSimplex2 (marked with an asterisk); against the like-for-like FastNoise legacy Simplex (44.74) the 3D ratio is 6.0x (derived from page data). The author's earlier SIMD library FastNoiseSIMD is built by the harness but omitted from the README table, so no SIMD competitor is shown. Frequencies differ (0.02 for FastNoise2, FastNoise Lite default for the others). Old compiler (clang-cl 10) on Windows, single machine. The continuous-benchmark page on auburn.github.io was not reachable here. [retier] Asymmetric flags (/fp:fast and AVX2+FMA only on the FastNoise2 side); single run per case; harness pinned to the 2020 API and not buildable against v1.x; FastNoise Lite adapter has no Simplex case so both its Simplex rows are OpenSimplex2; not like-for-like in API or noise type",
     "found_via": [
       "GitHub topic page github.com/topics/simd?l=c%2B%2B&o=desc&s=stars; README read via raw.githubusercontent.com",
       "github.com/topics/simd-optimization and topics pages (FastNoise2 listed under simd/avx512 topics); README Performance section opened via raw.githubusercontent.com"
@@ -11192,7 +11209,16 @@
         "https://raw.githubusercontent.com/Auburn/NoiseBenchmarking/HEAD/FastNoiseLite/Benchmark_FastNoiseLite.cpp"
       ],
       "page_compares_against_baseline": true,
-      "numbers_found_on_page": true
+      "numbers_found_on_page": true,
+      "retier": {
+        "from": "A",
+        "to": "C",
+        "reason": "Enricher (2026-10-12): asymmetric build flags behind the published table. At the pinned 2020 commit e191bc2 FastNoise2 was compiled with /fp:fast (and its AVX2 file with -mavx2 -mfma) while the FastNoise Lite, FastNoise legacy, libnoise and stb_perlin benchmark DLLs received no extra flags (strict FP, SSE2 baseline); the README's 'clang-cl 10.0.0 -m64 /O2' line does not describe this, the only release configuration is RelWithDebInfo, one run per case, and the harness cannot build against current FastNoise2 v1.x. Crippled-baseline precedent, numbers kept.",
+        "urls_opened": [
+          "https://github.com/Auburn/FastNoise2Benchmark",
+          "https://github.com/Auburn/FastNoise2/blob/e191bc2/CMakeLists.txt"
+        ]
+      }
     },
     "corrected_fields": {
       "compiler_and_flags": "clang-cl 10.0.0 -m64 /O2",
@@ -12985,7 +13011,7 @@
     "metric": "throughput",
     "workload": "SHA-256 of a 1,024,000-byte buffer (512 * 2000 bytes of 'a'), repeated 1000 times, comparing std.digest.sha sha256Of against a SHA-NI implementation written with inteli intrinsics (examples/sha256/source/main.d); both print elapsed microseconds and the digest.",
     "claimed_speedup": "README: '18x faster SHA-256 vs Phobos' with intel-intrinsics; separately cites a 3.5x speed-up for some particular loops in a DConf 2019 talk and dg2d renderer 'twice as fast as Cairo' (unmeasured on the page).",
-    "evidence_tier": "C",
+    "evidence_tier": "D",
     "benchmark_url": "https://github.com/AuburnSounds/intel-intrinsics/blob/master/examples/sha256/source/main.d",
     "baseline_stdlib": [],
     "compiler_and_flags": "LDC; examples/sha256/dub.json sets dflags-ldc [\"-mattr=+sha,+sse4.2,+popcnt\"] and no build type (dub builds in debug mode unless --build=release is passed); LDC version and the build command used for the 18x figure are not stated.",
@@ -13025,7 +13051,16 @@
         "https://raw.githubusercontent.com/dlang/phobos/HEAD/std/digest/sha.d"
       ],
       "page_compares_against_baseline": true,
-      "numbers_found_on_page": true
+      "numbers_found_on_page": true,
+      "retier": {
+        "from": "C",
+        "to": "D",
+        "reason": "Enricher (2026-10-12): the '18x faster SHA-256 vs Phobos' example's dub.json sets no buildType, so the default dub run builds debug, and Phobos SHA-256 is a template compiled with the example's flags (Phobos issue #10423 reports SHA256/512 up to 26x slower unoptimised than ldc2 -O3); the 18x cannot be distinguished from a debug-build artifact and no optimised measurement exists. Crippled baseline with no valid measurement.",
+        "urls_opened": [
+          "https://github.com/AuburnSounds/intel-intrinsics",
+          "https://github.com/dlang/phobos/issues/10423"
+        ]
+      }
     },
     "corrected_fields": {
       "compiler_and_flags": "LDC; example dub.json sets dflags-ldc [\"-mattr=+sha,+sse4.2,+popcnt\"]; LDC version and optimisation level not stated.",
@@ -13880,7 +13915,7 @@
     "metric": "throughput",
     "workload": "Summing a 1 GB array (268,435,456 floats, all set to 1.0f by std::fill_n) with serial std::accumulate, an 8-accumulator unrolled loop, hand-written SSE/AVX2/AVX-512, NEON and SVE kernels, OpenMP, fork_union, Taskflow, std::reduce with execution policies, Thrust, CUB and CUDA kernels, reported in bytes/s with an error% column against the exact sum n.",
     "claimed_speedup": "Single thread versus serial std::accumulate (libstdc++, GCC 12), 1 GB array of 1.0f, README tables. AWS Graviton4 c8g.metal-24xl: unrolled/f64 14.7387 GB/s vs std::accumulate/f64 5.58465 GB/s (about 2.6x, derived from page data, both exact); unrolled/f32 28.2311 GB/s, neon/f32 22.2544 GB/s and sve/f32 21.4542 GB/s vs std::accumulate/f32 5.58767 GB/s (about 5.1x, 4.0x and 3.8x, derived from page data). AWS Zen4 m7a.metal-48xl: unrolled<f64> 34.0189 GB/s and avx2<f64> 19.3258 GB/s vs std::accumulate<f64> 4.88389 GB/s (about 7.0x and 4.0x, derived from page data, exact); unrolled<f32> 35.1514, avx2<f32> 33.3195 and avx512<f32interleaving> 26.8351 GB/s vs std::accumulate<f32> 4.88655 GB/s (about 7.2x, 6.8x and 5.5x, derived from page data); avx2<f32kahan> 9.73619 GB/s, exact, about 2.0x std::accumulate (derived from page data). Nvidia DGX-H100 host: avx2<f32> 9.69112 vs std::accumulate<f32> 5.5322 GB/s (about 1.75x, derived from page data). Multithreaded std::reduce<par> (368.528 GB/s on Zen4, 550.384 GB/s on Graviton4) is libstdc++'s own parallel algorithm on oneTBB, not this repository's code.",
-    "evidence_tier": "A",
+    "evidence_tier": "C",
     "benchmark_url": "https://github.com/ashvardanian/ParallelReductionsBenchmark",
     "baseline_stdlib": [
       "libstdc++"
@@ -13896,7 +13931,7 @@
     "stars_or_usage": "119 stars",
     "has_code": true,
     "tradeoffs": "Educational benchmark harness rather than a drop-in library. Hand-written AVX2 and AVX-512 kernels are x86 only; NEON and SVE variants exist for Arm. Huge pages, NUMA and Kahan summation are handled by hand.",
-    "caveats": "This is an educational benchmark collection, not a reusable library, and it has no LICENSE file (raw LICENSE returns 404, no licence in the GitHub sidebar or Cargo.toml), so it is reference only. The baseline is std::accumulate, whose required left-to-right fold is latency-bound on the float add chain at -O2 without -ffast-math; most of the gain comes from reassociation with multiple accumulators, and no single-threaded std::reduce (or unseq) row is measured, which is the standard library's own reassociating alternative. Hand-written intrinsics do not beat the plain unrolled C++ loop in most tables: on Zen4 avx2<f32> 33.32, avx2<f64> 19.33 and avx512<f32interleaving> 26.84 GB/s are all below unrolled<f32> 35.15 / unrolled<f64> 34.02 GB/s, and on Graviton4 neon/f32 22.25 and sve/f32 21.45 GB/s are below unrolled/f32 28.23 GB/s, contradicting the README's statement that hand-written AVX2 beats auto-vectorization (it holds only on the DGX-H100 host). All f32 rows give wrong sums because the input is 2^28 ones and each f32 accumulator saturates at 2^24 (std::accumulate<f32> 93.75% error, unrolled<f32> 50%, neon/sve 75%); only f64 and Kahan rows are exact, and avx2<f32kahan> is about 2x std::accumulate on Zen4. The DGX-H100 table's std::reduce<par, f64> and <par_unseq, f64> rows report 100% error. The Zen4 and DGX tables use older row labels and predate the 2025 code. Single hand-pasted runs with no variance. The README's own conclusion is that multithreaded std::reduce is the CPU winner.",
+    "caveats": "This is an educational benchmark collection, not a reusable library, and it has no LICENSE file (raw LICENSE returns 404, no licence in the GitHub sidebar or Cargo.toml), so it is reference only. The baseline is std::accumulate, whose required left-to-right fold is latency-bound on the float add chain at -O2 without -ffast-math; most of the gain comes from reassociation with multiple accumulators, and no single-threaded std::reduce (or unseq) row is measured, which is the standard library's own reassociating alternative. Hand-written intrinsics do not beat the plain unrolled C++ loop in most tables: on Zen4 avx2<f32> 33.32, avx2<f64> 19.33 and avx512<f32interleaving> 26.84 GB/s are all below unrolled<f32> 35.15 / unrolled<f64> 34.02 GB/s, and on Graviton4 neon/f32 22.25 and sve/f32 21.45 GB/s are below unrolled/f32 28.23 GB/s, contradicting the README's statement that hand-written AVX2 beats auto-vectorization (it holds only on the DGX-H100 host). All f32 rows give wrong sums because the input is 2^28 ones and each f32 accumulator saturates at 2^24 (std::accumulate<f32> 93.75% error, unrolled<f32> 50%, neon/sve 75%); only f64 and Kahan rows are exact, and avx2<f32kahan> is about 2x std::accumulate on Zen4. The DGX-H100 table's std::reduce<par, f64> and <par_unseq, f64> rows report 100% error. The Zen4 and DGX tables use older row labels and predate the 2025 code. Single hand-pasted runs with no variance. The README's own conclusion is that multithreaded std::reduce is the CPU winner. [retier] Three kernels in current main return wrong sums on non-uniform data; Zen4 1 GB AVX-512 rows measured by pre-fix kernels that read half the array; no licence file",
     "found_via": [
       "Independent benchmark suites and blogs (shootouts; harvest their winners): github.com/topics/sve (C++ list) surfaced the repo; README result tables for DGX-H100 and AWS Zen4 read directly"
     ],
@@ -13923,7 +13958,15 @@
         "https://raw.githubusercontent.com/ashvardanian/ParallelReductionsBenchmark/main/LICENSE"
       ],
       "page_compares_against_baseline": true,
-      "numbers_found_on_page": true
+      "numbers_found_on_page": true,
+      "retier": {
+        "from": "A",
+        "to": "C",
+        "reason": "Enricher (2026-10-12): numbers measured on code with correctness bugs. The harness fills the array with 1.0f and checks only against n, hiding wrong sums in avx2_f64_t (upper lane dropped), avx512_f32unrolled_t (accumulators double-counted and dropped) and avx512_f32interleaving_t (every other 64-byte line skipped, acc4 dropped); the Zen4 1 GB AVX-512 rows, including the 26.84 GB/s interleaving figure, predate commit a301c39 'Fix: Measuring AVX-512 throughput' whose kernels read half the array. Later-fixed-bug precedent; unlicensed, reference only.",
+        "urls_opened": [
+          "https://github.com/ashvardanian/ParallelReductionsBenchmark/commit/a301c39"
+        ]
+      }
     },
     "corrected_fields": {
       "claimed_speedup": "AWS Zen4 m7a.metal-48xl, GCC 12, single thread: unrolled<f32> 35.1514 GB/s and avx2<f32> 33.3195 GB/s versus std::accumulate<f32> 4.88655 GB/s (about 7.2x and 6.8x, derived from page data); avx512<f32interleaving> 26.8351 GB/s; multithreaded std::reduce<par,f32> 368.528 GB/s (about 75x, derived from page data). Nvidia DGX-H100 host, GCC 12: avx2<f32> 9.69112 GB/s versus std::accumulate<f32> 5.5322 GB/s (about 1.75x, derived from page data); cub@cuda 3.012 TB/s.",
@@ -16451,12 +16494,12 @@
     "name": "brepkit",
     "repo_url": "https://github.com/andymai/brepkit",
     "language": "Rust",
-    "baseline": "OpenCASCADE (OCCT) compiled to WebAssembly (occt-wasm 3.8.3), both through the brepjs adapter",
+    "baseline": "occt-wasm 3.8.3 (OCCT compiled to wasm) with a double-build defect in every two-operand boolean, fixed in occt-wasm 5.5.1 (PR #383, 2026-10-03)",
     "baseline_in_list": false,
     "metric": "latency",
     "workload": "Nine B-rep CAD operations on small test solids in single-threaded Node.js: fuse of two boxes, box minus cylinder, box chamfer, box fillet, box-sphere intersect, 16-hole multi-boolean, sphere tessellation, box volume, STEP export; median of 5 iterations after 2 warm-ups, every row output-verified before timing.",
     "claimed_speedup": "brepkit (wasm) vs OCCT (wasm): fuse(box,box) x10 0.43 ms vs 44.9 ms (103x); cut(box,cylinder) x10 19.2 vs 64.9 ms (3.4x); box+chamfer 0.10 vs 5.6 ms (55x); box+fillet 0.33 vs 6.1 ms (18x); intersect(box,sphere) x10 0.23 vs 59.1 ms (252x); multi-boolean 4.6 vs 30.3 ms (6.6x); mesh sphere 6.2 vs 49.4 ms (7.9x); volume x100 0.18 vs 9.8 ms (54x); exportSTEP x10 0.85 vs 14.3 ms (17x).",
-    "evidence_tier": "C",
+    "evidence_tier": "D",
     "benchmark_url": "https://github.com/andymai/brepkit",
     "compiler_and_flags": "Rust 1.88+, cargo build -p brepkit-wasm --target wasm32-unknown-unknown --release (wasm-opt settings not stated). The current occt-wasm README states its build: emcc -O3 -flto -fwasm-exceptions with WASM SIMD (-msimd128, no relaxed SIMD), then wasm-opt -O4 --converge --gufa; it does not say whether the benchmarked 3.8.3 release (published 2026-08-03) used the same flags. Released npm packages exact-pinned in the brepkit-bench package.json and lockfile: brepkit-wasm 3.0.0, occt-wasm 3.8.3, brepjs 18.120.0, tsx 4.23.1; Node 20+.",
     "hardware": "Linux x86_64, CPU model not stated",
@@ -16466,7 +16509,7 @@
     "maintenance_status": "active",
     "stars_or_usage": "32 stars; npm package brepkit-wasm, crate brepkit-operations",
     "tradeoffs": "Different kernel, not a port of OCCT: feature coverage is narrower (IGES is experimental, PLY import not exposed in wasm). AGPL-3.0-only with a commercial licence for proprietary embedding and a contributor licence agreement; versions through 2.129.x were MIT OR Apache-2.0. Native Rust build is faster still than the wasm build.",
-    "caveats": "First-party numbers: brepkit, the OCCT wasm baseline (occt-wasm) and the brepjs adapter used by both sides all come from the same author. CPU model not stated in the README (the harness prints it at run time but the published table omits it). Workloads are tiny primitives: the fuse row unions a box with a smaller box fully contained in it (touching three faces), so a containment fast path can dominate the 103x figure; volume(box) x100 measures an analytic box. Boolean and STEP rows are batches of ten. No native OCCT baseline; the brepkit native column has no OCCT counterpart. Numbers are for brepkit-wasm 3.0.0 and occt-wasm 3.8.3, both since superseded (4.1.49 and 5.7.0 on npm, 2026-10-11). The adapter paths are thin on both sides (direct k.fuse/k.cut/getVolume calls in brepjs src/kernel/occtWasm and src/kernel/brepkit), so adapter overhead looks comparable. Dual licence: AGPL-3.0-only or commercial from 3.0.0 on; versions through 2.129.x were MIT OR Apache-2.0.",
+    "caveats": "First-party numbers: brepkit, the OCCT wasm baseline (occt-wasm) and the brepjs adapter used by both sides all come from the same author. CPU model not stated in the README (the harness prints it at run time but the published table omits it). Workloads are tiny primitives: the fuse row unions a box with a smaller box fully contained in it (touching three faces), so a containment fast path can dominate the 103x figure; volume(box) x100 measures an analytic box. Boolean and STEP rows are batches of ten. No native OCCT baseline; the brepkit native column has no OCCT counterpart. Numbers are for brepkit-wasm 3.0.0 and occt-wasm 3.8.3, both since superseded (4.1.49 and 5.7.0 on npm, 2026-10-11). The adapter paths are thin on both sides (direct k.fuse/k.cut/getVolume calls in brepjs src/kernel/occtWasm and src/kernel/brepkit), so adapter overhead looks comparable. Dual licence: AGPL-3.0-only or commercial from 3.0.0 on; versions through 2.129.x were MIT OR Apache-2.0. [retier] OCCT booleans ran twice per operation in the benchmarked baseline; fuse and intersect rows hit brepkit special cases; issue #1517's gridfinity workload shows 0.63-0.69x of occt-wasm time against the same pre-fix baseline",
     "found_via": [
       "Blogs / talks: npm registry scan of wasm packages (occt-wasm search result) led to the brepkit README Performance section; harness repo andymai/brepkit-bench is linked there."
     ],
@@ -16502,11 +16545,21 @@
         "https://registry.npmjs.org/brepkit-wasm"
       ],
       "page_compares_against_baseline": true,
-      "numbers_found_on_page": true
+      "numbers_found_on_page": true,
+      "retier": {
+        "from": "C",
+        "to": "D",
+        "reason": "Enricher (2026-10-12): crippled baseline with no valid measurement. The benchmarked occt-wasm 3.8.3 constructs BRepAlgoAPI_Fuse/Cut/Common op(a, b) and then calls op.Build(), so every two-operand boolean in the OCCT column ran twice (fixed by the same author in occt-wasm 5.5.1, PR #383, 2026-10-03, booleans 2.0-3.8x faster); the fuse and intersect rows additionally hit brepkit shortcuts (containment copy, closed-form box-sphere octant) and 12 of 16 multi-boolean tools take the disjoint-cut copy path, so only the cut row exercises the general boolean engine and that row is about parity at PR #383's bound; brepkit-bench still pins 3.8.3.",
+        "urls_opened": [
+          "https://github.com/andymai/brepkit-bench",
+          "https://github.com/andymai/occt-wasm/pull/383"
+        ]
+      }
     },
     "corrected_fields": {
       "compiler_and_flags": "Rust 1.88+, cargo build -p brepkit-wasm --target wasm32-unknown-unknown --release (wasm-opt settings not stated); occt-wasm build flags not stated. Released npm packages exact-pinned in the brepkit-bench lockfile: brepkit-wasm 3.0.0, occt-wasm 3.8.3, brepjs 18.120.0.",
-      "caveats": "First-party numbers; CPU model not stated; the OCCT wasm baseline (occt-wasm) is built by the same author, whose build settings are not stated. Small primitive test shapes; boolean and STEP rows are batches of ten operations. No native OCCT baseline is reported. The comparison goes through a shared adapter layer that may add per-call overhead for both sides."
+      "caveats": "First-party numbers; CPU model not stated; the OCCT wasm baseline (occt-wasm) is built by the same author, whose build settings are not stated. Small primitive test shapes; boolean and STEP rows are batches of ten operations. No native OCCT baseline is reported. The comparison goes through a shared adapter layer that may add per-call overhead for both sides.",
+      "baseline": "OpenCASCADE (OCCT) compiled to WebAssembly (occt-wasm 3.8.3), both through the brepjs adapter"
     }
   },
   {

@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/2004scape/rsmod-pathfinder",
+  "one_liner": "Rust/wasm port of rsmod's BFS tile pathfinder; about 5.5x faster per path than its earlier TypeScript build on Node.",
+  "what_it_does": "A breadth-first-search route finder for RuneScape-style tile maps (a port of rsmod's Kotlin pathfinder) with per-tile collision flags, wall/loc/NPC/player updates, line-of-sight and line-of-walk checks and a naive pathfinder. It ships as a Rust crate (lib name rsmod; PathFinder::find_path takes 14 arguments plus a collision strategy and returns packed CoordGrid waypoints as Vec<u32>) and as an npm package built by wasm-pack for Node, whose exports (findPath, changeWall, changeLoc, __set and others) work on one global collision map and one global PathFinder inside the wasm instance. Argument order matches the 4.x TypeScript findPath, but the result is a Uint32Array of packed coordinates rather than Route/RouteCoordinates objects.",
+  "how_it_is_fast": "Unweighted 8-direction BFS over a 128x128 window centred on the source, using flat arrays (i8 direction grid, i32 distance grid) and a 4096-entry ring-buffer queue, with collision tested as bit-mask ANDs against per-direction BLOCK_* masks. The Rust port reads flags through unchecked raw-pointer indexing into a zone table of 16,777,216 Option<Box<[u32; 64]>> slots, built with LTO, opt-level 3 and wasm-opt -O4 for the wasm package. Part of the gain over TypeScript is data layout rather than language: the 4.2.5 TypeScript version used an Int32Array direction grid and a 2,457,600-slot holey JS Array of Int32Array|null read with optional chaining for every flag lookup.",
+  "when_to_use": [
+    "A Node or Rust server for a 2004-era RuneScape-style game (tile grid with wall and loc collision flags) where per-tick NPC and player pathfinding is hot.",
+    "You need rsmod pathfinding semantics exactly (BFS, closest-approach fallback within 10 tiles, waypoint cap such as 25) from JavaScript without running the Kotlin original on the JVM.",
+    "Many short routes per tick on one thread: about 2.8 us per 10-tile route natively and about 7 us through wasm on Node on a Ryzen 9 3900X (first-party).",
+    "You want a small ISC-licensed pathfinder to vendor and adapt; the Rust source is a direct, readable port of the Kotlin code."
+  ],
+  "when_not_to_use": [
+    "General graph, navmesh or weighted-cost pathfinding: this is an unweighted BFS confined to a 128x128 window, with no A* heuristic.",
+    "Several worlds per process or calls from multiple workers sharing one instance: the wasm API keeps a single global collision map and PathFinder in static mut state.",
+    "Memory-tight hosts: the collision table reserves 16,777,216 pointer slots (64 MB of wasm32 linear memory, 128 MB of zeroed virtual memory natively) before any zone is allocated, and wasm memory never shrinks.",
+    "You need a maintained dependency: the repository was archived on 2026-02-17 (last commit 2024-10-26) and its issue tracker has no issues at all.",
+    "You relied on the 4.x TypeScript input checks: that version threw on coordinates outside 0..0x7fff or levels outside 0..3, while the Rust port masks coordinates with bit operations and never errors."
+  ],
+  "integration": {
+    "form": "crate (rsmod-pathfinder 5.0.4, lib name rsmod) and npm module (@2004scape/rsmod-pathfinder 5.0.4, wasm-pack --target nodejs)",
+    "dependencies": "wasm-bindgen 0.2.95, once_cell, serde, serde_json, rand, getrandom (js feature); criterion 0.5.1 for benches",
+    "min_toolchain": "Rust 2021 edition (no rust-version declared); wasm-pack with wasm-opt for the npm build; Node for the published package",
+    "platforms": "any Rust target natively; the npm package is a wasm32 build for Node (CommonJS, --target nodejs), no browser or bundler build is published",
+    "thread_safety": "Native PathFinder::find_path takes &mut self, so use one PathFinder per thread; a CollisionFlagMap can be shared read-only. The wasm exports mutate global static mut state and are not reentrant.",
+    "drop_in_for_baseline": "partial — same algorithm and argument order as the 4.x TypeScript findPath, but 5.x returns a Uint32Array of packed coordinates instead of a Route, and the collision map lives inside wasm (updated through __set and change* calls) instead of a JS CollisionFlagMap object"
+  },
+  "gotchas": [
+    "Harness flaw in cargo bench: benches/pathfinder.rs uses iter_batched with BatchSize::SmallInput, cloning a roughly 112 KB PathFinder (16 KB i8 directions, 64 KB distances, two 16 KB ring buffers) per iteration in setup and consuming it inside the timed routine, so each timed call runs on a cold copy and also pays its four frees. That explains why criterion reports 7.19 us while the src/main.rs loop, which reuses one warm PathFinder, reports 2.8 us; quote the main.rs figure for steady-state server use.",
+    "Baseline mismatch: the TypeScript row (4.2.5, January 2024) and the AssemblyScript row (5.0.x, May 2024) ran earlier code with no driver anywhere in the repo, and Node/V8 versions are not stated. Besides the language change, the Rust port shrank the direction grid from 32-bit to 8-bit entries (each call clears 80 KB instead of 128 KB) and dropped the TS holey-Array zone table, so the 5.5x mixes runtime and data-layout gains.",
+    "Every find_path call clears the full 128x128 direction and distance grids regardless of route length, so very short routes pay a fixed reset cost that a generation-counter scheme would avoid.",
+    "lumbridge.json holds 4096 rows of 64 values with exactly one non-zero flag per row (2,338 flagged tiles) at the position the harness reads, so the map reconstruction is consistent. The source tile (3232,3205) has ROOF, WALL_NORTH and WALL_NORTH_PROJ_BLOCKER and the tile north of it holds a LOC, so the benchmark route has to detour rather than walk straight north."
+  ],
+  "pick_this_over_siblings_when": "Pick it when you need a RuneScape-style tile pathfinder in Node or Rust; unlike general wasm-versus-JS demos such as wasm-and-ffi-performance-comparison-in-node or tinymt-wasm-typescript-benchmark, it times Rust wasm, AssemblyScript and TypeScript ports of the same real library, though at different code versions.",
+  "verified_claims_summary": "On one AMD Ryzen 9 3900X under Windows, 100k pathfinding calls on the Lumbridge map square (10-tile route north, rsmod BFS) took about 279 ms in native Rust (2.8 us per call), about 702 ms for the Rust wasm build on Node (7.0 us), about 1,530 ms for the earlier AssemblyScript 5.0.x wasm release (15.3 us) and about 3,840 ms for the earlier TypeScript 4.2.5 release (38.5 us), so Rust wasm was about 5.5x faster than TypeScript (derived from page data). The Rust drivers (src/main.rs, src/main.js) are in the repo; the AssemblyScript and TypeScript drivers are not, and Node and V8 versions are not given.",
+  "status_note": "Archived on 2026-02-17 with the last commit on 2024-10-26 (crate 5.0.4, 2,620 total downloads), but ISC-licensed, small and dependency-light enough to vendor if you need rsmod pathfinding semantics.",
+  "sources_read": [
+    "https://github.com/2004scape/rsmod-pathfinder",
+    "https://github.com/2004scape/rsmod-pathfinder/tree/main/src/rsmod",
+    "https://github.com/2004scape/rsmod-pathfinder/commits/main",
+    "https://github.com/2004scape/rsmod-pathfinder/issues?q=is%3Aissue",
+    "https://github.com/2004scape/rsmod-pathfinder/pull/1",
+    "https://github.com/2004scape/rsmod-pathfinder/pull/3",
+    "https://github.com/2004scape/rsmod-pathfinder/tree/1114386/src",
+    "https://raw.githubusercontent.com/2004scape/rsmod-pathfinder/HEAD/README.md",
+    "https://raw.githubusercontent.com/2004scape/rsmod-pathfinder/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/2004scape/rsmod-pathfinder/HEAD/package.json",
+    "https://raw.githubusercontent.com/2004scape/rsmod-pathfinder/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/2004scape/rsmod-pathfinder/HEAD/src/main.js",
+    "https://raw.githubusercontent.com/2004scape/rsmod-pathfinder/HEAD/benches/pathfinder.rs",
+    "https://raw.githubusercontent.com/2004scape/rsmod-pathfinder/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/2004scape/rsmod-pathfinder/HEAD/src/rsmod.rs",
+    "https://raw.githubusercontent.com/2004scape/rsmod-pathfinder/HEAD/src/rsmod/pathfinder.rs",
+    "https://raw.githubusercontent.com/2004scape/rsmod-pathfinder/HEAD/src/rsmod/collision/collision.rs",
+    "https://raw.githubusercontent.com/2004scape/rsmod-pathfinder/HEAD/src/rsmod/collision/collision_strategy.rs",
+    "https://raw.githubusercontent.com/2004scape/rsmod-pathfinder/HEAD/src/rsmod/flag/collision_flag.rs",
+    "https://raw.githubusercontent.com/2004scape/rsmod-pathfinder/HEAD/lumbridge.json",
+    "https://raw.githubusercontent.com/2004scape/rsmod-pathfinder/1114386/README.md",
+    "https://raw.githubusercontent.com/2004scape/rsmod-pathfinder/1114386/src/index.ts",
+    "https://raw.githubusercontent.com/2004scape/rsmod-pathfinder/1114386/src/rsmod/PathFinder.ts",
+    "https://raw.githubusercontent.com/2004scape/rsmod-pathfinder/1114386/src/rsmod/collision/CollisionFlagMap.ts",
+    "https://raw.githubusercontent.com/2004scape/rsmod-pathfinder/8ff4033/README.md",
+    "https://raw.githubusercontent.com/2004scape/rsmod-pathfinder/8ff4033/src/rsmod/PathFinder.ts",
+    "https://raw.githubusercontent.com/2004scape/rsmod-pathfinder/8ff4033/src/rsmod/collision/CollisionFlagMap.ts",
+    "https://crates.io/api/v1/crates/rsmod-pathfinder",
+    "https://registry.npmjs.org/@2004scape%2frsmod-pathfinder"
+  ],
+  "confidence": 0.78
+}

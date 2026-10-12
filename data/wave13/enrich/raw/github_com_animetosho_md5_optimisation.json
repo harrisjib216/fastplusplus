@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/animetosho/md5-optimisation",
+  "one_liner": "Inline-asm single-stream MD5 for x86/ARM/AArch64; beats OpenSSL's hand-tuned x86 assembly by 4-17%, 26% with AVX-512.",
+  "what_it_does": "A write-up of MD5 latency tricks plus GNU inline-assembly headers (md5-x86-asm.h, md5-arm-asm.h, md5-arm64-asm.h) that implement the 64-byte MD5 compression function in several variants: Standard, GOpt, GHOpt, GHBMI, NoLEA, NoLEA+G/GH, Cache4/8, Cache8+G and AVX512. Each variant is a force-inlined `md5_block_*(MD5_STATE*, const void* block)` call. md5.cpp shows the surrounding init, padding and length code and runs known-answer tests and a 16 KB throughput benchmark. It is not a packaged library and has no MD5_Init/Update/Final API, so you wrap a block function yourself. The output is a standard MD5 digest.",
+  "how_it_is_fast": "MD5 is one long dependency chain, so every trick moves the `b` input later in each round to shorten the critical path. G is computed as `(d & b) + (~d & c)`, so the `~d & c` half can be added to `a` before `b` is ready (G-function shortcut). With BMI1, `ANDN` saves a NOT and a MOV, and clausecker's identity rewrites I as a subtraction of `c ^ (~b & d)`. LEA can be replaced with two ADDs on Intel cores where three-operand LEA has 3-cycle latency, H-round MOVs are removed by reusing the XOR result, and input words can be cached in registers. On Intel, AVX-512VL `vpternlogd` computes F/G/H/I in one instruction and `vprold` rotates, both on a single xmm lane, which brings the critical path to 4 cycles per round (theoretical 4.0 cycles per byte vs 4.75 for the standard schedule).",
+  "when_to_use": [
+    "Single-stream MD5 over long buffers where a file format or protocol mandates MD5 (PAR2, Content-MD5 or ETag checks, legacy checksums) and you control the build: GOpt or GHOpt gain about 5% on most cores tested and never lose more than 1.24% (GHOpt on K10).",
+    "Intel CPUs with AVX-512VL (Skylake-X and later Intel): the AVX512 variant reached 4.051 cycles per byte vs 4.99 for the standard schedule on Skylake-X (+23%, about +26% over OpenSSL 1.1.1h, derived from page data).",
+    "Fleets of one known microarchitecture, where you can pick the best variant from the table (NoLEA+G gives +9.7% on Skylake-X and Haswell).",
+    "As a reference when writing MD5 for another language or ISA: FreeBSD's libmd amd64 md5block.S by Robert Clausecker, linked from discussion #9 (Phabricator D45670), ships baseline, BMI1 ANDN and AVX-512 vpternlogd kernels using the same ideas."
+  ],
+  "when_not_to_use": [
+    "Anything security-relevant: MD5 is cryptographically broken. Use SHA-256 or BLAKE3.",
+    "Hashing many independent streams at once: multi-buffer SIMD (Intel isa-l_crypto md5_mb, minio/md5-simd) gives far higher aggregate throughput than any single-buffer schedule.",
+    "AMD Zen4 with the AVX-512 variant (2-cycle vector rotate latency, per the README). On Merom, Piledriver and Jaguar the NoLEA variants are slower than the standard schedule (down to -6.65% on Piledriver).",
+    "MSVC builds, or projects that want a drop-in library: these are GNU extended inline-asm headers (GCC/Clang/MinGW) with no streaming API, build system or packaged releases.",
+    "If OpenSSL is already linked and a 4-17% MD5 gain does not matter: the headline 5% and 23% are relative to the repo's own control schedule, not to OpenSSL."
+  ],
+  "integration": {
+    "form": "header-only (inline-asm source-drop; md5.cpp is an example driver)",
+    "dependencies": "none (immintrin.h for the AVX-512 variant)",
+    "min_toolchain": "GCC or Clang with GNU extended inline asm, C++11 (MD5_STATE is a template); benchmarked with Clang 11.0.0 -O3. -mbmi for GHBMI, -mbmi -mavx512vl for the AVX512 variant",
+    "platforms": "x86 (32-bit and x86-64; Cache4/Cache8/Cache8+G and AVX512 need x86-64, AVX512 needs AVX-512VL), 32-bit ARM (little and big endian), AArch64; only x86 is benchmarked",
+    "thread_safety": "Reentrant by code reading: pure block functions on a caller-owned state, with no globals",
+    "drop_in_for_baseline": "partial: digests are standard MD5, but there is no MD5_Init/Update/Final or EVP interface, so you write the buffering and padding wrapper (md5.cpp shows one)"
+  },
+  "gotchas": [
+    "The README numbers were measured on commit e42661105 (December 2020), whose inline-asm operands have no early-clobber markers (0 '&' constraints vs 65 at HEAD). The author's own comment says compilers 'incorrectly clobber' operands. Commit b5cfafc 'Fix register clobbers' (2021-08-08) fixed every x86 variant and the AVX-512 one without changing instructions. The measured build relied on undefined register allocation that happened to work under Clang 11, and md5.cpp's known-answer tests only print 'TEST ERROR' and do not stop the benchmark. Later changes (REX-prefix avoidance and an AVX-512 tweak in 2023, the BMI1 variant in 2024) are not reflected in the published table. Copy current HEAD, not the benchmarked commit.",
+    "Two harnesses: OpenSSL was read from `openssl speed md5` (16 KB, best of 3) and the variants from md5.cpp (calloc'd 16 KB zero buffer, 16384 hashes, best of 5). The author's 'Standard' control is sometimes faster than OpenSSL for reasons he says he does not know, so the gains over OpenSSL itself are 4-17% (derived from the chart's data table), not the 5-10% vs Standard quoted in prose.",
+    "No variant wins everywhere. The best choice depends on the microarchitecture (LEA latency, rotate latency), so runtime dispatch or per-target builds are needed to get the quoted gains.",
+    "The x86 headers assume little-endian input loads. Big-endian handling exists only in the ARM headers."
+  ],
+  "pick_this_over_siblings_when": "Pick it over minio/md5-simd or gocrack's md5x8 when you need one MD5 stream as fast as possible: those siblings get their speedups by hashing 8-16 independent streams in SIMD lanes, which does nothing for a single file. Pick them for bulk multi-object hashing or cracking.",
+  "verified_claims_summary": "Single-buffer MD5 of 16 KB inputs was measured on seven x86 microarchitectures at locked frequency (Merom, Haswell, Skylake-X, Airmont, K10, Piledriver, Jaguar; Clang 11.0.0 -O3 -static). The best scalar variant per CPU beat the author's standard schedule by 1-10% and OpenSSL 1.1.1h's `openssl speed md5` by about 4-17% (derived from the chart's data table). The AVX-512VL variant ran at 4.051 vs 4.99 cycles per byte on Skylake-X (+23% over Standard, about +26% over OpenSSL, derived).",
+  "status_note": "Low-churn and copyable: Apache-2.0 OR MIT (licence files added 2026-09-17), last commit 2026-09-21, last code changes 2024-06 (BMI1 trick) and 2026-05 (AArch64 constraint fix), no open issues. The benchmark table dates from December 2020 and predates the 2021 clobber fix.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/animetosho/md5-optimisation/HEAD/README.md",
+    "https://raw.githubusercontent.com/animetosho/md5-optimisation/HEAD/md5.cpp",
+    "https://raw.githubusercontent.com/animetosho/md5-optimisation/HEAD/Makefile",
+    "https://raw.githubusercontent.com/animetosho/md5-optimisation/HEAD/md5-x86-asm.h",
+    "https://raw.githubusercontent.com/animetosho/md5-optimisation/HEAD/md5-arm-asm.h",
+    "https://raw.githubusercontent.com/animetosho/md5-optimisation/HEAD/md5-arm64-asm.h",
+    "https://raw.githubusercontent.com/animetosho/md5-optimisation/e42661105e971c94d0397e5b41bcf0a58e5874d3/md5-x86-asm.h",
+    "https://github.com/animetosho/md5-optimisation/commits",
+    "https://github.com/animetosho/md5-optimisation/commit/b5cfafc9a98fd11003a4c313196e2376d97dc9de",
+    "https://github.com/animetosho/md5-optimisation/discussions/9",
+    "https://github.com/animetosho/md5-optimisation/issues",
+    "https://raw.githubusercontent.com/freebsd/freebsd-src/main/lib/libmd/amd64/md5block.S"
+  ],
+  "confidence": 0.8
+}

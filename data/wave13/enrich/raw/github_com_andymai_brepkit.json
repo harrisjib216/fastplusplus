@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/andymai/brepkit",
+  "one_liner": "Pure-Rust B-rep CAD kernel for native and wasm; README claims 3.4-252x over OCCT-in-wasm on tiny primitive operations.",
+  "what_it_does": "A from-scratch exact-geometry CAD kernel (B-rep with analytic and NURBS surfaces): primitives, booleans (General Fuse engine), fillet/chamfer, shell, sweeps, lofts, tessellation, healing, measurement and STEP/STL/3MF/OBJ/PLY/glTF I/O. In Rust you work on a `Topology` arena through free functions such as `boolean(&mut topo, BooleanOp::Cut, a, b)`, and every call returns a `Result`. In JavaScript the npm package `brepkit-wasm` exposes a `BrepKernel` object with u32 shape handles (`makeBox`, `cut`, `volume`, `exportStep`). It is not an OCCT port. It replaces OCCT only through the author's brepjs adapter layer, which drives both kernels.",
+  "how_it_is_fast": "The kernel classifies each operand analytically (box, cylinder, cone, sphere, torus) before running the general boolean. Closed-form shortcuts then handle identical solids, containment (the result is a copy of one operand), axis-aligned box pairs (AABB algebra), the box-sphere octant intersect, coaxial cylinders, cones and tori, concentric spheres, and disjoint fuse or cut (shell merge or copy). Only inputs that miss every shortcut reach the pave-filler General Fuse pipeline. Volume uses exact formulas for primitives and a polygon divergence integral for all-planar solids, so nothing is tessellated. Native builds also mesh faces in parallel with rayon. The wasm build is single-threaded.",
+  "when_to_use": [
+    "Parametric CAD in the browser or Node (configurators and generators like the author's Gridfinity layout tool) built mostly from boxes, cylinders and spheres with booleans, fillets and chamfers, where OCCT-in-wasm feels slow. On the author's 26-scenario Gridfinity generator suite (issue #1517, August 2026) brepkit took 0.63-0.69x of occt-wasm's aggregate time and was faster on 24 of 26 scenarios.",
+    "Rust projects that want exact B-rep modelling with no C++ toolchain, no `unsafe` (denied by lint) and a Result-returning API.",
+    "Chained booleans on analytic geometry, where keeping cylinders as cylinders keeps the face count low (README: a nine-step compound boolean settles at 72 faces).",
+    "Open-source (AGPL-compatible) applications, or teams willing to buy the commercial licence. For permissive terms, pin a release up to 2.129.x (MIT OR Apache-2.0)."
+  ],
+  "when_not_to_use": [
+    "Closed-source products without the commercial licence: 3.0.0 and later are AGPL-3.0-only, and contributions need a signed CLA.",
+    "Workloads that need OCCT's breadth: IGES is experimental (analytic surfaces skipped on export, planar placeholders on import), there are no colours, layers, materials or PMI in exchange, PLY import is missing from the wasm API, and general torus booleans have known gaps.",
+    "Hard boolean configurations (coincident faces, coaxial analytic surfaces, razor-thin geometry, very high face counts): these fall back to a mesh boolean that tessellates curved faces and is not guaranteed watertight (README Known Limitations).",
+    "Workloads of general-position booleans if you are expecting the headline 100x+. The one table row that exercises the general engine (box minus corner cylinder) shows 3.4x, measured against an OCCT build that computed every boolean twice (see gotchas).",
+    "Teams that need a stable API: the version went from 3.0.0 (early August 2026) to 4.1.49 (2026-10-11). In August 2026 the author's own generator suite still had 137-154 failures (non-watertight meshes, a 3.13x wrong volume, a panic, timeouts) until brepkit-wasm 3.2.36."
+  ],
+  "integration": {
+    "form": "crate (Cargo workspace published as brepkit-operations, brepkit-topology, brepkit-io and others, all at one version) or npm module brepkit-wasm (wasm-bindgen)",
+    "dependencies": "Pure Rust: robust, thiserror, log, rayon, smallvec, bitflags, serde/serde_json, quick-xml and zip (I/O), wasm-bindgen 0.2.129 for the wasm crate; no C or C++ dependencies",
+    "min_toolchain": "Rust 1.88 (edition 2024); the npm package needs only a wasm-capable JS runtime",
+    "platforms": "Any Rust target; wasm32-unknown-unknown for the npm build (single-threaded); native builds parallelise per-face meshing",
+    "thread_safety": "Single-owner: operations take `&mut Topology`, and a `BrepKernel` wasm instance is not reentrant. Issue #1517 recorded 'recursive use of an object' errors after an aborted boolean left the wasm borrow flag stuck (fixed via #1520).",
+    "drop_in_for_baseline": "partial: through brepjs, OCCT (occt-wasm) and brepkit are interchangeable backends behind one TypeScript API; direct OCCT C++ or opencascade.js code must be rewritten"
+  },
+  "gotchas": [
+    "Baseline defect: occt-wasm 3.8.3, the benchmarked OCCT build, constructed `BRepAlgoAPI_Fuse/Cut/Common op(a, b)` and then called `op.Build()`. The constructor already builds, so every two-operand boolean in the OCCT column ran twice. The same author fixed this in occt-wasm 5.5.1 (PR #383, 2026-10-03), which reports 2.0-3.8x faster booleans and a CI 'fuse x10' of 35.98 ms vs 67.04 ms. The fuse, cut, intersect and multi-boolean rows are therefore inflated. Halving the OCCT time gives roughly 52x, 1.7x, 126x and 3.3x (derived from page data). At PR #383's 3.8x upper bound the cut row is about parity. The brepkit-bench harness and README table were last updated 2026-08-07 and still pin 3.8.3.",
+    "Shortcut rows: in fuse(box, box) the 5 mm box is contained in the 10 mm box, so brepkit's containment shortcut just copies the larger box. In intersect(box, sphere) the sphere is centred on a box corner, which is exactly the 'box-sphere octant' closed-form shortcut. In the multi-boolean row, 12 of 16 cylinders are disjoint and take the disjoint-cut copy path. OCCT runs its full General Fuse algorithm on all of these, so the 103x and 252x figures measure classification shortcuts, not brepkit's boolean engine.",
+    "The volume(box) row hits an exact all-planar polygon integral, while OCCT's BRepGProp runs generic integration. The export row writes one box. Neither predicts complex parts.",
+    "The harness never releases shapes on either side (occt-wasm frees only on release() or kernel disposal, and brepkit's arena grows until checkpoint/restore), so long sessions need explicit memory management."
+  ],
+  "pick_this_over_siblings_when": "No CAD kernel is catalogued among the wasm siblings. Like ywasm and Loro against Yjs, it is a Rust-to-wasm replacement for a heavier incumbent engine, but pick it only when you need exact B-rep solid modelling in JS or Rust. For hashing, CRDTs or data processing the siblings (hash-wasm, Loro, DuckDB-Wasm) are the relevant entries.",
+  "verified_claims_summary": "brepjs 18.120.0 drove brepkit-wasm 3.0.0 and occt-wasm 3.8.3 (OCCT V8.0.1 via Emscripten) in single-threaded Node on Linux x86-64 (CPU not stated), taking the median of 5 runs after 2 warm-ups with every result volume-checked. brepkit led on all nine rows, from 3.4x (box minus cylinder) to 252x (box-sphere intersect). The OCCT side computed each boolean twice (fixed in occt-wasm 5.5.1), and the largest ratios come from brepkit's closed-form shortcuts for contained and box-sphere inputs, so the general-boolean advantage is nearer 1-1.7x (derived from page data).",
+  "status_note": "Very active (about 2,040 commits, last commit 2026-10-11, crate and npm version 4.1.49) and copyable under AGPL-3.0-only or a commercial licence. The published benchmark is two months stale and is still measured against an occt-wasm build with a double-build defect that the same author has since fixed.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/andymai/brepkit/HEAD/README.md",
+    "https://raw.githubusercontent.com/andymai/brepkit/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/andymai/brepkit/HEAD/LICENSE",
+    "https://github.com/andymai/brepkit/tree/main/crates/operations/src/boolean",
+    "https://raw.githubusercontent.com/andymai/brepkit/HEAD/crates/operations/src/boolean/mod.rs",
+    "https://raw.githubusercontent.com/andymai/brepkit/HEAD/crates/operations/src/boolean/classify.rs",
+    "https://raw.githubusercontent.com/andymai/brepkit/HEAD/crates/operations/src/boolean/assembly.rs",
+    "https://raw.githubusercontent.com/andymai/brepkit/HEAD/crates/operations/src/boolean/types.rs",
+    "https://crates.io/api/v1/crates/brepkit-operations/3.0.0/download",
+    "https://crates.io/api/v1/crates/brepkit-algo/3.0.0/download",
+    "https://crates.io/api/v1/crates/brepkit-wasm/3.0.0/download",
+    "https://github.com/andymai/brepkit/issues?q=is%3Aissue+bug",
+    "https://github.com/andymai/brepkit/issues/1517",
+    "https://raw.githubusercontent.com/andymai/brepkit-bench/HEAD/README.md",
+    "https://raw.githubusercontent.com/andymai/brepkit-bench/HEAD/bench.ts",
+    "https://raw.githubusercontent.com/andymai/brepkit-bench/HEAD/package.json",
+    "https://github.com/andymai/brepkit-bench/commits/main",
+    "https://raw.githubusercontent.com/andymai/brepjs/main/src/kernel/occtWasm/booleanOps.ts",
+    "https://raw.githubusercontent.com/andymai/brepjs/main/src/kernel/brepkit/booleanOps.ts",
+    "https://raw.githubusercontent.com/andymai/brepjs/main/src/kernel/occtWasm/measureOps.ts",
+    "https://raw.githubusercontent.com/andymai/brepjs/main/src/kernel/brepkit/measureOps.ts",
+    "https://registry.npmjs.org/brepjs/-/brepjs-18.120.0.tgz",
+    "https://github.com/andymai/occt-wasm",
+    "https://github.com/andymai/occt-wasm/tree/main/facade",
+    "https://github.com/andymai/occt-wasm/tree/main/facade/src",
+    "https://github.com/andymai/occt-wasm/tree/main/facade/generated",
+    "https://raw.githubusercontent.com/andymai/occt-wasm/HEAD/facade/src/kernel.cpp",
+    "https://raw.githubusercontent.com/andymai/occt-wasm/HEAD/facade/generated/kernel.cpp",
+    "https://raw.githubusercontent.com/andymai/occt-wasm/v3.8.3/facade/generated/kernel.cpp",
+    "https://raw.githubusercontent.com/andymai/occt-wasm/HEAD/CHANGELOG.md",
+    "https://github.com/andymai/occt-wasm/pull/383"
+  ],
+  "confidence": 0.8
+}

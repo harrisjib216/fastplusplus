@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/almide/almide",
+  "one_liner": "LLM-oriented statically typed language that compiles to Rust and WebAssembly; its native output beats Box-per-node Rust on two tree-allocation benchmarks.",
+  "what_it_does": "Almide is a new language (pre-1.0, a frozen LLM-facing surface since 2026-08-20) built to maximise how often AI-edited code still compiles and passes tests. The compiler, written in Rust, emits Rust source for native binaries (built by cargo) and emits WebAssembly directly without LLVM, with byte-identical stdout across the two targets as a CI-enforced contract. It is not a drop-in for anything: you write .almd programs and run `almide build --release` or `almide build --target wasm`.",
+  "how_it_is_fast": "The below-1.0 rows come from one optimisation, the region window (#1991, PR #2032): when the effect system proves a `check(make(d))` pair region-pure (no effects, no globals, scalar result), the compiler clones both functions as `__rgn_` twins over Copy enums whose recursive fields are handles into a thread-local bump arena, and rewinds the arena once per tree instead of freeing each node. Everything else is ordinary rustc/LLVM codegen with Perceus-style ownership inference deciding clones and drops, which is why arithmetic kernels sit at parity with hand-written Rust and the IR optimiser's own passes measure 1.00x in the project's ablation.",
+  "when_to_use": [
+    "You want an LLM to write and repeatedly edit small programs and need compiler diagnostics that name the fix, with one source building both a native binary and a small self-contained wasm module (Hello world 325 B on develop).",
+    "Allocation-heavy recursive-variant code whose tree lives for exactly one produce-then-consume expression (binarytrees/treealloc shape): the region window gives about 0.30-0.35x the time of Box-per-node Rust on an M4 Pro and 0.37-0.58x on an ubuntu-latest runner.",
+    "Numeric kernels where parity with hand-written Rust is enough (n-body and spectral-norm 1.00x on M4 Pro, 1.03-1.07x on the CI runner).",
+    "Programs that must produce byte-identical output natively and under wasmtime, e.g. reproducible CLI tools that also ship to the browser."
+  ],
+  "when_not_to_use": [
+    "As evidence that a compiler beats Rust in general: a Rust program using an arena (bumpalo or typed-arena, as Benchmarks Game entries do) erases the win; issue #3586 records a hand-written Rust arena at 31.3 ms against Almide native 51 ms on binarytrees d19x12 (M4 Pro), and the project's own table shows Zig's arena at 88 ms vs 72 ms.",
+    "Float-heavy code that calls sin/cos (deterministic software libm for cross-target byte identity costs about 1.6x on listbuild), fasta (1.16x slower) and FFT (1.18x slower) on M4 Pro.",
+    "Trees that are held (`let t = make(d)` read twice), contain String payloads, touch globals or mut params, or cross a lambda: the window does not fire and the emitted Box code runs 1.10-1.26x slower than the Rust reference.",
+    "Production use needing stability guarantees: pre-1.0, support limited to the latest release line, 35 stars, and the region-window PR (#2032) merged with no reviews listed.",
+    "Comparisons against JavaScript/V8 or Emscripten (this category's baseline): the repo never measures them; its wasm numbers are only ratios to its own native binary."
+  ],
+  "integration": {
+    "form": "compiler binary (Rust crate, single executable; native output is a cargo-built Rust binary, wasm output is a self-contained WASI module)",
+    "dependencies": "Building the compiler needs Rust 1.96+ (the binary embeds a wasmtime host); native builds of user programs need a Rust toolchain and cargo; the emitted native binary has 0 crate dependencies",
+    "min_toolchain": "Rust 1.96 (rust-version of the almide package; CI builds with 1.96.0)",
+    "platforms": "macOS (arm64 measured), Linux (ubuntu-latest CI, x86-64 and Neoverse-V2 in issue #3586), Windows installer; wasm32 WASI output runs on stock runtimes",
+    "thread_safety": "Region arena is thread-local and its handles are !Send/!Sync, so a window never spans threads; `fan` runs arms on threads natively only for pure callbacks over scalars",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The region arena never returns memory: chunks start at 64 KiB, double up to 64 MiB each, and are kept for the life of the thread at the high-water mark; rewind does not drop anything (region types are Copy by construction).",
+    "Soundness of the window rests on the compiler's region-pure verdict: the prelude's own comment says a wrong verdict is a silent use-after-rewind that reads stale bytes; only a build-time ALMIDE_REGION_TRAP_STALE=1 build adds generation checks that panic instead.",
+    "Provenance gaps: results/2026-09-08-m4pro-victory-1330.json is a hand-assembled summary (medians and ratios only, no per-run arrays, no rustc version) rather than bench.py's normal output format; the README's fannkuchredux victory row (0.21 at n10, 0.12 at n11, stated as M4 Pro 2026-09-08 median of 9) has no matching raw file: the same victory JSON shows fannkuchredux at 0.964 (n9) and 1.058 (n11), and the parallel run in results/2026-09-09-fan-repair.json reads 54 ms vs 172 ms at n10 (about 0.31x, derived from page data, median of 7), threaded Almide against one-thread Rust.",
+    "The ratio is allocator- and CPU-dependent: binarytrees reads 0.32-0.35 on macOS, 0.581 on the ubuntu-latest runner (BENCHMARKS.md prose still says 0.61), and issue #3586 measured Almide native 94.55 ms vs Rust Box 216.97 ms on a Xeon 8581C, where the native leg was 1.47x slower than its own wasm leg until PR #3597 (2026-10-12); the M4 Pro columns were not re-measured on 0.66."
+  ],
+  "pick_this_over_siblings_when": "Pick Almide over MoonBit, Kotlin/Wasm or wasm_of_ocaml only when you want one LLM-friendly source that builds both a Rust-backed native binary at Rust parity and a tiny wasm module with byte-identical output; for beating JavaScript in V8 those siblings (MoonBit 7.7x over plain JS iterator chains, Kotlin/Wasm vs Kotlin/JS) carry the relevant evidence and Almide carries none.",
+  "verified_claims_summary": "bench.py builds Almide `--release` output and hand-written Rust references (Box-linked recursive enum, one thread, no arena) with rustc -C opt-level=3 -C lto=yes -C codegen-units=1, checks byte-identical stdout, then times 9 interleaved runs after a warmup: on an Apple M4 Pro with almide 0.62.0 (2026-09-08) binarytrees took 134 vs 382 ms (d17) and 581 vs 1826 ms (d19), treealloc 112 vs 375 ms (d20) and 221 vs 748 ms (d21), while the same Almide source with the region window disabled was 1.10-1.26x slower than the Rust reference. The win is an arena against malloc/free per node, not better general codegen; arithmetic kernels are at parity and fasta/FFT are 1.16-1.18x slower.",
+  "status_note": "Very active (11,586 commits on develop, last commit 2026-10-11, PR #3597 merged 2026-10-12) and dual MIT/Apache-2.0, but a pre-1.0 research language with 35 stars whose speed claims are first-party and self-gated by its own CI ratchet.",
+  "sources_read": [
+    "https://github.com/almide/almide",
+    "https://raw.githubusercontent.com/almide/almide/develop/README.md",
+    "https://raw.githubusercontent.com/almide/almide/develop/docs/project/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/almide/almide/develop/research/benchmark/perf/bench.py",
+    "https://raw.githubusercontent.com/almide/almide/develop/research/benchmark/perf/README.md",
+    "https://raw.githubusercontent.com/almide/almide/develop/research/benchmark/perf/rust-ref/binarytrees.rs",
+    "https://raw.githubusercontent.com/almide/almide/develop/research/benchmark/perf/rust-ref/treealloc.rs",
+    "https://raw.githubusercontent.com/almide/almide/develop/research/benchmark/perf/rust-ref/fannkuchredux.rs",
+    "https://raw.githubusercontent.com/almide/almide/develop/research/benchmark/perf/binarytrees/binarytrees.almd",
+    "https://raw.githubusercontent.com/almide/almide/develop/research/benchmark/perf/treealloc/treealloc.almd",
+    "https://raw.githubusercontent.com/almide/almide/develop/research/benchmark/perf/fannkuchredux/fannkuchredux.almd",
+    "https://raw.githubusercontent.com/almide/almide/develop/research/benchmark/perf/results/2026-09-08-m4pro-victory-1330.json",
+    "https://raw.githubusercontent.com/almide/almide/develop/research/benchmark/perf/results/2026-09-08-m4pro.json",
+    "https://raw.githubusercontent.com/almide/almide/develop/research/benchmark/perf/results/2026-09-09-fan-repair.json",
+    "https://github.com/almide/almide/tree/develop/research/benchmark/perf/results",
+    "https://raw.githubusercontent.com/almide/almide/develop/docs/benchmarks/native-victory.txt",
+    "https://raw.githubusercontent.com/almide/almide/develop/scripts/check-perf-ratio.sh",
+    "https://raw.githubusercontent.com/almide/almide/develop/spec/lang/region_window_test.almd",
+    "https://raw.githubusercontent.com/almide/almide/develop/crates/almide-codegen/src/lib.rs",
+    "https://raw.githubusercontent.com/almide/almide/develop/crates/almide-codegen/src/prelude_region.rs",
+    "https://raw.githubusercontent.com/almide/almide/develop/src/cli/build.rs",
+    "https://raw.githubusercontent.com/almide/almide/develop/Cargo.toml",
+    "https://github.com/almide/almide/issues/1991",
+    "https://github.com/almide/almide/pull/2032",
+    "https://github.com/almide/almide/issues/3586",
+    "https://github.com/almide/almide/issues?q=is%3Aissue+region+window"
+  ],
+  "confidence": 0.8
+}
