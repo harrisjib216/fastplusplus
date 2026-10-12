@@ -1,0 +1,90 @@
+[
+  {
+    "id": "lang:javascript/glebolsen/benchlang#binary-trees",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "README results table (3 September 2026) shows Binary Trees C 1.010 s, C++ 1.147 s, JS (Bun 1.3.13) 0.816 s on a Ryzen 9 5900X locked at 3.5 GHz; benchmark code is public (languages/C/bench.c, languages/C++/bench.cpp, languages/JS/bench.js, run_benchmarks.sh) and GCC 16.2.0 with -O3 -march=native -flto -funroll-loops -ffp-contract=off is stated for both C and C++.",
+    "corrections": {
+      "baseline_stdlib": [
+        "libstdc++"
+      ],
+      "workload": "CLBG-style binary trees in one process after four other workloads: a stretch tree of depth 19, a long-lived tree of depth 18, then 2^(22-d) short-lived trees for each even depth d from 4 to 18, each built and checked; C and C++ free every tree with a recursive free pass (malloc/free or new/delete per node) inside the timer, the JS version just drops the references (no free pass).",
+      "caveats": "One run per language ('1 run/lang'), no variance. In-program wall times from a monotonic clock: JIT warm-up is inside the managed runtimes' timed region, but their garbage collection can run partly after the timer stops ('GC runtimes collect when they like'), while C/C++ pay an extra recursive free traversal inside the timer. The column is an allocator benchmark, not a codegen one: Java 0.347 s, Nim 0.809 s, Dart AOT 0.865 s, OCaml 0.865 s, C# 0.931 s and Fortran 0.986 s also beat C's 1.010 s, so per-node glibc malloc/free is the bottleneck and an arena or pool allocator in C/C++ would likely beat every managed runtime (compare the Arena variant in LangArena, where C wins by about 6x). Only the binary-trees column is a Bun win: on primes, fib, strings and mandelbrot Bun loses to C (total 16.732 s vs 9.762 s). Bun's peak RSS is 336.1 MiB vs 33.3 MiB for C. Bun's win is modest (about 1.24x) and rests on one run; Node v26.8.1 is slower than C (1.444 s). The earlier caveat about an 'Updated May 2026' header no longer applies: the current README says results are from September 2026."
+    },
+    "notes": "Numbers and ratios check out against the README table; C, C++ and JS sources implement the same tree build/check with one allocation per node, and C/C++ are at -O3 with -march=native and LTO, so the baseline is not crippled. Main shortcomings: one run per language, GC partly outside the timer while C/C++ free inside it, and the win reflects glibc malloc/free per node rather than JavaScriptCore codegen (Java, Nim, C#, Dart, OCaml and Fortran also beat C on this column).",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/README.md",
+      "https://github.com/GlebOlsen/benchLANG",
+      "https://github.com/GlebOlsen/benchLANG/commits",
+      "https://github.com/GlebOlsen/benchLANG/tree/main/languages",
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/C/bench.c",
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/C++/bench.cpp",
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/JS/bench.js",
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/run_benchmarks.sh",
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/LICENSE"
+    ]
+  },
+  {
+    "id": "lang:javascript/kostya/langarena#binarytrees-obj",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "results/2026-10-05-kostya-ms7c37.js lists Binarytrees::Obj runtimes TypeScript/Bun/JIT 0.973 s, JS/Bun/JIT 1.042 s, C++/G++ 2.101 s, C++/G++/Fast 2.098 s and every C row 2.34-2.55 s on an AMD Ryzen 7 3800X, with compiler versions (GCC 16.0.1 trunk, Clang 22.1.8, Bun 1.4.2) and build commands; the code (cpp/src/binarytrees.cpp, c/src/binarytrees.c, typescript/src/index.ts) and Makefile flags are public.",
+    "corrections": {
+      "compiler_and_flags": "C/C++: GCC 16.0.1 20260322 (trunk, Ubuntu build) and Clang 22.1.8. Headline 'prod' build is -O2 -DNDEBUG -fstack-protector-strong -fno-omit-frame-pointer; 'Fast' is -O3 -march=native -mtune=native -DNDEBUG with -flto=thin; 'Unsafe' is -O3 -ffast-math -march=native with -flto=full; 'PGO' builds are -O2 plus profile use (cpp/Makefile, c/Makefile). Excluding the instrumented PGO/Gen runs, all 16 Clang/GCC x C/C++ configurations lose to Bun. Bun 1.4.2 (results file), run as 'bun run /src/typescript/src/index.ts' and 'bun run /src/javascript/index.js', default JIT settings.",
+      "workload": "Binarytrees::Obj with depth 20 (a 2^21-1 node tree of individually allocated nodes), built, summed (uint32 checksum 75497436) and, in C/C++, freed per iteration; 30 timed iterations after a warm-up of 20% of the iterations (6), which every language including C/C++ runs.",
+      "caveats": "The win is allocation-strategy specific: in the suite's own Binarytrees::Arena control (index-based arena, same tree) C/Gcc/Fast takes 0.255 s against TypeScript/Bun/JIT 1.553 s, about 6x the other way (derived from page data). The TypeScript harness stops the timer and only then calls global.gc(); garbage from the last trees can be collected outside the timed region, while C frees each tree explicitly and C++ destroys it through unique_ptr destructors inside the timer, and Bun's peak RSS of about 647 MB (vs about 66-70 MB for C/C++) shows several trees' garbage live at once. LangArena calls itself not objective or peer-reviewed and the author says AI tools helped translate the tests. One published measurement per test and configuration (no variance). The headline C/C++ rows are -O2 with hardening flags, but the -O3, LTO, PGO and fast-math variants lose too. The C rows (2.34-2.55 s) are slower than the C++ rows (2.10-2.34 s). Row selected by the search agent as a test where a Bun row beats every C/C++ row; Java/OpenJDK (0.479 s), Kotlin and Scala are faster still and are covered by a separate Java entry."
+    },
+    "notes": "All quoted numbers match the 2026-10-05 results file; Bun version is 1.4.2 (not stated in the record). C, C++ and TypeScript implement the same recursive tree build and sum with one allocation per node, so same_algorithm holds; the gain is per-node malloc/free versus JavaScriptCore's bump allocation and GC, and part of the GC cost can fall after the timer while C/C++ free inside it.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+      "https://github.com/kostya/LangArena",
+      "https://github.com/kostya/LangArena/commits/master",
+      "https://github.com/kostya/LangArena/tree/master/cpp",
+      "https://github.com/kostya/LangArena/tree/master/cpp/src",
+      "https://github.com/kostya/LangArena/tree/master/c/src",
+      "https://github.com/kostya/LangArena/tree/master/typescript/src",
+      "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/Makefile",
+      "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/src/binarytrees.cpp",
+      "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/src/binarytrees.hpp",
+      "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/src/benchmark.cpp",
+      "https://raw.githubusercontent.com/kostya/LangArena/master/c/Makefile",
+      "https://raw.githubusercontent.com/kostya/LangArena/master/c/src/binarytrees.c",
+      "https://raw.githubusercontent.com/kostya/LangArena/master/typescript/src/index.ts",
+      "https://raw.githubusercontent.com/kostya/LangArena/master/run.js"
+    ]
+  },
+  {
+    "id": "lang:java/xemantic/java-2-times-faster-than-c#node-ring",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "README 'Running' section shows real 12.726 s (build/clang) and 12.800 s (build/gcc) for C against 8.569 s for Java with matching checksum 470936697371, with cpuinfo for an Intel Core i7-8550U; code (src/main/c/java_2_times_faster_than_c.c, src/main/java/.../Java2TimesFasterThanC.java) and build scripts (gcc -O3 in build-gcc.sh, Java 15 target in build.gradle.kts) are public. gcc and JVM versions are not stated, which is the weakest point of the A tier.",
+    "corrections": {
+      "compiler_and_flags": "C: gcc -O3 -o ... -lm (build-gcc.sh; compiler version not stated; no -march flag). build-clang.sh is labelled clang but also invokes gcc -O3, so both C rows are gcc. Java: built by ./gradlew build with sourceCompatibility/targetCompatibility Java 15 (build.gradle.kts), run as java -cp build/classes/java/main with no JVM flags; exact JVM version not stated. All timings are whole-process 'time' runs, so the Java figure includes JVM startup and JIT warm-up.",
+      "caveats": "Part of the gap is libm rather than memory management: every node creation calls sin() on arguments up to about 1e13 plus fmod(), and the README's own almost_pseudo_random benchmark (1e9 calls of the same function) takes 64.4 s in C against 51.2 s in Java; with about 1e8 calls in the node-ring run that accounts for very roughly 1.3 s of the 4.2 s gap (derived from page data, assuming per-call cost carries over). The rest is two malloc calls per node and two free calls per delete against HotSpot's generational allocation, i.e. one allocation pattern, not C against Java in general. The README says outperforming Java with better memory management in C is possible, and issue #1 proposes pool/arena allocators (one commenter cut an earlier version from 1m7s to 14s with a one-slot reuse cache), but no timed custom-allocator C version against Java exists in the repo. Single 'time' run per binary on a laptop CPU (no variance, turbo/thermal effects); gcc version unstated; C built without -march=native while HotSpot compiles for the host CPU. Repo last touched February 2021 (JDK 15 era). The 'almost 2 times' framing is the author's; his own numbers show about 1.5x.",
+      "why_faster": "Stated by the author as a hypothesis: allocation-heavy algorithms gain from automatic memory management (no explicit free, generational allocation), and for the sin/fmod part HotSpot may inline Math.sin and the double % operator where C calls libm. From the sources: C does two malloc and two free calls per node (node plus payload) while Java allocates in a TLAB and never frees; the README's sin-only benchmark shows the libm calls alone are about 1.26x slower in C (64.4 s vs 51.2 s), so the win mixes allocator/GC and math-library effects."
+    },
+    "notes": "Numbers, flags and the clang-script-runs-gcc detail all check out; C and Java implement the same ring mutation with the same pseudo-random sizes and checksums match. Shortcomings for the orchestrator: single laptop run, gcc/JVM versions unstated, and part of the win comes from glibc sin/fmod being slower than HotSpot's Math.sin and double % (the README's own sin-only benchmark shows Java 1.26x faster), not only from GC versus malloc/free.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/main/README.md",
+      "https://github.com/xemantic/java-2-times-faster-than-c",
+      "https://github.com/xemantic/java-2-times-faster-than-c/commits/main",
+      "https://github.com/xemantic/java-2-times-faster-than-c/issues/1",
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/main/build-gcc.sh",
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/main/build-clang.sh",
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/main/build.gradle.kts",
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/main/src/main/c/java_2_times_faster_than_c.c",
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/main/src/main/c/almost_pseudo_random.c",
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/main/src/main/java/com/xemantic/test/howfast/Java2TimesFasterThanC.java",
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/main/LICENSE"
+    ]
+  }
+]

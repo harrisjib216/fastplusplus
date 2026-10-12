@@ -1,0 +1,88 @@
+[
+  {
+    "id": "lang:csharp/glebolsen/benchlang#binary-trees",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "The README results table (3 September 2026, one run) gives Binary Trees 0.931 s for C# (.NET 11.0.100-preview.7) against 1.010 s for C and 1.147 s for C++ (GCC 16.2.0). Code for both sides is public (languages/C/bench.c, languages/C++/bench.cpp, languages/C#/Bench/Program.cs, run_benchmarks.sh), with Nix-pinned compiler versions, exact flags and the CPU (Ryzen 9 5900X locked at 3.5 GHz), so it meets A.",
+    "corrections": {
+      "compiler_and_flags": "C: gcc 16.2.0 -O3 -march=native -flto -funroll-loops -ffp-contract=off -s; C++: g++ 16.2.0 -std=c++20 with the same flags (nixpkgs-unstable pins, run_benchmarks.sh). C#: .NET SDK 11.0.100-preview.7, built as a file-based app with dotnet build -c Release -o out Program.cs (no .csproj in the repo) and run as dotnet out/Program.dll (default tiered JIT and default GC, no Native AOT).",
+      "caveats": "One run per language (no variance) from a single machine on 2026-09-03. The C and C++ programs are naive per-node malloc/free (new/delete in C++) and walk every tree a second time to free it inside the timer, while the .NET GC never traces dead trees; an arena or pool allocator in C would beat the runtimes here. The native malloc-based rows for the same algorithm already spread from 0.986 s (Fortran) through 1.010 s (C), 1.033 s (Rust), 1.109 s (Ada) and 1.119 s (Zig) to 1.147 s (C++), so the 8% C# margin over C lies inside the run-to-run and implementation spread of one algorithm; the 1.23x figure is against the slowest of those rows. Several runtimes beat C on this workload in the same table (Java 0.347 s, Nim 0.809 s, Bun 0.816 s, OCaml and Dart 0.865 s), which points at glibc per-node malloc/free rather than a .NET-specific code-generation win. The benchmark is 1 of 5 workloads, and C wins overall (total 9.762 s vs Java 13.536 s, C# 11.914 s, OCaml 16.233 s; C is faster than C# on Fibonacci 1.694 s vs 3.793 s, strings 2.132 s vs 2.235 s and Mandelbrot 2.201 s vs 2.229 s). Managed runtimes keep default settings with JIT warm-up inside the timed region and may use extra GC and JIT threads, so wall time is not CPU time; .NET 11 was a preview SDK."
+    },
+    "notes": "Numbers and the derived ratios (1.08x over C, 1.23x over C++) match the README; same source algorithm, release builds on both sides, so tier A stands, but the margin over C is small, from one run and within the 0.986-1.147 s spread of the malloc-based native rows, and the win comes from GC bump allocation against glibc malloc/free with explicit free traversal, not from JIT code generation. Sibling ids for the same table (lang:java, lang:ocaml, lang:javascript benchlang#binary-trees) are in batches 54 and 56.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/README.md",
+      "https://github.com/GlebOlsen/benchLANG",
+      "https://github.com/GlebOlsen/benchLANG/commits",
+      "https://github.com/GlebOlsen/benchLANG/tree/main/languages",
+      "https://github.com/GlebOlsen/benchLANG/tree/main/languages/C",
+      "https://github.com/GlebOlsen/benchLANG/tree/main/languages/C%23/Bench",
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/C/bench.c",
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/C++/bench.cpp",
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/C%23/Bench/Program.cs",
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/run_benchmarks.sh"
+    ]
+  },
+  {
+    "id": "lang:java/xemantic/java-2-times-faster-than-c#almost-pseudo-random",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party README shell 'time' output, one run each: Java 51.235 s vs gcc C 1m4.433s and the 'Clang' row 1m4.878s. The code (src/main/c/almost_pseudo_random.c, AlmostPseudoRandom.java, build-gcc.sh) and the CPU (i7-8550U) are public, but the gcc, glibc and JDK versions are not stated, and for a benchmark that times only the math library the glibc and JDK versions decide the result, so it falls short of A.",
+    "corrections": {
+      "caveats": "One run per implementation (shell 'time') on a laptop CPU without frequency locking; gcc, glibc and JDK versions not stated (Gradle targets Java 15, and the README mentions 'the newest JVM of Java 15'). The 'Clang' row was built by build-clang.sh, which calls gcc. The loop spends nearly all its time in sin(): arguments reach 1e14, far outside the fast range of both libraries, so the gap measures two sin implementations rather than language code generation. Issue #13 (2025-06-12) profiles the repo's C ring program with gprof and finds glibc's large-argument reduction __branred at 47.88% and __sin_fma at 17.32% of run time. Java's Math.sin is a HotSpot intrinsic generated from Intel LIBM assembly (current openjdk master stubGenerator_x86_64_sin.cpp, main path only for |x| < 90112); the 2021 JDK build was not checked. Rust, which also calls glibc sin, took 1m7.944s (about C's time), and Go, with its own sin and slightly different results (checksum 4.999999924931206e+08), took 28.191 s. The Java checksum prints as 4.9999999712235045E8 against 499999997.122350 for C (same value to the printed digits). gcc ran without -ffast-math or -fno-math-errno, so sin and fmod stay library calls, which matches Java's strict semantics.",
+      "language_level_claim": false,
+      "why_faster": "Math library, not the language: the C binary spends its time in glibc sin, whose large-argument reduction __branred is the top symbol in issue #13's gprof profile (47.88%, plus __sin_fma 17.32%), while HotSpot replaces Math.sin with an Intel-LIBM-derived assembly intrinsic; Java's double % maps to an fmod-style remainder on both sides. The author's own hypotheses (inlining after profiling, library calls not inlinable, % mapping to better code) are untested in the repo."
+    },
+    "notes": "Numbers match the README (1.26x derived from page data) but the evidence is first-party, single-run, with gcc, glibc and JDK versions unstated, so A drops to C. Keep with the shortcoming that the timed work is a library sin() comparison (glibc vs HotSpot's Intel LIBM intrinsic), so it is not a language-level or JIT code-generation win; record corrections to why_faster and the language_level_claim stays false.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/README.md",
+      "https://github.com/xemantic/java-2-times-faster-than-c",
+      "https://github.com/xemantic/java-2-times-faster-than-c/commits",
+      "https://github.com/xemantic/java-2-times-faster-than-c/issues",
+      "https://github.com/xemantic/java-2-times-faster-than-c/issues/1",
+      "https://github.com/xemantic/java-2-times-faster-than-c/issues/13",
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/build-gcc.sh",
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/build-clang.sh",
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/build.gradle.kts",
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/src/main/c/almost_pseudo_random.c",
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/src/main/java/com/xemantic/test/howfast/AlmostPseudoRandom.java",
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/src/main/c/java_2_times_faster_than_c.c",
+      "https://raw.githubusercontent.com/openjdk/jdk/master/src/hotspot/cpu/x86/stubGenerator_x86_64_sin.cpp"
+    ]
+  },
+  {
+    "id": "lang:java/xemantic/java-2-times-faster-than-c#ring",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party README shell 'time' output, one run each: Java 8.569 s vs gcc C 12.800 s and the 'Clang' row 12.726 s, identical node count 13537 and checksum 470936697371. The code (src/main/c/java_2_times_faster_than_c.c, Java2TimesFasterThanC.java, build-gcc.sh) and the CPU (i7-8550U) are public, but the gcc, glibc and JDK versions are unstated and the 'Clang' row is mislabelled, so it falls short of A.",
+    "corrections": {
+      "claimed_speedup": "Java (HotSpot) 8.569 s vs GCC C 12.800 s and 'Clang' (actually gcc) C 12.726 s (real time, one run each): about 1.49x faster than C (derived from page data). The project title claims 2x and the README dialogue says 'almost 2 times faster'; the measured ratio is about 1.5x.",
+      "caveats": "One run per implementation measured with the shell 'time' on a laptop CPU without frequency locking (no variance). gcc, glibc and JDK versions are not stated (Gradle targets Java 15), the C build has no -march=native while the JIT targets the host CPU, and the 'Clang' row was built with gcc by build-clang.sh. A large share of the C time is libm, not memory management: issue #13 (2025-06-12) profiles this C program with gprof and finds glibc's large-argument sin reduction __branred at 47.88% and __sin_fma at 17.32% of run time, against about 13% for malloc, _int_malloc, _int_free and free together; every new node and every mutation count calls sin() on arguments up to about 1e13, and the second benchmark in the repo shows HotSpot's sin faster than glibc's (Java 51.2 s vs C 64.4 s for 1e9 calls). The C version pays two malloc and two free calls per node (node and payload, including malloc(0) for empty payloads) where the JVM bump-allocates and never traces dead nodes; the author calls the title provocative, says it applies only to this algorithm, and notes that better memory management in C (issue #1, where one commenter's one-slot reuse cut a run from 1m7s to 14s, no Java figure) can beat the Java version. Contributed Rust (13.824 s, glibc sin) was slower than C; Go (14.542 s) ran different work (node count 13553, checksum 486105193130, because its sin differs); C# took 34.037 s.",
+      "language_level_claim": true,
+      "why_faster": "Two sources, both runtime-side. (1) Allocation: the C version calls malloc and free for every node and every payload through glibc, while HotSpot bump-allocates in thread-local buffers and a young-generation collection never touches dead nodes (author's hypothesis; issue #13's profile puts glibc malloc/free at about 13% of C run time). (2) Math library: issue #13's gprof profile of this C program shows glibc's large-argument sin reduction __branred (47.88%) and __sin_fma (17.32%) dominating, while Java's Math.sin is a HotSpot intrinsic from Intel LIBM assembly that the repo's second benchmark shows faster than glibc sin; so part of the 1.5x is a sin-implementation difference, not automatic memory management."
+    },
+    "notes": "Numbers match the README (1.49x derived from page data; title's 2x is overstated) but the evidence is first-party, single-run, with gcc, glibc and JDK versions unstated, so A drops to C. Record the shortcoming that issue #13 shows about two thirds of the C run time in glibc sin (__branred plus __sin_fma) against about 13% in malloc/free, so the memory-management explanation covers only part of the gap. The id lang:java/xemantic/java-2-times-faster-than-c#node-ring (batch 56, from w14-jitaot-shootouts) is the same benchmark and should be folded into this id as a duplicate.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/README.md",
+      "https://github.com/xemantic/java-2-times-faster-than-c",
+      "https://github.com/xemantic/java-2-times-faster-than-c/commits",
+      "https://github.com/xemantic/java-2-times-faster-than-c/issues",
+      "https://github.com/xemantic/java-2-times-faster-than-c/issues/1",
+      "https://github.com/xemantic/java-2-times-faster-than-c/issues/13",
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/build-gcc.sh",
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/build-clang.sh",
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/build.gradle.kts",
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/src/main/c/java_2_times_faster_than_c.c",
+      "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/src/main/java/com/xemantic/test/howfast/Java2TimesFasterThanC.java",
+      "https://raw.githubusercontent.com/openjdk/jdk/master/src/hotspot/cpu/x86/stubGenerator_x86_64_sin.cpp"
+    ]
+  }
+]
