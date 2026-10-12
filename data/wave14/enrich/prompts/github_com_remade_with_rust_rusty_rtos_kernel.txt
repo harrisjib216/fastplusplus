@@ -1,0 +1,179 @@
+You are a technical writer producing the entry for ONE library in a curated
+catalog of implementations that beat the default/incumbent tool on
+performance. You will receive a verified JSON record. Your job is to open the
+project and write a short, accurate, opinionated entry that lets a busy
+engineer decide in 30 seconds whether to use it.
+
+Today's date: 2026-10-11
+
+INPUT RECORD:
+{
+  "name": "Kairos / rusty_rtos_kernel (FreeRTOS kernel remade in Rust)",
+  "repo_url": "https://github.com/Remade-With-Rust/rusty_rtos_kernel",
+  "language": "Rust",
+  "domain": "other-languages-faster-than-c-cpp-asm",
+  "category": "concurrency-runtimes",
+  "baseline": "FreeRTOS V11.3.1 kernel (C), unmodified, with its first-party GCC RISC-V port, built with clang -O2",
+  "baseline_in_list": false,
+  "metric": "other",
+  "workload": "Retired instructions per call on RV32IMAC under QEMU virt with -icount shift=0, same operations in both kernels (tick, scheduler selection, whole task switch, list operation), plus RAM per task and flash size; both kernels are first proven trace-identical on 22 conformance scenarios.",
+  "claimed_speedup": "Kairos umbrella README table (headed rv32), retired instructions unless stated: tick 9 vs 15 (0.60x, bench/tick-work, runtime minstret count); scheduler selection 45 vs 27 (1.67x against Kairos); whole cooperative switch 75 vs 110 (0.68x) and whole preemptive switch 119 vs 110 (1.08x against). Both switch rows add the measured selection row to a static llvm-objdump count of the register half from bench/switch-cost (Kairos 30 cooperative and 74 preemptive against FreeRTOS portASM.S 83; the 83/30/74 constants are typed into tick-work/run.sh). List operation 18.47 vs 22.32 instructions per op (0.83x) is not an rv32 row: it is bench/list-cost, callgrind on an x86-64 host, rustc opt-level 3 plus LTO against gcc 15.2 -O2 list.c. The ledger gives gcc -O3 at 21.82 (about 0.85x, derived from page data) and a 32-bit row of 23.75 vs 33.42, and its latest 64-bit Rust figure is 18.80; 18.47 appears only in the README. RAM per task 176 B vs 596 B (0.30x); the C figure includes a 512 B task stack that stackless Kairos tasks do not own. Flash 19,484 B vs 13,924 B (1.40x against); the scorecard says 19,746 B (1.42x) and the kernel README says 22,396 B by default or 17,860 B with the small feature. The kernel README adds Cortex-M3 PendSV 19 vs 19 (parity) and an RV32 preemptive register half of 74 vs 83.",
+  "evidence_tier": "A",
+  "benchmark_url": "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/README.md",
+  "baseline_stdlib": [],
+  "compiler_and_flags": "tick-work (tick, selection): C arm clang -target riscv32-unknown-elf -march=rv32imac -mabi=ilp32 -O2 -ffreestanding -fno-builtin, compiled per translation unit and linked with ld.lld (bench/tick-work/run.sh). Rust arm firmware/riscv32-qemu-tick-work [profile.release] opt-level 2, lto false, codegen-units 1, panic abort, overflow-checks off. The script does not pin compiler versions. switch-cost (register half): static instruction counts with llvm-objdump; FreeRTOS portASM.S macros assembled by clang, so both sides of that half are hand-written assembly. list-cost: gcc -O2 and -O3 (gcc 15.2 per LEDGER.md) against Rust release opt-level 3, lto true, one codegen unit, counted under callgrind on an x86-64 WSL2 host.",
+  "hardware": "QEMU virt -cpu rv32 (rv32imac) with -icount shift=0 for the tick and selection rows (retired instructions read from minstret, deterministic, independent of the host). The register half is a static disassembly count. The list row ran under callgrind on an x86-64 WSL2 host whose CPU is not stated. ESP32-S3 cycle figures (tick 54, switch 166 cycles) are Kairos-only and predate kernel 0.2.1.",
+  "compared_against_cpp_std_directly": false,
+  "license": "MIT OR Apache-2.0",
+  "usability": "copyable",
+  "last_commit": "2026-10-09",
+  "maintenance_status": "active",
+  "is_fork_of": null,
+  "stars_or_usage": "0 stars (kernel repo), 1 star (kairos umbrella repo); rusty_rtos_kernel crate about 424 crates.io downloads",
+  "has_code": true,
+  "tradeoffs": "Flash is 1.40x larger (handle validation, stackless resume machinery, u16 list ids); queue items are at most 8 bytes; SMP only on two cores with no affinity; no MPU, no static allocation and no co-routines; no privilege separation between tasks; a C ABI crate (rusty_rtos-capi) lets unmodified FreeRTOS C demos link against it.",
+  "caveats": "The metric is retired instructions under an emulator, not wall-clock time or cycles. The project says these are work rows, not cycle rows, and its only silicon cycle figures have no C arm. Both arms of the tick-work rows are matched at -O2 with no LTO, not -O3. The list row breaks the matching: Rust at opt-level 3 with LTO against gcc -O2, measured on an x86-64 host but shown under an rv32 heading. Against gcc -O3 (21.82) it is still about 0.85x (derived from page data). The headline cooperative-switch win (75 vs 110) is a composite of a runtime count and a static count of hand-written assembly. Its gap is structural, not Rust codegen: FreeRTOS's RISC-V portYIELD() is an ecall trap that saves all 28 GPRs, while a Kairos yield happens at a call site and saves 14. The project's own Cortex-M3 control shows parity (19 vs 19). The RAM-per-task win compares stackless state-machine tasks with FreeRTOS tasks that own a 512 B stack. The tick win came from a cached current_priority (one arena resolve removed) and a 32-bit compare fix (LEDGER 2026-09-28); neither the ledger nor the scorecard explains why 9 ends up below C's 15. Mixed result: preemptive switch, scheduler selection and flash are worse than C. Numbers drift between documents. bench/tick-work/README.md still prints the older 56 vs 15 tick and 79 selection. Flash appears as 19,484, 19,746 and 22,396 B. The README says thirteen rows have a C arm with three against Kairos, the scorecard says eleven with one loss. The ledger records two corrected harness defects (a hand-rolled NoTrace that inflated the silicon and selection rows 305 to 79, and a broken work-parity anchor) and a list-cost bench that once could not run. First-party only, no independent measurement, near-zero adoption (0 stars on the kernel repo, 1 on the umbrella, 424 crates.io downloads). An RTOS scheduler is a loose fit for concurrency-runtimes.",
+  "is_evidence_for_known": false,
+  "confidence": 0.5,
+  "language_level_claim": false,
+  "same_algorithm": true,
+  "same_opt_level": true,
+  "why_faster": "README: FreeRTOS pays 110 instructions for every RISC-V switch because its portYIELD() is a trap that saves everything an interrupt could clobber, while Kairos yields cooperatively for 75; the stackless task design removes the per-task stack (RAM); the project itself says the cooperative gain is about where the yield is taken, not about moving registers more cheaply.",
+  "id": "https://github.com/remade-with-rust/rusty_rtos_kernel",
+  "verification": {
+    "date": "2026-10-11",
+    "verdict": "downgrade",
+    "tier_before": "A",
+    "tier_reason": "The tick and scheduler-selection rows are reproducible from public code (kairos bench/tick-work/run.sh building unmodified FreeRTOS V11.3.1 plus firmware/riscv32-qemu-tick-work) with the compiler, flags (-O2 both arms, no LTO) and machine (QEMU virt -cpu rv32, -icount shift=0, minstret) stated, so the A tier holds for those rows. The verdict is a downgrade of the claim, not the tier: the record overstated the list row, the composite switch rows and same_algorithm.",
+    "notes": "Tier A kept for bench/tick-work (tick 9 vs 15, selection 45 vs 27), which is public, deterministic and gated by PARITY and POISON checks against unmodified FreeRTOS V11.3.1 at matched -O2. Record shortcomings: the list row is mislabelled as rv32 and opt-mismatched, the switch rows are composites with typed-in register-half constants, the wins come from design (call-site yield vs ecall trap, stackless tasks, index arenas) rather than the language, the C baseline is -O2 rather than -O3, the result is mixed, and figures are stale across documents. Metadata checked: MIT OR Apache-2.0, 0 stars, 220 commits, last commit 2026-10-09, crate 424 downloads.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/README.md",
+      "https://raw.githubusercontent.com/Remade-With-Rust/rusty_rtos_kernel/HEAD/README.md",
+      "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/bench/tick-work/README.md",
+      "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/bench/tick-work/run.sh",
+      "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/bench/switch-cost/run.sh",
+      "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/bench/list-cost/run.sh",
+      "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/bench/list-cost/rs/Cargo.toml",
+      "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/bench/tick-work/c/FreeRTOSConfig.h",
+      "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/docs/plans/freertos-scorecard.md",
+      "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/docs/LEDGER.md",
+      "https://raw.githubusercontent.com/Remade-With-Rust/rusty_rtos_kernel/HEAD/docs/LEDGER.md",
+      "https://raw.githubusercontent.com/Remade-With-Rust/rusty_rtos_kernel/HEAD/firmware/riscv32-qemu-tick-work/Cargo.toml",
+      "https://raw.githubusercontent.com/Remade-With-Rust/rusty_rtos_kernel/HEAD/Cargo.toml",
+      "https://raw.githubusercontent.com/Remade-With-Rust/rusty_rtos_kernel/HEAD/LICENSE-MIT",
+      "https://github.com/Remade-With-Rust/rusty_rtos_kernel",
+      "https://github.com/Remade-With-Rust/rusty_rtos_kernel/commits/main",
+      "https://github.com/Remade-With-Rust/kairos",
+      "https://crates.io/api/v1/crates/rusty_rtos_kernel"
+    ],
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true
+  }
+}
+
+SIBLING ENTRIES (same category, already catalogued):
+- Myelon / disruptor-mp (shared-memory ring-buffer IPC transport, Rust) (https://github.com/Venkat2811/myelon): beats Boost.Interprocess message_queue ('Boost-MQ', C++) and an Open MPI shared-memory ping-pong (C, built with mpicc); the same chart also holds Rust and Java-ecosystem peers (iceoryx2, Aeron through rusteron, shmipc-rs, crossbeam, ZeroMQ).; Chart labels in assets/bench-pingpong-throughput-1kb.png (1 KB, 1p1c, msgs/sec, log scale): Myelon-Raw mmap 4.9M and shm 4.4M, plus the project's own Disruptor 
+- GHC Haskell lightweight threads (skynet 1M-spawn benchmark vs pthread/std::thread) (https://github.com/ghc/ghc): beats pthread_create and std::thread (C/C++ OS threads, 8 kB pthread stacks) running the skynet recursive spawn-and-sum benchmark; Haskell (stack-1.4.0/ghc-8.0.1): 0.05-0.06 us per unit (average over 1,000,000) versus pthread 54-73 us, std::thread 52-73 us and std::async 106-122 us per thre
+- Cynosure RingBuf (async-native SPSC ring buffer, Rust) (https://github.com/zk2u/cynosure): beats rigtorp::SPSCQueue (C++ single-producer single-consumer ring buffer). The same table also holds a hand-rolled C11 cached-index ring, which is faster than Cynosure.; BENCHMARKS.md, 'How it compares to the absolute fastest (C / C++)', 1-thread push+pop latency: hand-rolled C11 ring 0.79 ns, Cynosure 1.29 ns, rigtorp::SPSCQueu
+- Erlang/OTP processes on thread-ring (SCOOP/Qs paper, arXiv 1405.7153) vs C++/TBB (https://github.com/erlang/otp): beats The paper's 'C++/TBB' column; for thread-ring the authors' public code (scottgw/quicksilver benchmarks/concurrent/cxx/threadring/main.cpp) is not TBB but the Computer Language Benchmarks Game C++ program by The Anh Tran: 503 OS pthreads (4 KB stacks) all blocked in one boost::asio::io_service::run() queue, each token pass a post() that wakes an OS thread; built with g++ -O3 -std=c++11 -pthread -lboost_system. No fiber, coroutine or single-threaded C++ ring was measured.; Thread-ring on 32 cores (snippet only, paper Table 5): Erlang 3.30 s versus the paper's C++/TBB column 34.13 s, about 10.3x (derived from the snippet numbers); 
+- evio (Go epoll/kqueue event loop; Redis clone vs real Redis) (https://github.com/tidwall/evio): beats Redis 4.0.2 (C, single-threaded ae event loop on epoll) answering PING_INLINE; the same table also holds Go net/http, fasthttp and a Go net echo server, which are Go baselines and not counted here; Requests per second, evio Redis clone vs real Redis 4.0.2 (benchmarks/out/redis{1,8,16}.txt, final redis-benchmark line): pipeline 1: 177,147.92 vs 176,991.14 (
+- Go goroutines on thread-ring (SCOOP/Qs paper, arXiv 1405.7153) vs C++/TBB (https://github.com/golang/go): beats The paper's 'C++/TBB' column; for thread-ring the authors' public code (scottgw/quicksilver benchmarks/concurrent/cxx/threadring/main.cpp) is not TBB but the Computer Language Benchmarks Game C++ program by The Anh Tran: 503 OS pthreads (4 KB stacks) all blocked in one boost::asio::io_service::run() queue, each token pass a post() that wakes an OS thread; built with g++ -O3 -std=c++11 -pthread -lboost_system. No fiber, coroutine or single-threaded C++ ring was measured.; Thread-ring on 32 cores (snippet only, paper Table 5): Go 13.98 s versus the paper's C++/TBB column 34.13 s, about 2.4x (derived from the snippet numbers); the 
+- Go goroutines vs Intel TBB on a task-graph dynamic program (Comparison-Go-CppTBB) (https://github.com/luncliff/Comparison-Go-CppTBB): beats Intel oneTBB (2017 Update 3) C++ task scheduler, MSVC v14 build, on the same static optimal binary search tree task graph; Paper: at N=4096 and 4 processors Go ran faster than TBB at VP=256 and VP=512, with a TBB/Go time ratio of 1.12 and 1.15; best parallel speed-up over each langu
+- Go net TCP echo server (Boost.Redis echo benchmark, vs libuv) (https://github.com/golang/go): beats libuv TCP echo server (C, epoll event loop, libuv docs tcp-echo-server example); the table also holds a Boost.Asio C++20 coroutine echo server that is faster than Go; Go 35.6 s vs libuv 43.6 s wall time for 1000 connections x 5000 echoes (about 1.22x less wall time, derived from page data); Boost.Asio (C++) 29.5 s is about 1.
+- Lingua Franca (reactor language, C++ runtime) on the Savina actor benchmarks vs CAF (https://github.com/lf-lang/lingua-franca): beats CAF (C++ Actor Framework) running the same Savina benchmarks; Akka (JVM) is the second baseline; Not on any page opened. From the abstract of the ACM TACO 2023 paper 'High-Performance Deterministic Concurrency using Lingua Franca', seen only as web search s
+- NPB-Rust (NAS Parallel Benchmarks in Rust, sequential and Rayon) (https://github.com/GMAP/NPB-Rust): beats NPB-CPP, the group's C++ port of NAS Parallel Benchmarks 3.4.1 (sequential NPB-SER, and OpenMP NPB-OMP for the parallel comparison), plus the original Fortran NPB; From the paper abstract as shown in a search snippet (snippet only): Rust sequential is 5.59% faster than C++ and 1.23% slower than Fortran; Rust with Rayon is 
+- Pony actor mailbox performance (100,000,000 messages) vs CAF and Charm++ (https://github.com/ponylang/ponyc): beats CAF 0.13 (C++ Actor Framework); Charm++ 6.6.1 (C++) is in the same chart; Read off the charts (approximate, ratios derived from page data): at 1 core Pony 0.1.5 about 3.7 versus CAF 0.13 about 0.56 (about 6.6x) and Charm++ 6.6.1 about
+- Pony actor message ring plus factorisation vs CAF and Charm++ (https://github.com/ponylang/ponyc): beats CAF 0.13 (C++ Actor Framework); Charm++ 6.6.1 (C++) is in the same chart; Read off the charts (approximate, ratios derived from page data): at 1 core Pony 0.1.5 about 2.2 versus CAF 0.13 about 0.5 (about 4x); at 16 physical cores Pony
+- Rayon vs OpenMP (CMU 15-618 project) (https://github.com/trsupradeep/15618-project): beats C++ with OpenMP (and GNU parallel-mode sort) for Mandelbrot, matrix multiplication, sorting and reduction; C++ compiled with GCC per the report; Mixed; absolute times from data/Data.xlsx (best of three). Matmul 2048x2048, Rayon par_chunks row-dot vs OpenMP: Rust faster at 1, 2, 4, 6, 12 and 16 threads (1
+- Redcon (Go Redis-compatible server framework; clone vs real Redis) (https://github.com/tidwall/redcon): beats Redis (C, single-threaded, started as 'redis-server --port 6379 --appendonly no'; version not stated); Requests per second, README table: SET 2,018,570.88 (Redcon, one thread) vs 941,265.12 (Redis) = about 2.14x (derived from page data); GET 2,403,846.25 vs 1,189
+- Rust std futex-based Mutex (rust-lang/rust PR 95035) vs the pthread_mutex-based std Mutex (https://github.com/rust-lang/rust): beats glibc (and musl) pthread_mutex_t, as wrapped by the previous Rust std::sync::Mutex on Linux; PR comment by m-ou-se on a 64C/128T AMD Threadripper (average per round): extreme contention new 27.65 ms vs old std (gnu pthread) 58.51 ms and old std (musl) 8
+- ScyllaDB Rust driver (async Tokio CQL driver vs C++ driver) (https://github.com/scylladb/scylla-rust-driver): beats DataStax Cassandra C++ driver ('cpp-multi', v2.16.0 .deb per the current Dockerfile, run with I/O threads = hardware_concurrency), plus the Scylla C++ driver fork ('cpp'), which the harness ran with a single I/O thread until commit 'Bump Scylla cpp driver to 2.16.2, remove single thread limitation for it' (2022-08-01); Published chart images/bench10to7-inserts.svg (10,000,000 inserts, time in seconds; values read from the SVG bar geometry, derived from page data): concurrency 
+- Stylo (Rust parallel CSS style engine in Firefox Quantum) vs Gecko's previous C++ style system (https://github.com/servo/stylo): beats Gecko's previous sequential C++ style system (CSS selector matching and cascade) in Firefox before Quantum; 30% page load speedup for Amazon's homepage ('Parallelism leads to a lot of performance improvements, including a 30% page load speedup for Amazon's homepage').
+- Tokio (1M concurrent tasks, peak memory) (https://github.com/tokio-rs/tokio): beats Asio C++20 coroutines (awaitable tasks) and concurrencpp; Peak memory at 1M tasks: tokio 214,136 KB, concurrencpp 605,972 KB, Asio 853,144 KB (about 2.8x and 4.0x less, derived from page data); at 100k tasks: 23,824 vs
+- Tokio TCP echo server (Boost.Redis echo benchmark, vs libuv) (https://github.com/tokio-rs/tokio): beats libuv TCP echo server (C, epoll event loop, libuv docs tcp-echo-server example); the table also holds a Boost.Asio C++20 coroutine echo server that is slightly faster than Tokio; Tokio 30.7 s vs libuv 43.6 s wall time for 1000 connections x 5000 echoes (about 1.42x less wall time, derived from page data); Boost.Asio (C++) 29.5 s is about
+- Embassy (async Rust executor) vs FreeRTOS (https://github.com/embassy-rs/embassy): beats FreeRTOS (C RTOS, used through the CMSIS-RTOS v2 wrapper in an STM32CubeIDE project) on an STM32F446ZE; README quote: 'It obsoletes the need for a traditional RTOS with kernel context switching, and is faster and smaller than one!' No figures appear on any page th
+
+=====================================================================
+PROCESS
+=====================================================================
+1. Open repo_url. Read the README, the main header/API surface, and the
+   benchmark page at benchmark_url. Skim the source enough to identify the
+   core technique (open addressing + SIMD probe groups, radix partitioning,
+   branchless binary search, io_uring, etc.).
+2. Check: header-only or built? Dependencies? Minimum language standard or
+   toolchain version? Platforms/architectures supported? Thread safety?
+   Exceptions? Allocator customization? ABI stability?
+3. Look for known failure modes: issues tagged "bug"/"performance", pathological
+   inputs the README warns about, CVEs, "not recommended for" notes.
+4. Identify 1–3 alternatives in the same category from the catalog
+   (the SIBLING ENTRIES listed under the input record) and say when you'd pick this one over them.
+5. Write the entry. Every claim you make must be traceable to something you
+   read this session. If you don't know, say "not documented" rather than
+   guessing.
+
+=====================================================================
+STYLE
+=====================================================================
+- Plain, direct, no marketing language. "2.3x faster lookups on 64-bit keys"
+  not "blazing fast".
+- Each field has a length cap. Respect it; brevity is the point.
+- Write for someone who knows the baseline well and has never heard of this.
+- Do not restate the JSON fields verbatim; they're rendered separately.
+
+=====================================================================
+OUTPUT — return ONLY this JSON object
+=====================================================================
+{
+  "id": "<repo canonical url>",
+  "one_liner": "<=20 words: what it is and what it beats",
+  "what_it_does": "2-4 sentences. The problem it solves and the API shape (drop-in? different interface?).",
+  "how_it_is_fast": "2-4 sentences. The core technique(s) that produce the speedup. Name the algorithm/idea so a reader can look it up.",
+  "when_to_use": [
+    "3-5 bullets, each a concrete situation: workload shape, key/value types, size ranges, latency vs throughput needs, platform"
+  ],
+  "when_not_to_use": [
+    "3-5 bullets: workloads where it loses or is risky, missing features, platform gaps, pathological cases, memory cost, maturity concerns"
+  ],
+  "integration": {
+    "form": "header-only | static lib | shared lib | crate | module | source-drop",
+    "dependencies": "none | list",
+    "min_toolchain": "e.g. C++17, GCC 9+, Rust 1.70",
+    "platforms": "e.g. x86-64 (AVX2 required), aarch64, any",
+    "thread_safety": "string or 'not documented'",
+    "drop_in_for_baseline": true | false | "partial — explain"
+  },
+  "gotchas": [
+    "0-4 bullets: surprising behavior, iterator invalidation rules, hash quality requirements, alignment needs, unsafe blocks, etc."
+  ],
+  "pick_this_over_siblings_when": "1-2 sentences comparing to the SIBLING ENTRIES listed under the input record, or 'no siblings catalogued yet'",
+  "verified_claims_summary": "1-2 sentences restating the benchmark result in your own words with the baseline, stdlib/compiler, and hardware, so the reader knows what was actually measured",
+  "status_note": "1 sentence on maintenance_status and usability, e.g. 'Abandoned since 2019 but MIT-licensed and small enough to vendor; last known-good compiler GCC 9.'",
+  "sources_read": ["every URL you opened"],
+  "confidence": 0.0-1.0
+}
+
+=====================================================================
+ORCHESTRATOR HARNESS NOTES (environment-specific; these override only
+the output-delivery rule above)
+=====================================================================
+- Tools: WebSearch and WebFetch (if they are not loaded yet, load them
+  with ToolSearch query "select:WebSearch,WebFetch"). The `gh` CLI is
+  authenticated; for GitHub repos prefer it over WebFetch:
+    gh api repos/OWNER/REPO/readme -H "Accept: application/vnd.github.raw"
+    gh api repos/OWNER/REPO/contents/PATH -H "Accept: application/vnd.github.raw"
+    gh api "repos/OWNER/REPO/git/trees/HEAD?recursive=1" --jq '.tree[].path'
+    gh search issues --repo OWNER/REPO "<terms>" --limit 20
+  Fetching content through gh counts as opening the github.com URL.
+- Do not clone repositories or build anything.
+- Never send the user's email address, name or any other personal identifier to an
+  outside service (URLs, headers, payloads). For APIs that want a User-Agent, such as
+  crates.io, use exactly: User-Agent: fastpp-research-bot/1.0
+- The record's `verification` block holds the verifier's notes; treat its
+  corrections as authoritative over older claims.
+- Budget: about 40 tool calls. Token cost is not a concern; read the source and
+  docs deeply enough to fill every field with evidence.
+- Deliver your output by writing the JSON object, and nothing else, to:
+    /home/user/fastpp/data/wave14/enrich/raw/github_com_remade_with_rust_rusty_rtos_kernel.json
+  Then check it parses:
+    python3 -c "import json,sys; json.load(open(sys.argv[1]))" /home/user/fastpp/data/wave14/enrich/raw/github_com_remade_with_rust_rusty_rtos_kernel.json
+- Your final reply to the orchestrator is one line: the entry name and your confidence.

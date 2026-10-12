@@ -1,0 +1,204 @@
+You are a technical writer producing the entry for ONE library in a curated
+catalog of implementations that beat the default/incumbent tool on
+performance. You will receive a verified JSON record. Your job is to open the
+project and write a short, accurate, opinionated entry that lets a busy
+engineer decide in 30 seconds whether to use it.
+
+Today's date: 2026-10-11
+
+INPUT RECORD:
+{
+  "id": "lang:csharp/kostya/langarena#graph-astar",
+  "name": "dotnet JIT (C# on .NET 11): LangArena Graph::AStar",
+  "repo_url": "https://github.com/kostya/LangArena",
+  "language": "C#",
+  "domain": "other-languages-faster-than-c-cpp-asm",
+  "category": "runtime-jit-beats-aot",
+  "baseline": "C++ with std::priority_queue<Node, std::vector<Node>, std::greater<Node>> (binary heap ordered on f-score only): the best C++ row is C++/Clang++/Unsafe at 1.908 s, and the prod rows are C++/Clang++ 2.064 s and C++/G++ 2.198 s. The C program (c/src/graph_path.c, best row C/Clang/Unsafe 1.767 s) uses a hand-written binary heap whose pop is buggy (see caveats).",
+  "baseline_in_list": true,
+  "metric": "throughput",
+  "workload": "A* shortest path search on a large generated grid graph using a priority queue open set.",
+  "claimed_speedup": "C#/JIT 1.384 s vs the best C++ row, C++/Clang++/Unsafe at 1.908 s (-O3 -march=native -ffast-math), and the prod rows C++/Clang++ 2.064 s and C++/G++ 2.198 s (-O2): about 1.38x faster than the best C++ row and 1.59x faster than C++/G++ prod (derived from page data). The best C row overall is C/Clang/Unsafe at 1.767 s (about 1.28x, derived), but that program's heap pop is buggy. .NET AOT builds win too (C#/R2R 1.222 s, C#/AOT 1.321 s), as do F#/JIT 1.381 s, Julia/Default 1.458 s and Java/OpenJDK 1.486 s. The timed loop is 1,000 searches after 200 untimed warm-up searches.",
+  "evidence_tier": "A",
+  "benchmark_url": "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+  "baseline_stdlib": [
+    "libstdc++"
+  ],
+  "compiler_and_flags": "C/C++ (cpp/Makefile, c/Makefile; versions from the results file): Clang 22.1.8 and GCC 16.0.1 20260322 (trunk, Ubuntu package build), libstdc++ (no -stdlib flag). 'prod' (headline rows): -O2 -DNDEBUG -fstack-protector-strong -fno-omit-frame-pointer, -std=c++20 for C++. 'Fast': -O3 -march=native -mtune=native -DNDEBUG -pipe -fstack-protector -ftree-vectorize -funroll-loops. 'Unsafe': -O3 -march=native -DNDEBUG -pipe -fno-stack-protector -fomit-frame-pointer -ffast-math -fvisibility=hidden -fno-common -fstrict-overflow -fno-trapping-math. 'PGO': -O2 plus -fprofile-instr-use (Clang) or -fprofile-use (GCC). -flto=thin (Fast) and -flto=full (Unsafe) are passed only on the link line (LDFLAGS) while objects are compiled without -flto, so no link-time optimisation actually takes place. Managed side: dotnet 11.0.100-rc.1.26425.128, 'dotnet build -c Release' (Optimize=true) run as 'dotnet Benchmark.dll' with default tiered JIT; the C#/AOT rows are NativeAOT with IlcInstructionSet=native and IlcOptimizationPreference=Speed; Julia 1.13.1 run as 'julia --project=. --threads=16 benchmark.jl' (Julia/Max adds -O3 --check-bounds=no --math-mode=fast); Temurin OpenJDK 27+35 run as 'java -Xmx2g -jar'. Every language, C and C++ included, runs untimed warm-up iterations (20 percent of the timed count) before the timed loop.",
+  "hardware": "AMD Ryzen 7 3800X 8-Core Processor, 78GB RAM, x86_64 Linux (results file 2026-10-05, host kostya-ms7c37)",
+  "compared_against_cpp_std_directly": true,
+  "language_level_claim": true,
+  "same_algorithm": true,
+  "same_opt_level": true,
+  "why_faster": "Not stated by the suite. The sources use .NET PriorityQueue<int,int> (a 4-ary heap) against std::priority_queue (binary heap) in C++; the difference may be the heap rather than JIT quality (agent inference).",
+  "license": "MIT",
+  "usability": "copyable",
+  "last_commit": "2026-10-08",
+  "maintenance_status": "active",
+  "is_fork_of": null,
+  "stars_or_usage": "41 stars",
+  "has_code": true,
+  "tradeoffs": "C# peak RSS about 354 MB; Java about 1.1 GB on this test.",
+  "caveats": "C heap bug: priority_queue_pop in c/src/graph_path.c compares the children with the stale root instead of the moved last element, so it stops at once and leaves that element at the root without sifting it down. A verifier transcription of the code pops out of order on random input. On this benchmark's input the C search still does the same pops, pushes and edge scans as C++ and C# (verifier simulation), so the C rows time the same search with a cheaper pop, but the code is not a correct priority queue. Not a JIT win: the .NET ReadyToRun (1.222 s) and NativeAOT (1.321 s) rows beat every C/C++ row, and so do Java (1.486 s) and Julia (1.458 s), so the runtime-jit-beats-aot category fits poorly. Heap work is small (about 24,000 pushes per search), while each search allocates and fills two 500,000-int arrays (4 MB in total), which probably dominates the time. The result therefore likely measures allocation and initialisation behaviour rather than search code. Every language, C and C++ included, runs untimed warm-up iterations (20 percent of the timed count, cpp/src/benchmark.cpp and csharp/BenchmarkBase.cs) before the timed loop, so steady state is compared on both sides; the record's statement that only JIT languages get a warm-up was wrong. -flto appears only on the link line in cpp/Makefile, so the 'Fast' and 'Unsafe' rows get no actual LTO (the hot code sits in one translation unit, so this is probably immaterial). One measurement per test and configuration (no variance). LangArena's README calls it 'a subjective benchmark' and says AI tools helped translate the tests between languages. Rows were selected as tests where a managed-runtime row beats every C/C++ row; most tests go the other way (for example Sort::Quick, Sort::Merge and Binarytrees::Arena). Ratios are derived from the results file, not stated by the suite.",
+  "is_evidence_for_known": false,
+  "confidence": 0.45,
+  "verification": {
+    "date": "2026-10-11",
+    "verdict": "confirm",
+    "tier_before": "A",
+    "tier_reason": "The code is public (cpp/src/graph_path.cpp with std::priority_queue vs csharp/GraphPath.cs with PriorityQueue<int,int>; run.js sets 500,000 vertices, jumps 20, jump_len 1000 and 1,000 timed searches), the compilers and flags (cpp/Makefile, results file) and the CPU are stated. A verifier simulation of the suite's graph reproduces the checksum's path length (1,172) and shows both heaps doing identical work (1,173 pops, 23,842 pushes and 25,625 edge scans per search), so same_algorithm holds and A stands.",
+    "notes": "Confirm at A: the numbers match the results file, and same work on both sides was verified by simulating the suite's graph (path 1,172 equals the checksum 1,406,400 over 1,200 runs including warm-up). Shortcomings to record: the heap explanation is unsupported (heap work is identical and small, and per-search 4 MB array allocation and fill likely dominate); not a JIT effect, since C# AOT and R2R also win; the C rows run a heap whose pop never sifts down; the baseline should be read as C++ (1.38x over the best C++ row); a single run; a subjective suite.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+      "https://raw.githubusercontent.com/kostya/LangArena/HEAD/README.md",
+      "https://raw.githubusercontent.com/kostya/LangArena/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/Makefile",
+      "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/Makefile",
+      "https://github.com/kostya/LangArena",
+      "https://github.com/kostya/LangArena/commits/master",
+      "https://github.com/kostya/LangArena/tree/master/cpp/src",
+      "https://raw.githubusercontent.com/kostya/LangArena/master/run.js",
+      "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/src/benchmark.cpp",
+      "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/src/helper.cpp",
+      "https://github.com/kostya/LangArena/tree/master/csharp",
+      "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/src/graph_path.cpp",
+      "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/src/graph_path.hpp",
+      "https://raw.githubusercontent.com/kostya/LangArena/master/csharp/GraphPath.cs",
+      "https://raw.githubusercontent.com/kostya/LangArena/master/csharp/BenchmarkBase.cs",
+      "https://raw.githubusercontent.com/kostya/LangArena/master/c/src/graph_path.c"
+    ],
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true
+  }
+}
+
+SIBLING ENTRIES (same category, already catalogued):
+- .NET 11 preview JIT (C#): benchLANG binary trees vs C and C++ at -O3 (https://github.com/GlebOlsen/benchLANG): beats C (GCC 16.2.0: gcc -O3 -march=native -flto -funroll-loops -ffp-contract=off) and C++ (g++ -std=c++20 with the same flags) binary-trees programs that allocate every node with malloc/free (C) or new/delete (C++); C# (.NET SDK 11.0.100-preview.7) 0.931 s vs C 1.010 s and C++ 1.147 s: about 1.08x faster than C and 1.23x faster than C++ (derived from page data).
+- Bun (JavaScriptCore JIT 1.3.13): benchLANG binary trees (https://github.com/GlebOlsen/benchLANG): beats C (GCC 16.2.0, malloc and free per node, 1.010 s) and C++ (GCC 16.2.0, new and delete per node, 1.147 s); JS (Bun) 0.816 s vs C 1.010 s and C++ 1.147 s: about 1.24x faster than C and 1.41x faster than C++ (derived from page data). JS (Node v26.8.1) is slower at 1.44
+- Bun (JavaScriptCore JIT): LangArena Binarytrees::Obj (https://github.com/kostya/LangArena): beats C++ (std::make_unique tree nodes, g++ 16 and clang++ 22) and C (malloc'd nodes); best of the 16 Clang/GCC C/C++ configurations is C++/G++/Fast at 2.098 s; TypeScript/Bun/JIT 0.973 s and JS/Bun/JIT 1.042 s vs C++/G++ 2.101 s (prod, -O2) and 2.098 s for the best of all 16 C/C++ configurations: about 2.2x and 2.0x fa
+- C# (Staged) on .NET: Brainfuck bench.b in kostya/benchmarks (https://github.com/kostya/benchmarks): beats C++/g++ brainfuck (brainfuck/bf.cpp): an AST-walking interpreter with std::vector ops, g++ -O3 -march=native -flto; bench.b: C# (Staged)/.NET Core 0.373 s (36.62 + 0.25 MiB, 14.33 J) vs C++/g++ 1.097 s (3.38 MiB, 46.21 J), C/gcc 1.112 s, C/clang 1.136 s, C++/clang++ 1.167 s (
+- ClangJIT (Clang with JIT extensions for C++ templates) (https://github.com/hfinkel/llvm-project-cxxjit): beats The same Eigen expression (m = Ones + 0.00005*(m + m*m)) compiled ahead of time with runtime-sized Matrix<T,Dynamic,Dynamic> and float/double/long double dispatch, by the same Clang at -march=native -ffast-math -O3; the wiki also reports an AoT build specialized for one fixed size, which matches the JIT.; Runtime, double, 40,000,000 repeats, times reported by the code (JIT compile time excluded): size 3 JIT 1.0 s vs AoT dynamic-size 8.05 s vs AoT single fixed-siz
+- dotnet JIT (C# on .NET 11): LangArena Distance::NGram (https://github.com/kostya/LangArena): beats C++ using std::unordered_map<uint32_t,int> for 4-gram counts (g++ 16, clang++ 22); best C/C++ configuration is C++/Clang++/PGO at 0.822 s; C#/JIT 0.516 s vs C++/G++ 0.863 s and C++/Clang++ 0.877 s (prod, -O2). The best of the 16 gcc/clang C and C++ configurations is C++/Clang++/PGO at 0.822 s (C++/
+- DSL-JSON (Java, HotSpot) vs nlohmann/json, json-c and Boost.PropertyTree in kostya/benchmarks JSON (https://github.com/ngs-doo/dsl-json): beats nlohmann/json (C++), json-c (C library called from a C++ driver) and Boost.PropertyTree (C++) as built by kostya/benchmarks; DSL-JSON does NOT beat RapidJSON (all variants incl. SAX Precise), Boost.JSON, simdjson, yyjson, yajl, gason or DAW JSON Link in the same table; Time in seconds (lower is better), from the kostya/benchmarks README Json table (median of runs, UPDATE: 2026-07-19): Java (DSL-JSON) 0.571; C++/clang++ (Nlohma
+- HotSpot Java Math.sin/% loop vs C libm sin/fmod at gcc -O3: xemantic/java-2-times-faster-than-c (https://github.com/xemantic/java-2-times-faster-than-c): beats C loop calling libm sin() and fmod() (src/main/c/almost_pseudo_random.c) built with gcc -O3 -lm; the README's 'Clang' row again comes from a gcc build; Java 51.235 s vs GCC C 1 m 4.433 s and 'Clang' C 1 m 4.878 s (real time, one run each): about 1.26x faster than gcc C (derived from page data). Contributed Go f
+- HotSpot Java ring-of-nodes mutation vs C at gcc -O3: xemantic/java-2-times-faster-than-c (https://github.com/xemantic/java-2-times-faster-than-c): beats C ring-of-nodes program (src/main/c/java_2_times_faster_than_c.c, malloc and free per node and per payload) built with gcc -O3; the README's 'Clang' row comes from build-clang.sh, which actually invokes gcc; Java (HotSpot) 8.569 s vs GCC C 12.800 s and 'Clang' (actually gcc) C 12.726 s (real time, one run each): about 1.49x faster than C (derived from page data). Th
+- Julia 1.13: LangArena Sort::Self (built-in sort vs std::sort) (https://github.com/kostya/LangArena): beats std::sort on std::vector<int32_t> (g++ 16, clang++ 22); best C/C++ configuration is C++/G++ prod at 0.982 s; Julia/Default 0.116 s vs C++/G++ 0.982 s (prod -O2, also the best of the 16 gcc/clang C and C++ configurations), C++/G++/Fast at -O3 0.998 s and C++/Clang++ 1.0
+- NonuniformFFTs.jl (Julia NUFFT, CPU and GPU) vs FINUFFT and cuFINUFFT (https://github.com/jipolanco/NonuniformFFTs.jl): beats FINUFFT v2.4.1 (C++, CPU) and cuFINUFFT (CUDA C++, GPU), both compiled locally and called through FINUFFT.jl v3.4.0; Docs and README text match the record (CPU 'comparable'; GPU default method 'slightly faster than CuFINUFFT at low point densities, but slightly slower at large
+- OCaml 5.4.1: benchLANG binary trees vs C and C++ at -O3 (https://github.com/GlebOlsen/benchLANG): beats C (GCC 16.2.0: gcc -O3 -march=native -flto -funroll-loops -ffp-contract=off) and C++ (g++ -std=c++20 with the same flags) binary-trees programs that allocate every node with malloc/free (C) or new/delete (C++); OCaml 5.4.1 0.865 s vs C 1.010 s and C++ 1.147 s: about 1.17x faster than C and 1.33x faster than C++ (derived from page data).
+- OpenJDK HotSpot (Java 25): benchLANG binary trees (https://github.com/GlebOlsen/benchLANG): beats C (GCC 16.2.0, malloc and free per node, 1.010 s) and C++ (GCC 16.2.0, new and delete per node, 1.147 s); Java 0.347 s vs C 1.010 s and C++ 1.147 s: about 2.9x faster than C and 3.3x faster than C++ (derived from page data). Peak RSS 987.8 MiB for Java vs 33.3 MiB f
+- OpenJDK HotSpot (Java 27) and GraalVM JIT: LangArena Etc::Words (https://github.com/kostya/LangArena): beats C++ splitting with std::istringstream and counting in std::unordered_map<std::string,int> (g++ 16, clang++ 22); best C/C++ configuration is C++/G++/PGO at 1.587 s; Java/OpenJDK 1.272 s vs C++/G++ 1.638 s (prod, -O2), C++/G++ -O3 'Fast' 1.651 s, best of all 16 C/C++ configurations 1.587 s: about 1.25x faster than the best r
+- OpenJDK HotSpot (Java 27): LangArena Binarytrees::Obj (https://github.com/kostya/LangArena): beats C++ (std::make_unique tree nodes, g++ 16 and clang++ 22) and C (malloc'd nodes); best C/C++ configuration is C++/G++/Fast at 2.098 s; Java/OpenJDK 0.479 s vs C++/G++ 2.101 s (prod, -O2), C++/G++ -O3 'Fast' 2.098 s (best of the 16 C/C++ prod, Fast, Unsafe and PGO configurations; only the instru
+- OpenJDK HotSpot (Java 27): LangArena Calculator::Ast (https://github.com/kostya/LangArena): beats C++ recursive-descent parser building an AST with std::variant nodes and std::unique_ptr (g++ 16, clang++ 22); best C/C++ configuration is C++/G++/Unsafe at 0.487 s; Java/OpenJDK 0.294 s vs C++/G++ 0.534 s (prod, -O2), C++/G++ -O3 'Fast' 0.524 s, best of all 16 C/C++ configurations C++/G++/Unsafe 0.487 s: about 1.8x faster t
+- OpenJDK HotSpot (Java 27): LangArena Calculator::Interpreter (https://github.com/kostya/LangArena): beats C++ tree-walking calculator interpreter (g++ 16, clang++ 22); best C/C++ configuration is C++/G++ prod at 0.691 s; Java/OpenJDK (Temurin 27, -Xmx2g, default GC) 0.52 s vs C++/G++ 0.691 s (prod, -O2; the best of the 16 Clang/GCC C and C++ configurations, PGO-instrumented buil
+- OpenJDK HotSpot (Java 27): LangArena Etc::CacheSimulation (https://github.com/kostya/LangArena): beats C LRU cache with uthash and strdup'd key/value strings (best C/C++ configuration C/Gcc/Unsafe, -O3 -march=native -ffast-math with full LTO, 0.789 s; C/Gcc prod -O2 0.816 s) and C++ LRU with std::unordered_map<std::string, Node*> plus a hand-rolled doubly linked list (C++/G++ 0.991 s); Java/OpenJDK (Temurin 27, -Xmx2g, default GC) 0.617 s vs C/Gcc/Unsafe 0.789 s (best of the 16 Clang/GCC C and C++ configurations, PGO-instrumented builds exclud
+- Racket (Staged): Brainfuck bench.b in kostya/benchmarks (https://github.com/kostya/benchmarks): beats C++/g++ brainfuck (brainfuck/bf.cpp): an AST-walking interpreter with std::vector ops, g++ -O3 -march=native -flto; bench.b: Racket (Staged) 0.885s (MAD 0.000) vs C++/g++ 1.097s, C/gcc 1.112s, C++/clang++ 1.167s (about 1.24x vs g++, derived from page data); memory 101.37 + 0.
+- Scala (Staged) on the JVM: Brainfuck bench.b in kostya/benchmarks (https://github.com/kostya/benchmarks): beats C++/g++ brainfuck (brainfuck/bf.cpp): an AST-walking interpreter with std::vector ops, g++ -O3 -march=native -flto; bench.b: Scala (Staged) 0.409s (MAD 0.011) vs C++/g++ 1.097s, C/gcc 1.112s, C++/clang++ 1.167s (about 2.7x vs g++, derived from page data); memory 229.62 + 7.00
+- Bun (JavaScriptCore JIT 1.4.2): alya-lang/benchmarks binary trees (https://github.com/alya-lang/benchmarks): beats C (gcc 13.3.0 -O2, malloc and free per node, binary_trees.c); Bun 98.3 ms vs C 126.3 ms (median of 10 timed runs after 1 warm-up): about 1.28x faster (derived from page data). Of the 14 benchmarks in the same table, Bun be
+- EvoTrees.jl (Julia gradient-boosted trees) vs XGBoost hist (C++, CPU and GPU) (https://github.com/Evovest/EvoTrees.jl): beats XGBoost v3.1.2 (C++/CUDA, 'hist' algorithm) driven from Julia through XGBoost.jl; No headline claim; README tables only. CPU training is faster only at 10M rows x 10 features (26.45 s vs 30.99 s at depth 6, 51.88 s vs 55.20 s at depth 11; 1.1
+- HotSpot Java IntMap put latency vs C++ clang++ -O3: coralblocks/CoralBench (https://github.com/coralblocks/CoralBench): beats C++ IntMap as it stood in December 2024 (src/main/c/int_map.hpp at commit 46103a6: std::vector<std::vector<Entry>> buckets, 64-bit size_t keys, no bucket reserve, so the first three puts into each bucket malloc and reallocate the vector inside the timed region), built with clang++ 18.1.0 -Ofast -march=native -flto -std=c++17 and driven by src/main/c/int_map_benchmark.cpp. The current header (pre-sized buckets since commit 9281b82, 32-bit keys since 259d856, both 2026-08-28) has never been benchmarked in the README.; No valid speedup. The hidden README section shows PUT 31.34 ns avg for HotSpot with Graal JVMCI (Oracle GraalVM 25.0.4.1, re-run 2026-08-28) and 32.40 ns for Ho
+- Java HotSpot vs g++ -O3 virtual-call microbenchmark (gist) (https://gist.github.com/87746): beats C++ virtual dispatch compiled with g++ 4.0.1 -O3 -fomit-frame-pointer -march=pentium4; C++ runs 1796.2, 1682.14, 1673.19, 1678.66, 1685.71, 1671.59, 1702.79, 1714.34, 1652.46, 1651.8 ms; Java 1.6.0_07 -server runs 967, 1036, 769, 740, 716, 718, 71
+- JSON3.jl (Julia) vs nlohmann/json, json-c and Boost.PropertyTree in kostya/benchmarks JSON (https://github.com/quinnj/JSON3.jl): beats nlohmann/json (C++), json-c (C library called from a C++ driver) and Boost.PropertyTree (C++) as built by kostya/benchmarks; JSON3 does NOT beat RapidJSON (all variants), Boost.JSON, simdjson, yyjson, yajl, gason or DAW JSON Link in the same table; Time in seconds (lower is better), kostya/benchmarks README Json table (median of runs, UPDATE: 2026-07-19): Julia (JSON3) 0.700; C++/clang++ (Nlohmann) 1.182; 
+- Julia (no BLAS) matmul with @fastmath @simd ivdep in kostya/benchmarks (https://github.com/kostya/benchmarks): beats C/gcc matmul (matmul/matmul.c, Attractive Chaos): B is transposed, then a scalar dot-product triple loop (t += p[k] * r[k]) on double** rows; gcc 16.1.0 -O3 -march=native -flto=auto -std=c23, no -ffast-math and no restrict; Matmul (MSIZE 1500): Julia (no BLAS) 1.113s (MAD 0.017) vs C/gcc 3.034s (MAD 0.001) and C/clang 3.067s (about 2.7x vs C/gcc, derived from page data); energy 49.
+- Julia 0.6 ccall: dyu/ffi-overhead plusone() call loop (https://github.com/dyu/ffi-overhead): beats C and C++ (gcc 5.4.1 -O2) calling plusone() in the shared library libnewplus.so through the dynamic linker; Julia 894 ms and 889 ms vs C 1182 ms and 1182 ms (C++ 1182 and 1183 ms) for 500M calls of plusone(): about 1.3x faster (derived from page data). The C and C++ r
+- Julia 1.6 density-gradient kernel vs C++ at g++ -O3: zyth0s/bench_density_gradient_wfn (https://github.com/zyth0s/bench_density_gradient_wfn): beats C++ port of the same density-gradient routine (cpp/lib.cpp, written with Eigen Map/VectorXd/MatrixXd/TensorMap over the caller's arrays; <valarray> is included but unused), called from Julia through @ccall in bench.jl. The published C++ timings were built by the cpp/Makefile of commit 0ebe405 with g++ (Apple clang 11.0.3) -Wall --std=c++11 -O3 -march=native; the current Makefile also passes -fPIC -funroll-loops, which were added later.; imidazol: Julia 112.843 us vs C++ 123.619 us; C2H4: Julia 41.737 us vs C++ 45.770 us (each about 9% faster, derived from page data). CH4: Julia 20.021 us vs C++
+- Julia vs C++ (clang, CMake Release): aaronang/stl-benchmark ParseStl (https://github.com/aaronang/stl-benchmark): beats C++ ParseStl benchmark (Google Benchmark) built with clang++ and CMake -DCMAKE_BUILD_TYPE=Release; C++ 409.210 us, Julia 211.641 us, Python 25150.9 us: Julia about 1.93x faster than C++ (derived from page data).
+- Julia vs C++11 random-walk Monte Carlo (jlapeyre/ranwalk-Julia-vs-Cxx) (https://github.com/jlapeyre/ranwalk-Julia-vs-Cxx): beats C++11 std::mt19937 with std::bernoulli_distribution(0.5), compiled with c++ -std=c++11 -O3 (Debian gcc 4.9.1); C++-11 3.88 s vs Julia v0.3 1.27 s and Julia v0.4 1.68 s: about 3.1x and 2.3x faster (derived from page data); the README says 'The Julia code runs three times 
+- LowRankApprox.jl (Julia randomized interpolative decomposition) vs SciPy/Fortran ID (https://github.com/JuliaLinearAlgebra/LowRankApprox.jl): beats SciPy interpolative decomposition (scipy.linalg.interpolative via PyMatrixID), which at the README's time wrapped the Fortran77 ID library; SciPy 1.15.0 ported that code to Cython. The README also names MATLAB. Neither is a C or C++ -O3 baseline.; README: ~0.02 s with LowRankApprox in Julia vs ~0.07 s with SciPy (Fortran backend) and ~0.3 s in MATLAB, i.e. about 3.5x faster than SciPy (derived from page d
+- LuaJIT 2.0 FFI: dyu/ffi-overhead plusone() call loop (https://github.com/dyu/ffi-overhead): beats C and C++ (gcc 5.4.1 -O2) calling plusone() in the shared library libnewplus.so through the dynamic linker; LuaJIT 891 ms and 905 ms vs C 1182 and 1182 ms (C++ 1182 and 1183 ms) for 500M calls of plusone() in libnewplus.so: about 1.3x faster, 1.78 vs 2.36 ns per call 
+- LuaJIT 2.1: k-nucleotide in kostya/jit-benchmarks (https://github.com/kostya/jit-benchmarks): beats C++ k-nucleotide (knucleotide/test.cpp, written for the suite) using std::unordered_map<std::string,int> without reserve and a std::string built by substr for every window, g++ (gcc 12.2.0 per the README Versions table) -O3 -march=native -fomit-frame-pointer -funroll-loops -std=c++11; knucleotide: Lua JIT 0.77s vs C++ 2.09s (about 2.7x, derived from page data), one measured run per row (Runs 1); memory 27.1 MB vs 30.9 MB. The C++ row is the o
+- LuaJIT 2.1: print_to_file in JuliaLang/Microbenchmarks (https://github.com/JuliaLang/Microbenchmarks): beats C fprintf loop (c/perf.c printfd: fprintf(f, "%ld %ld\n", i, i+1) to /dev/null) built with gcc 13.3.0 -std=c99 -O2; LuaJIT 6.26 ms vs C 8.02 ms (0.78x of the C time, about 1.28x faster, derived from page data). Rust 4.17 ms (0.52x) is also faster than C; Julia 10.17 ms (1.27x
+- LuaJIT vs C and C++ hash-table word count (spion gist) (https://gist.github.com/spion/3049314): beats C (hand-written chained hash table, gcc -O3) and C++ (std::unordered_map<string,int> with a custom hash, g++ -O3 -std=gnu++0x); Original 2012 'benchmark' transcript (one `time` run each, real time): C 0.234 s, C++ 0.321 s, Node 0.317 s, LuaJIT 0.161 s, so LuaJIT 1.45x faster than C and 1
+- NativeMinuit.jl (pure-Julia port of C++ Minuit2) (https://github.com/fkguo/NativeMinuit.jl): beats C++ Minuit2 (ROOT's standalone Minuit2 built through CMake, default Release, C++17) running MIGRAD on the same objectives; Julia/C++ time ratios 0.147x (quad_4d: 0.81 us vs 5.50 us), 0.253x (rosenbrock_2d: 9.50 vs 37.62 us), 0.371x (rosenbrock_10d: 58.11 vs 156.62 us), 0.718x (gauss
+- Node.js (V8 Irregexp JIT) regex-dna in kostya/jit-benchmarks (https://github.com/kostya/jit-benchmarks): beats C regex-dna (regexdna/test.c, Mike Pall's 2009-era Benchmarks Game program) using libpcre (PCRE1) with pcre_study(re, 0, ...), so PCRE's JIT is not enabled and every match runs in PCRE's interpreter; gcc 12.2.0 -O3 -march=native -fomit-frame-pointer -funroll-loops, linked with -lpcre; regexdna: Node 1.06s vs C 5.6s (about 5.3x, derived from page data), one measured run per row (Runs 1); memory 622.4 MB vs 86.7 MB. PHP (PCRE2 via preg_*) takes
+- Node.js (V8) fannkuch-redux in kostya/jit-benchmarks (https://github.com/kostya/jit-benchmarks): beats C fannkuch-redux (fannkuchredux/test.c, the Benchmarks Game Java-derived program with variable-length arrays), gcc 12.2.0 -O3 -march=native -funroll-loops; fannkuchredux (README round 1, 2023-02-28): Node 0.15 s vs C 0.21 s best run (about 1.4x, derived from page data); GraalVM_JVM 0.18 s and GraalVM 0.19 s also be
+- pflua (pflang packet-filter compiler on LuaJIT) vs libpcap BPF interpreter and Linux kernel BPF JITs (https://github.com/Igalia/pflua): beats libpcap's user-space BPF interpreter (pcap_offline_filter in the Debian system libpcap, version and build flags not stated) running bytecode from pcap_compile with libpcap's optimizer on; also the 2011 Linux kernel BPF JIT and the 2014 Linux eBPF JIT (C, built with gcc -O3 as user-space shared objects in pflua-bench), whose filters run as JIT-emitted machine code; pflua-bench README conclusion: 'In many circumstances, pflua is the fastest pflang implementation out there, by a long shot.' (the pflua README says 'by a wide 
+- Proteus (programmable runtime specialization and JIT layer on LLVM for C++, CUDA and HIP) (https://github.com/llnl/proteus): beats Ahead-of-time compiled CUDA/HIP/C++ kernels (typical AoT compilation of the same application); Up to 2.8x on AMD and 1.78x on NVIDIA end-to-end versus AoT compilation; 1.23x higher average end-to-end speedup than Jitify (from WebSearch snippets of the LLN
+- Ripserer.jl (Julia persistent homology) vs Ripser and Cubical Ripser (C++) (https://github.com/mtsch/Ripserer.jl): beats Ripser (C++, master commit 286d369) and Cubical Ripser (C++, commits 6edb9c5 for 2D and a063dac for 3D); Docs: 'very close to Ripser, usually within around 30%' and 'on very sparse inputs ... can sometimes outperform Ripser'. Ripserer/Ripser time ratios from the pa
+- SymbolicUtils.jl / Symbolics.jl (Julia symbolic engine) vs SymEngine (C++): SciMLBenchmarks SymEngineComparison (https://github.com/JuliaSymbolics/SymbolicUtils.jl): beats SymEngine v0.12.0 (C++ symbolic library, via SymEngine.jl v0.13.2 and SymEngine_jll); Summary table (SymEngine s vs SymbolicUtils s; the SymbolicUtils column is the faster of two variants): SymbolicUtils faster in 4 of 10 rows: compiled call with
+- Visual Basic .NET (CLR JIT) vs C: Fourmilab fbench (https://github.com/Fourmilab/floating_point_benchmarks): beats The C version of fbench built with GCC 3.2.3 -O3 on Linux (the table's reference row, relative time 1); Visual Basic .NET 'All optimisations, Windows XP': relative time 0.866 versus C 1 (about 1.15x faster, derived from page data). Visual Basic 6 on the same OS is
+- lua-resty-core (LuaJIT FFI API for ngx_lua) vs the ngx_lua built-in Lua C API (https://github.com/openresty/lua-resty-core): beats the Lua C API implementation of the ngx.* and ngx.shared.* functions in lua-nginx-module (ngx_lua, C); No numbers. README: 'its FFI implementation is both faster, safer, and more complete than the Lua C API of the ngx_lua module.' Caveat in the same README: 'You 
+
+=====================================================================
+PROCESS
+=====================================================================
+1. Open repo_url. Read the README, the main header/API surface, and the
+   benchmark page at benchmark_url. Skim the source enough to identify the
+   core technique (open addressing + SIMD probe groups, radix partitioning,
+   branchless binary search, io_uring, etc.).
+2. Check: header-only or built? Dependencies? Minimum language standard or
+   toolchain version? Platforms/architectures supported? Thread safety?
+   Exceptions? Allocator customization? ABI stability?
+3. Look for known failure modes: issues tagged "bug"/"performance", pathological
+   inputs the README warns about, CVEs, "not recommended for" notes.
+4. Identify 1–3 alternatives in the same category from the catalog
+   (the SIBLING ENTRIES listed under the input record) and say when you'd pick this one over them.
+5. Write the entry. Every claim you make must be traceable to something you
+   read this session. If you don't know, say "not documented" rather than
+   guessing.
+
+=====================================================================
+STYLE
+=====================================================================
+- Plain, direct, no marketing language. "2.3x faster lookups on 64-bit keys"
+  not "blazing fast".
+- Each field has a length cap. Respect it; brevity is the point.
+- Write for someone who knows the baseline well and has never heard of this.
+- Do not restate the JSON fields verbatim; they're rendered separately.
+
+=====================================================================
+OUTPUT — return ONLY this JSON object
+=====================================================================
+{
+  "id": "<repo canonical url>",
+  "one_liner": "<=20 words: what it is and what it beats",
+  "what_it_does": "2-4 sentences. The problem it solves and the API shape (drop-in? different interface?).",
+  "how_it_is_fast": "2-4 sentences. The core technique(s) that produce the speedup. Name the algorithm/idea so a reader can look it up.",
+  "when_to_use": [
+    "3-5 bullets, each a concrete situation: workload shape, key/value types, size ranges, latency vs throughput needs, platform"
+  ],
+  "when_not_to_use": [
+    "3-5 bullets: workloads where it loses or is risky, missing features, platform gaps, pathological cases, memory cost, maturity concerns"
+  ],
+  "integration": {
+    "form": "header-only | static lib | shared lib | crate | module | source-drop",
+    "dependencies": "none | list",
+    "min_toolchain": "e.g. C++17, GCC 9+, Rust 1.70",
+    "platforms": "e.g. x86-64 (AVX2 required), aarch64, any",
+    "thread_safety": "string or 'not documented'",
+    "drop_in_for_baseline": true | false | "partial — explain"
+  },
+  "gotchas": [
+    "0-4 bullets: surprising behavior, iterator invalidation rules, hash quality requirements, alignment needs, unsafe blocks, etc."
+  ],
+  "pick_this_over_siblings_when": "1-2 sentences comparing to the SIBLING ENTRIES listed under the input record, or 'no siblings catalogued yet'",
+  "verified_claims_summary": "1-2 sentences restating the benchmark result in your own words with the baseline, stdlib/compiler, and hardware, so the reader knows what was actually measured",
+  "status_note": "1 sentence on maintenance_status and usability, e.g. 'Abandoned since 2019 but MIT-licensed and small enough to vendor; last known-good compiler GCC 9.'",
+  "sources_read": ["every URL you opened"],
+  "confidence": 0.0-1.0
+}
+
+=====================================================================
+ORCHESTRATOR HARNESS NOTES (environment-specific; these override only
+the output-delivery rule above)
+=====================================================================
+- Tools: WebSearch and WebFetch (if they are not loaded yet, load them
+  with ToolSearch query "select:WebSearch,WebFetch"). The `gh` CLI is
+  authenticated; for GitHub repos prefer it over WebFetch:
+    gh api repos/OWNER/REPO/readme -H "Accept: application/vnd.github.raw"
+    gh api repos/OWNER/REPO/contents/PATH -H "Accept: application/vnd.github.raw"
+    gh api "repos/OWNER/REPO/git/trees/HEAD?recursive=1" --jq '.tree[].path'
+    gh search issues --repo OWNER/REPO "<terms>" --limit 20
+  Fetching content through gh counts as opening the github.com URL.
+- Do not clone repositories or build anything.
+- Never send the user's email address, name or any other personal identifier to an
+  outside service (URLs, headers, payloads). For APIs that want a User-Agent, such as
+  crates.io, use exactly: User-Agent: fastpp-research-bot/1.0
+- The record's `verification` block holds the verifier's notes; treat its
+  corrections as authoritative over older claims.
+- Budget: about 40 tool calls. Token cost is not a concern; read the source and
+  docs deeply enough to fill every field with evidence.
+- Deliver your output by writing the JSON object, and nothing else, to:
+    /home/user/fastpp/data/wave14/enrich/raw/lang_csharp_kostya_langarena_graph_astar.json
+  Then check it parses:
+    python3 -c "import json,sys; json.load(open(sys.argv[1]))" /home/user/fastpp/data/wave14/enrich/raw/lang_csharp_kostya_langarena_graph_astar.json
+- Your final reply to the orchestrator is one line: the entry name and your confidence.
