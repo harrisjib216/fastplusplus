@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/semyonts/rustybox",
+  "one_liner": "Single-binary Rust multicall userland (sort, sed, grep, cut, wc and about 45 more) claiming small wins over GNU sort and sed.",
+  "what_it_does": "RustyBox is a BusyBox/Toybox-style multicall binary: invoke it as `rustybox sort ...` or through a symlink named after the command (argv[0] dispatch). Version 0.1.4 on main registers 48 commands (the dev branch adds find, tar, which and others, untested); a POSIX shell is behind the off-by-default UNSTABLE_SH Cargo feature. It is meant as a drop-in for the classic tools, but each command implements only a POSIX-ish subset of options.",
+  "how_it_is_fast": "No special algorithm: the measured paths are plain Rust with buffered I/O. `sort -n` on whole lines takes a fast path that parses each line once into an f64, sorts (f64, index) pairs with the standard library's unstable pattern-defeating quicksort, and prints by index, with no locale collation and no last-resort tie comparison. `grep` and `sed` compile patterns with the Rust `regex` crate (lazy DFA with literal prefilters; grep uses the byte-oriented API to skip UTF-8 validation), which is why they beat BusyBox's libc-regex loops by 10x or more. The GNU-baseline rows are 10-50 ms runs, so process start-up and libc/locale initialisation are a large share of what is measured.",
+  "when_to_use": [
+    "Small container or embedded images where you want one statically linked 2.4 MB binary instead of BusyBox or Toybox, and BusyBox grep/sed/cut speed is the bottleneck (the 4x-21x rows are against BusyBox and FreeBSD base tools).",
+    "FreeBSD or other non-GNU systems where simple `grep`, `cut` or `cat | grep | wc` scripts over UTF-8 text are slow with the base tools.",
+    "Whole-line `sort` or `sort -n` of clean numeric or ASCII input (one number per line) where C-locale byte ordering is acceptable.",
+    "Simple `sed` scripts limited to s///, p, d, a, i, c with numeric or regex addresses, on valid UTF-8 input."
+  ],
+  "when_not_to_use": [
+    "As a replacement for GNU coreutils/sed in existing scripts: sed supports only s, p, d, a, i and c (no y, q, n/N, hold space, branches, -i, -E, s flags other than g), and grep lacks -o, context options and backreferences.",
+    "Any input that is not valid UTF-8 (Latin-1 logs, binary data): sort, sed and wc read lines into Rust Strings and abort with an error instead of processing the bytes.",
+    "Locale-sensitive sorting, keyed sorts with modifiers, or sort -u on keys: collation is always byte order and several -k/-u paths differ from POSIX (see gotchas).",
+    "Numeric data with exponents, units suffixes, thousands separators or integers above 2^53: `sort -n` parses whole lines as f64, so '1e3' sorts as 1000, '12 kB' as 0, and large integers can compare equal.",
+    "Production use generally: 1 star, 60 crates.io downloads, one author, two months of history, and the README's speed table has no published harness."
+  ],
+  "integration": {
+    "form": "crate (rustybox_utils on crates.io) building one multicall binary `rustybox`; use via symlinks named after each command",
+    "dependencies": "Rust crates libc, regex, chrono, filetime, linkme, lexopt, rustyline (statically linked; no runtime dependencies)",
+    "min_toolchain": "Rust edition 2024 (Rust 1.85+); no rust-version field in Cargo.toml",
+    "platforms": "POSIX only: tested on Linux (Arch, x86-64) and FreeBSD 14.4; README claims macOS and NetBSD but no CI or test evidence; no Windows",
+    "thread_safety": "not applicable (each command is a single-threaded process); README's 'thread safety in parallel pipelines' claim is marketing, not a feature",
+    "drop_in_for_baseline": "partial — same command names and common flags, but sed lacks most commands and `$`/`&`, several sort flags behave differently from GNU/POSIX, and non-UTF-8 input fails"
+  },
+  "gotchas": [
+    "sed correctness bugs (src/commands/sed.rs): `is_last` is hard-coded to false ('Full $ support ... omitted for brevity'), so the advertised `$` address never matches (`sed '$d'` deletes nothing); `&` in a replacement is emitted literally (only \\1-\\9 are expanded); the `p` command suppresses auto-print, so `sed p` without -n prints each line once instead of twice; the script is split on every ';', breaking patterns that contain one; and BRE `+ ? { |` are passed to the Rust regex crate as ERE metacharacters. The sed benchmark command is not published, so it is unknown whether the 1.3x row exercised any of these.",
+    "sort correctness bugs (src/commands/sort.rs): the whole-line fast path ignores -b and per-key modifiers, so `sort -k1n` sorts lexicographically and `sort -k1r` ascending; in the generic path `-u` (and `-c -u`) compares whole lines after the keys, so `sort -u -k2,2` keeps every line with a duplicate key; `-k N` without an end field covers only field N instead of running to end of line, and the default key in the generic path (e.g. `sort -f`) is only the first field. No -s, -g, -h, -V, -z or -S options.",
+    "The `sort -n` speed comes partly from doing less than GNU: an f64 parse of the trimmed whole line (Rust syntax, so exponents, 'inf' and 'NaN' are numbers, and lines with a non-numeric suffix become 0), an unstable sort with no last-resort whole-line comparison, and byte rather than locale ordering. `wc -l` counts a final line without a trailing newline (GNU counts newlines), so it can report one more than GNU wc.",
+    "No benchmark scripts, inputs, tool versions, locale or build flags are published (the repository holds only src/, tests/ and docs). The 'GNU' sort used for the FreeBSD 4.7x row is not identified, and every GNU row is a 10-50 ms run where start-up dominates. Of the sort, sed, grep, cut, wc and cat sources, only sort contains unsafe code (a thread-local raw pointer to the config in the sort -m heap comparator), which is harmless here but at odds with the README's 'memory-safe by construction' line."
+  ],
+  "pick_this_over_siblings_when": "Pick uutils coreutils when you need GNU compatibility (it implements far more of sort and many more utilities, and claims 1.46x on numeric sort); pick sd for find-and-replace or rust-sort for large sorts; pick RustyBox only when one small multicall binary replacing BusyBox or Toybox is the goal and the scripts use its simple subset.",
+  "verified_claims_summary": "The author's README reports hyperfine means on 100k-line inputs on an Intel i7-8550U running Arch Linux: sort -n 25.4 ms vs GNU sort 48.4 ms (1.9x), sed 29.8 ms vs GNU sed 37.4 ms (1.3x) and a cat | grep | wc pipeline 10.1 ms vs GNU 12.6 ms (1.3x), plus a FreeBSD 14.4 VM row of 30.0 ms vs 139.5 ms for sort -n; the larger 4x-21x rows are against BusyBox or FreeBSD base tools. GNU versions, locale, commands, inputs and RustyBox build flags are not stated (Cargo.toml uses the default release profile), so none of this can be reproduced.",
+  "status_note": "Single-author project created August 2026 (83 commits on main, last release 0.1.4 on 2026-08-10, an open dev-branch PR from 2026-09-02 adding untested commands), MPL-2.0; usable for simple scripts on UTF-8 text, but sed and sort have correctness gaps against POSIX/GNU that its shallow test suite does not catch, so treat the speed claims as unverified first-party numbers.",
+  "sources_read": [
+    "https://github.com/SemyonTs/RustyBox",
+    "https://github.com/SemyonTs/RustyBox/commits",
+    "https://github.com/SemyonTs/RustyBox/issues?q=is%3Aissue",
+    "https://github.com/SemyonTs/RustyBox/pulls",
+    "https://github.com/SemyonTs/RustyBox/pull/2",
+    "https://github.com/SemyonTs/RustyBox/tree/main/tests",
+    "https://github.com/SemyonTs/RustyBox/tree/dev",
+    "https://raw.githubusercontent.com/SemyonTs/RustyBox/HEAD/README.md",
+    "https://raw.githubusercontent.com/SemyonTs/RustyBox/HEAD/errata.md",
+    "https://raw.githubusercontent.com/SemyonTs/RustyBox/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/SemyonTs/RustyBox/HEAD/NOTICE",
+    "https://raw.githubusercontent.com/SemyonTs/RustyBox/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/SemyonTs/RustyBox/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/SemyonTs/RustyBox/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/SemyonTs/RustyBox/HEAD/src/commands/mod.rs",
+    "https://raw.githubusercontent.com/SemyonTs/RustyBox/HEAD/src/commands/sort.rs",
+    "https://raw.githubusercontent.com/SemyonTs/RustyBox/HEAD/src/commands/sed.rs",
+    "https://raw.githubusercontent.com/SemyonTs/RustyBox/HEAD/src/commands/grep.rs",
+    "https://raw.githubusercontent.com/SemyonTs/RustyBox/HEAD/src/commands/wc.rs",
+    "https://raw.githubusercontent.com/SemyonTs/RustyBox/HEAD/src/commands/cat.rs",
+    "https://raw.githubusercontent.com/SemyonTs/RustyBox/HEAD/src/commands/cut.rs",
+    "https://raw.githubusercontent.com/SemyonTs/RustyBox/HEAD/tests/sort_test.rs",
+    "https://raw.githubusercontent.com/SemyonTs/RustyBox/HEAD/tests/sed_test.rs",
+    "https://raw.githubusercontent.com/SemyonTs/RustyBox/dev/changelog.md",
+    "https://raw.githubusercontent.com/SemyonTs/RustyBox/dev/README.md",
+    "https://raw.githubusercontent.com/SemyonTs/RustyBox/dev/src/commands/sort.rs",
+    "https://raw.githubusercontent.com/SemyonTs/RustyBox/dev/src/commands/sed.rs",
+    "https://crates.io/api/v1/crates/rustybox_utils"
+  ],
+  "confidence": 0.25
+}

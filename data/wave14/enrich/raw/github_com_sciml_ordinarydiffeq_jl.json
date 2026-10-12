@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/sciml/ordinarydiffeq.jl",
+  "one_liner": "Julia ODE solver suite whose Verner Runge-Kutta methods beat Sundials CVODE/ARKODE on small non-stiff work-precision benchmarks.",
+  "what_it_does": "OrdinaryDiffEq.jl is the ODE (and mass-matrix DAE) solver package of the SciML ecosystem: explicit Runge-Kutta (Tsit5, Vern6-9), Rosenbrock, SDIRK/ESDIRK, BDF (FBDF, QNDF), extrapolation, symplectic and stabilized methods behind one solve(ODEProblem(f, u0, tspan, p), alg; abstol, reltol) call. The right-hand side can be in-place f!(du,u,p,t) or out-of-place with StaticArrays SVector state. Sundials.jl, LSODA.jl and ODEInterfaceDiffEq plug into the same interface, so in Julia the C solvers and these methods are swapped by changing the algorithm argument.",
+  "how_it_is_fast": "On non-stiff problems the win is algorithmic: Verner's high-order RK pairs (Vern7/Vern8) and Tsit5 need fewer function evaluations per unit of accuracy than Adams multistep (CVODE_Adams, lsoda) or order-6 explicit ARKODE at tight tolerances. Julia compiles the solver specialised on the user's RHS type (FullSpecialize in the benchmark), and the out-of-place StaticArrays path keeps a 3-element state in registers with no heap allocation. On stiff problems the Rosenbrock methods (Rodas4, Rodas5P) with an analytic or AD Jacobian are the strongest entries.",
+  "when_to_use": [
+    "Small non-stiff systems (a handful to tens of states) solved to tolerances of 1e-6 to 1e-13, where Vern7/Vern8 reach matched error in roughly 5-10x less time than CVODE_Adams or explicit ARKODE in the RigidBody plot.",
+    "Many repeated solves of tiny systems (parameter sweeps, ensembles) where an SVector state and out-of-place RHS avoid allocations entirely.",
+    "Small-to-medium stiff systems at low tolerances, where Rodas4/Rodas5P lie below CVODE_BDF in the Pollution low-tolerance plot.",
+    "Projects already in Julia that want to compare or switch algorithms (CVODE, LSODA, Hairer codes, native methods) without rewriting the model."
+  ],
+  "when_not_to_use": [
+    "C or C++ codebases: there is no C API, so using it means embedding Julia; the comparison says nothing about CVODE called natively from C.",
+    "Stiff problems where CVODE_BDF is already well tuned: on POLLU (20 equations) FBDF is roughly tied with CVODE_BDF and the page's prose names CVODE_BDF the best.",
+    "Fixed-step implicit solves (adaptive = false) of linear systems: open issue #2586 measures OrdinaryDiffEq ImplicitEuler 70-100x slower than a hand-written loop at N = 100 because W is rebuilt and refactorized every step.",
+    "Short-lived processes or scripts where Julia start-up, package loading and first-solve compilation dominate the solve time.",
+    "Delay equations with long histories or many interpolation points: open performance issues #3146-#3149 report history memory growing with tspan and allocation-heavy interpolation."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Julia packages: SciMLBase, DiffEqBase, OrdinaryDiffEqCore plus per-family sublibraries (OrdinaryDiffEqVerner, OrdinaryDiffEqTsit5, OrdinaryDiffEqBDF, OrdinaryDiffEqRosenbrock, ...), ADTypes, SciMLLogging",
+    "min_toolchain": "Julia 1.10 (Project.toml compat); benchmark run on Julia 1.11.9",
+    "platforms": "any platform Julia supports; benchmark numbers from x86-64 (AMD EPYC 7502, LLVM znver2)",
+    "thread_safety": "not documented in the pages read; each solve call builds its own integrator and cache",
+    "drop_in_for_baseline": "partial: inside Julia's SciML solve interface, replacing CVODE_Adams() with Vern7() is a one-argument change; from C/C++ there is no drop-in replacement for CVODE"
+  },
+  "gotchas": [
+    "Harness asymmetry in DiffEqDevTools (lib/DiffEqDevTools/src/benchmark.jl): every timed run calls solve(prob, alg, sol.u, sol.t, sol.k) with the previous solve's output arrays; OrdinaryDiffEqCore reuses them (convert plus copyat_or_push!), while Sundials.jl's __init ignores them and also creates a new SUNContext, CVodeCreate/CVodeInit, NVector wrappers and Julia callbacks on every timed run, then drives CVODE in CV_ONE_STEP mode, returning to Julia after each internal step. For 20 us to 1 ms solves this per-solve and per-step wrapper cost is inside the C solvers' times, so the 5-10x gap overstates what native C CVODE would lose.",
+    "OrdinaryDiffEq v7 changed ODEFunction's default to AutoSpecialize; the benchmark explicitly uses ODEProblem{true, SciMLBase.FullSpecialize}, and NEWS.md says to opt into FullSpecialize to get maximum inlining, so default user code may not reproduce the plotted times.",
+    "The RigidBody_wpd_5_1 legend repeats the names Vern7 and Vern8: the lower two curves are the StaticArrays out-of-place runs (prob_choice 2), a path the C solvers cannot use.",
+    "The record's 'ODEPACK lsoda (Fortran)' baseline is actually liblsoda, Simon Frost's C translation of LSODA, via LSODA.jl; and the Pollution page's prose conclusion ('Sundials CVODE_BDF the best here') disagrees with its own low-tolerance plot Pollution_16_1, where Rodas5P runs roughly 2-3x faster than CVODE_BDF at about 1e-9 error and FBDF roughly ties it, so that prose is probably stale."
+  ],
+  "pick_this_over_siblings_when": "Pick it for CPU solves of small ODE systems; DiffEqGPU.jl is the sibling for large GPU ensembles, benchmarked against the CUDA C++ MPGOS library. Other numerics siblings (Bessels.jl, FFTA.jl, TriangularSolve.jl) beat C wrappers on different kernels and do not overlap.",
+  "verified_claims_summary": "SciMLBenchmarks RigidBody work-precision page (3-equation rigid body, abstol 1e-6 to 1e-13, min of up to 100 runs, AMD EPYC 7502, Julia 1.11.9): Vern7/Vern8 take about 2e-5 to 1e-4 s against about 1e-4 to 1e-3 s for CVODE_Adams and explicit order-6 ARKODE (Sundials_jll 7.5.0 through Sundials.jl 6.7.1, build flags unstated), roughly 5-10x at matched final-time error read off the plot. This is an algorithm comparison measured by the solver's own authors, with the C solvers driven through Julia wrappers and callbacks.",
+  "status_note": "Very active (v7.8.1, commits on 2026-10-11, 692 stars, 435 open issues), MIT-licensed and installable with Pkg.add, but useful only from Julia; the v7 release broke keyword APIs (typed autodiff/verbose/alias objects) and DifferentialEquations.jl v8 no longer re-exports Sundials.",
+  "sources_read": [
+    "https://github.com/SciML/OrdinaryDiffEq.jl",
+    "https://raw.githubusercontent.com/SciML/OrdinaryDiffEq.jl/master/README.md",
+    "https://raw.githubusercontent.com/SciML/OrdinaryDiffEq.jl/master/Project.toml",
+    "https://raw.githubusercontent.com/SciML/OrdinaryDiffEq.jl/master/NEWS.md",
+    "https://raw.githubusercontent.com/SciML/OrdinaryDiffEq.jl/master/lib/DiffEqDevTools/src/benchmark.jl",
+    "https://raw.githubusercontent.com/SciML/OrdinaryDiffEq.jl/master/lib/OrdinaryDiffEqCore/src/solve.jl",
+    "https://raw.githubusercontent.com/SciML/Sundials.jl/master/src/common_interface/solve.jl",
+    "https://raw.githubusercontent.com/rveltz/LSODA.jl/master/README.md",
+    "https://raw.githubusercontent.com/SciML/SciMLBenchmarks.jl/HEAD/README.md",
+    "https://raw.githubusercontent.com/SciML/SciMLBenchmarksOutput/main/markdown/NonStiffODE/RigidBody_wpd.md",
+    "https://raw.githubusercontent.com/SciML/SciMLBenchmarksOutput/main/markdown/NonStiffODE/figures/RigidBody_wpd_5_1.png",
+    "https://raw.githubusercontent.com/SciML/SciMLBenchmarksOutput/main/markdown/StiffODE/Pollution.md",
+    "https://raw.githubusercontent.com/SciML/SciMLBenchmarksOutput/main/markdown/StiffODE/figures/Pollution_16_1.png",
+    "https://github.com/SciML/OrdinaryDiffEq.jl/issues?q=is%3Aissue+is%3Aopen+label%3Aperformance",
+    "https://github.com/SciML/OrdinaryDiffEq.jl/issues/2586"
+  ],
+  "confidence": 0.65
+}
