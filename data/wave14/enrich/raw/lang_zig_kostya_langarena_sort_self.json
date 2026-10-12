@@ -1,0 +1,61 @@
+{
+  "id": "lang:zig/kostya/langarena#sort-self",
+  "one_liner": "Zig's standard-library pdqsort (std.sort.pdq) sorts 400k int32 about 1.2x faster than libstdc++ std::sort in LangArena Sort::Self.",
+  "what_it_does": "LangArena's Sort::Self test copies a 400,000-element int32 array into a fresh buffer and sorts it with each language's built-in sort, 50 timed iterations after 10 untimed warm-up iterations. The Zig program arena-allocates the buffer, @memcpy's the data and calls std.sort.pdq(i32, arr, {}, std.sort.asc(i32)); the C++ program copies a std::vector<int32_t> and calls std::sort. The catalogued 'implementation' is Zig's unstable, in-place standard-library sort (also reachable as std.mem.sortUnstable; std.mem.sort is the stable block sort), so it is a default for Zig code, not something a C++ project can link.",
+  "how_it_is_fast": "lib/std/sort/pdq.zig is a port of Orson Peters' pattern-defeating quicksort: Tukey's ninther pivot for ranges of 50 or more, insertion sort for ranges of 24 or fewer, a bounded partial insertion sort when pivot sampling sees presorted data, an equal-elements partition when the pivot equals its left neighbour, xorshift pattern breaking and a heapsort fallback after too many unbalanced partitions. Its partition is still a branchy Hoare loop (the source carries 'TODO: Enable the BlockQuicksort optimization'), so it lacks the branchless block partition that makes orlp/pdqsort about 2x faster than std::sort on random ints. libstdc++ std::sort is introsort with a median of three (first+1, middle, last-1), an unguarded Hoare partition, a 16-element cutoff and one final insertion-sort pass. The suite does not isolate whether the 1.2x comes from the better pivot sampling, the leaf handling or LLVM versus GCC code generation.",
+  "when_to_use": [
+    "In Zig code sorting large slices of primitive keys where stability does not matter: std.sort.pdq or std.mem.sortUnstable sorts in place with no allocator and a fixed-size stack of ranges.",
+    "When you want to keep safety checks on: the ReleaseSafe build (0.809 s) was no slower than ReleaseFast (0.819 s) on this test, so bounds checks cost nothing measurable here.",
+    "Inputs that may be presorted or reversed: pivot sampling flags increasing or decreasing slices, reverses the latter and tries a partial insertion sort before partitioning (per pdq.zig).",
+    "As a C++ reader: evidence that libstdc++ std::sort on random 32-bit keys is a weak baseline; the C++ form of the same idea, with branchless partitioning added, is the catalogued orlp/pdqsort header."
+  ],
+  "when_not_to_use": [
+    "As evidence that Zig the language beats C++: in the same run the hand-written, same-algorithm Sort::Quick has Zig ReleaseSafe at 1.266 s against C/Gcc 1.15 s and C++/G++ 1.175 s (Zig/Unchecked 1.146 s, parity), and Sort::Merge has Zig 1.504 s against C/Clang 1.09 s.",
+    "When you need the fastest integer sort: on the same data Rust's built-in slice::sort takes 0.41 s (about 2x faster than Zig's pdq) and Julia's radix-sorting sort! 0.116 s.",
+    "When equal keys must keep their order: pdq is unstable; std.mem.sort (block sort) is Zig's stable option and was not measured here.",
+    "From C or C++: there is nothing to call without FFI; use orlp/pdqsort or another catalogued C++ sort instead."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (Zig standard library, lib/std/sort/pdq.zig)",
+    "min_toolchain": "std.sort.pdq was added to Zig's standard library on 2023-05-24 ('std.sort: add pdqsort and heapsort'); the subrange out-of-bounds fix (#25253) landed 2025-09-18 for the 0.15.2 milestone; measured on Zig 0.17.0",
+    "platforms": "any Zig target; measured on x86-64 (AMD Ryzen 7 3800X, Linux)",
+    "thread_safety": "single-threaded in-place sort of the caller's slice; no global state and no allocation (fixed stack array of ranges), so sorts of distinct slices can run concurrently",
+    "drop_in_for_baseline": "partial — semantics match std::sort (unstable, in place, O(n log n) worst case through the heapsort fallback), but it is a Zig API taking a comptime lessThan function and C++ cannot call it without FFI"
+  },
+  "gotchas": [
+    "Input quirk, equal on both sides (checked by re-running the generator): the data come from the Benchmarks Game LCG (IM 139968, IA 3877, IC 29573 in both cpp/src/helper.hpp and zig/src/helper.zig), whose period is 139,968, so the 400,000 keys are one sequence repeated about 2.86 times and every value occurs 2 or 3 times. Zig's equal-pivot partition may gain slightly from that; the input is not 400k independent random keys.",
+    "The checksum (run.js expects 61757772) adds one random input element and one random element of the sorted copy per iteration, so it proves the code ran on identical data but would not catch a partly wrong sort; no harness bug was found: both sides share the RNG, the reset before timing, the 20% untimed warm-up and the timed loop that includes the copy.",
+    "Issue #25250: pdqContext on a subrange starting above 0 called lessThan and swap with an index outside the range (partialInsertionSort); fixed in PR #25253 on 2025-09-18. Whole-slice std.sort.pdq calls start at 0 and were not affected, but older Zig releases used with pdqContext on subranges were.",
+    "One measurement per configuration on one machine, no variance; ReleaseSafe beating ReleaseFast by 1% shows noise of that order. The GitHub copy of pdq.zig checked here is frozen at 2025-11-27; the Zig 0.17.0 source on Codeberg could not be opened from this session."
+  ],
+  "pick_this_over_siblings_when": "The Rust slice::sort Sort::Self sibling is about 2x faster on the same data and the ipnsort/driftsort entry (sort-research-rs) has controlled benchmarks, so for engineering decisions about sort algorithms cite those; this row matters only to Zig users choosing an unstable, allocation-free sort. For C++ code, orlp/pdqsort is the like-for-like replacement and adds the branchless block partition that Zig's port leaves as a TODO.",
+  "verified_claims_summary": "On an AMD Ryzen 7 3800X (LangArena results 2026-10-05, one run per configuration), 50 copy-and-sort iterations of a 400,000-element int32 array take 0.809 s with Zig 0.17.0 ReleaseSafe std.sort.pdq (0.819 s ReleaseFast) against 0.982 s for g++ 16.0.1 trunk -O2 std::sort on libstdc++, the best of the 10 C++ configurations (clang++ 22.1.8 1.022 s; all C++ rows 0.982-1.027 s; C qsort rows 1.957-2.207 s): about 1.21x (derived from page data). Peak memory is 7.3 MB for Zig against 8.6 MB for C++/G++.",
+  "status_note": "Zig (MIT) is actively developed on Codeberg while the GitHub repository is a frozen copy since 2025-11-27 ('README: migrated to codeberg'); pdq.zig's algorithm is unchanged since 2023 apart from bug fixes; the result is a modest, single-run standard-library algorithm win in a self-described subjective suite, with no harness bug found behind the numbers.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/run.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/build.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/build.zig.zon",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/src/sort_self.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/src/benchmark.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/src/helper.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/src/main.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/sort.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/sort.hpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/benchmark.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/helper.hpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/helper.cpp",
+    "https://raw.githubusercontent.com/ziglang/zig/HEAD/lib/std/sort/pdq.zig",
+    "https://raw.githubusercontent.com/ziglang/zig/HEAD/lib/std/sort.zig",
+    "https://raw.githubusercontent.com/ziglang/zig/HEAD/lib/std/mem.zig",
+    "https://github.com/ziglang/zig",
+    "https://github.com/ziglang/zig/commits",
+    "https://github.com/ziglang/zig/commits/master/lib/std/sort/pdq.zig",
+    "https://github.com/ziglang/zig/issues/25250",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/HEAD/libstdc++-v3/include/bits/stl_algo.h"
+  ],
+  "confidence": 0.75
+}

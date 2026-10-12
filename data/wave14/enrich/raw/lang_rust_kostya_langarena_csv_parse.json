@@ -1,0 +1,63 @@
+{
+  "id": "lang:rust/kostya/langarena#csv-parse",
+  "one_liner": "Rust simd-csv plus core's Eisel-Lemire float parser runs LangArena CSV::Parse 2.5x faster than C and C++ code calling glibc strtod.",
+  "what_it_does": "CSV::Parse is a LangArena task, not a library: each of 70 timed iterations parses 100,000 generated rows (about 75 bytes each, six columns: two quoted text cells with doubled quotes, three 10-decimal floats below 1 and one empty cell), collects the three floats per row into a vector and checksums their averages. The Rust version (rust/src/benchmarks/csv_parse.rs) runs simd_csv::ZeroCopyReader over the in-memory string and converts cells 1, 3 and 5 with str::parse::<f64>. To reuse the result, write Rust with the simd-csv crate (a pure-Rust reader family: Reader, ZeroCopyReader, Splitter) and the standard float parser; nothing here links into a C or C++ program.",
+  "how_it_is_fast": "The speedup comes from two library choices, not from code generation. Rust's str::parse::<f64> is core's dec2flt, an Eisel-Lemire parser with an exact fast path for mantissas up to 2^53 and small powers of ten; every field here is a 10-decimal number below 1, so each conversion should take that path (inference from the dec2flt source and the data format). The C and C++ baselines call glibc strtod: C copies each field into a 64-byte stack buffer, C++ builds a temporary std::string and calls std::stod. simd-csv's ZeroCopyReader also finds delimiters, newlines and quotes with an SSE2 searcher and hands back borrowed cell slices, where the C loop tests every byte. But the cells are 12-20 bytes, the size at which simd-csv's README says the SIMD gain is smallest, and Rust WebAssembly builds without that searcher still beat native C, so scanning is probably the smaller share (inference).",
+  "when_to_use": [
+    "Rust tools that parse large in-memory or streamed CSV and convert numeric cells: here 100,000 rows with three float columns took about 12.6 ms per pass on a Ryzen 7 3800X, against about 31.8 ms for the C version (derived from page data).",
+    "Pipelines that need cell boundaries rather than unescaped text, which is what ZeroCopyReader returns; Splitter is faster still if only record boundaries are needed (simd-csv README).",
+    "Records with long cells or wide rows, where the simd-csv README reports the largest gains over the csv crate (about 2-4.7x for its zero-copy reader on most of its test files).",
+    "As a reference point when choosing a language for CSV-to-numbers ingestion: Rust's standard float parser removes the strtod bottleneck that naive C and C++ code hits."
+  ],
+  "when_not_to_use": [
+    "As evidence that Rust out-compiles C or C++: the baselines are a byte-at-a-time C loop and lazycsv, both on glibc strtod. No C or C++ row uses fast_float or std::from_chars, although the C++ code is built as C++20, and the -O3 -march=native, -ffast-math and PGO builds are no faster (2.378-2.645 s).",
+    "Inside a C++ codebase: the likely fix is to swap strtod or std::stod for std::from_chars or fast_float (and optionally a SIMD splitter), not to change language. This was not measured by the suite.",
+    "Data with quoted numeric cells or embedded escapes that must be unescaped: ZeroCopyReader returns raw cells, so the benchmark's parse().unwrap() would panic on a quoted number.",
+    "Workloads that need the flexibility of the csv crate (serde integration, flexible record handling): the simd-csv README calls itself less flexible and user-friendly and says worst-case data parses no faster than scalar code.",
+    "Production code copied from the benchmark: 'while let Ok(Some(record))' stops silently at the first CSV error instead of reporting it."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "simd-csv 0.13.0 (MIT, depends on memchr) as pinned in rust/Cargo.lock; float parsing is core's str::parse::<f64>",
+    "min_toolchain": "simd-csv 0.13.0 uses edition 2021 and declares no rust-version (crates.io); measured with rustc 1.99.0, default release profile (opt-level 3, no LTO, no target-cpu)",
+    "platforms": "simd-csv 0.13.0 src/searcher.rs has an SSE2 searcher on x86-64 and a NEON searcher on aarch64, and uses memchr's portable Three searcher on every other target, including wasm32 (the README says wasm uses simd128); measured on x86-64 Linux",
+    "thread_safety": "Not documented in the sources read; each reader owns its stream state, and the benchmark is single-threaded",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw (crippled baselines): both C and C++ spend their time in glibc strtod. The run does 21 million float conversions (100,000 rows x 3 floats x 70 iterations). C/Clang's 2.223 s is about 106 ns per conversion if conversion took all the time, and its overall rate of about 236 MB/s over about 525 MB of CSV is slow for a byte loop, so conversion rather than CSV scanning most likely dominates (derived from page data; no profile exists). The README says library-based tests use 'the best practical option for each language', but the C++ side, built with -std=c++20, does not use std::from_chars.",
+    "The Rust WebAssembly rows show that SIMD splitting is not what produces the 2.5x. They are built with cargo build --target wasm32-wasip1 --release, where simd-csv 0.13.0 uses memchr's portable searcher instead of its SSE2 code, yet they run 1.226 s (Node), 1.371 s (WasmEdge), 1.462 s (Wasmtime) and 1.626 s (Wasmer), all faster than native C/Clang at 2.223 s.",
+    "No bug behind the timed numbers, but the checksum is weak. Every language must reproduce checksum 1071523081 (run.js), the timer covers only run_all after prepare and a 20% warm-up on both sides (c/src/benchmark.c, rust/src/main.rs), and Rust and C both read cells 1, 3 and 5 as x, z and y. The C++ baseline, however, swaps y and z: row.cells(1, 3, 5) yields columns 1, 3 and 5, but the code takes z from cells[2] (column 5) and y from cells[1] (column 3), assuming cells() returns them in the requested order. The checksum cannot catch this, because it adds the checksums of the three averages, each formatted to 7 decimals, and addition commutes. The swap does not change the work timed. The C baseline also rejects fields of 64 bytes or more, which this data never reaches.",
+    "One timing per configuration per monthly run on one machine (Ryzen 7 3800X; the run note says the host moved to Arch Linux, while gcc 16.0.1 is an Ubuntu trunk snapshot package), with no variance reported. The C and C++ prod builds add -fstack-protector-strong and -fno-omit-frame-pointer at -O2, but the Fast builds without them are no faster."
+  ],
+  "pick_this_over_siblings_when": "Unlike the catalogued LangArena same-algorithm rows (Rust slice::sort and Zig pdq on Sort::Self, Nim Binarytrees::Obj), this is a library-choice row. It teaches the same lesson as the Rust serde row from kostya/benchmarks: the parser and float-conversion routine matter more than the language. Pick it as evidence for Rust's standard float parser and simd-csv, not for rustc's code generation.",
+  "verified_claims_summary": "In LangArena's 2026-10-05 run (AMD Ryzen 7 3800X, Linux), 70 timed passes over 100,000 generated CSV rows took 0.881 s for Rust 1.99.0 (simd-csv 0.13 plus str::parse::<f64>, cargo --release), against 2.223 s for the hand-written C state machine with strtod (clang 22.1.8 at -O2) and 2.348-2.543 s for C++ lazycsv with std::stod. That is about 2.5x over the best C or C++ row of any build configuration (derived from page data); Zig 0.17.0 (csvzero, std.fmt.parseFloat) took 0.974 s.",
+  "status_note": "LangArena is an active MIT suite (41 stars, last commit 2026-10-08, monthly runs, no CSV issues filed) that its author calls subjective; simd-csv is MIT and pre-1.0 (0.14.0 released 2026-09-16, 43,991 downloads), and this row shows the payoff of Rust's Eisel-Lemire float parser over glibc strtod, a harness asymmetry found in this enrichment, more than any compiler advantage.",
+  "sources_read": [
+    "https://github.com/kostya/LangArena/issues?q=csv",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/README.md",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/run.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/results/2026-10-05-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/c/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/rust/Cargo.toml",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/rust/Cargo.lock",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/rust/run",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/c/src/csv.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/c/src/benchmark.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/src/csv_parse.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/src/benchmark.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/rust/src/benchmarks/csv_parse.rs",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/rust/src/benchmarks/mod.rs",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/rust/src/main.rs",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/rust/src/helper.rs",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/zig/src/csv_parse.zig",
+    "https://crates.io/api/v1/crates/simd-csv",
+    "https://crates.io/api/v1/crates/simd-csv/0.13.0/download",
+    "https://raw.githubusercontent.com/medialab/simd-csv/master/README.md",
+    "https://raw.githubusercontent.com/medialab/simd-csv/master/src/lib.rs",
+    "https://raw.githubusercontent.com/medialab/simd-csv/master/src/searcher.rs",
+    "https://raw.githubusercontent.com/rust-lang/rust/HEAD/library/core/src/num/imp/dec2flt/mod.rs"
+  ],
+  "confidence": 0.75
+}

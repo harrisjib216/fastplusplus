@@ -1,0 +1,51 @@
+{
+  "id": "lang:zig/glebolsen/benchlang#strings",
+  "one_liner": "Zig 0.16 benchLANG Strings row: 19x19 short-word equality loop 1.42x faster than GCC -O3 C (memcmp) and 1.46x faster than C++ (string_view ==).",
+  "what_it_does": "A row from benchLANG, a small single-author benchmark of 19 languages, not a library. The Strings workload splits one constant 19-word sentence at spaces, then for 5M iterations compares every word with every word (361 pairs, 21 equal) and counts the matches (checksum 105,000,000, checked across languages by analyze_results.sh). The Zig program (languages/Zig/bench.zig) tokenises with std.mem.tokenizeScalar and compares with std.mem.eql; C uses strtok on a strdup copy, a length check and memcmp; C++ uses a std::vector<std::string_view> and operator==. Nothing here can be linked into a C++ program; the reusable part is the comparison technique.",
+  "how_it_is_fast": "The gain is the Zig standard library's byte-slice equality, not Zig code generation. std.mem.eql on u8 slices calls eqlBytes, which after the length check returns true at once when both slices share a pointer (the 19 diagonal pairs) and handles slices of 16 bytes or less inline and branch-light: three byte XORs below 4 bytes, otherwise four possibly overlapping 4-byte loads ORed together (read on the GitHub master of November 2025; the verifier read the same code at 0.15.1; the 0.16.0 source was not reachable). The C program does the same length filter but then calls glibc memcmp for each of the 103 equal-length pairs per iteration, a variable-length libc call GCC does not expand inline at -O3 (disassembly not checked); the C++ string_view == also compares sizes first and then goes through char_traits::compare, which in libstdc++ ends in a memcmp call (libstdc++ source not read this session). Per iteration that is about 300 ns for Zig against 426 ns for C, roughly 1.2 ns saved per equal-length compare (derived from page data).",
+  "when_to_use": [
+    "As a data point that inlined small-string equality beats an out-of-line memcmp call when the strings are a handful of bytes, e.g. token, keyword or identifier comparison in parsers and interpreters.",
+    "When you already write Zig and compare many short []const u8 slices: std.mem.eql gives the fast path without extra code.",
+    "As a template for a C or C++ fix: an inline length-dispatched compare (overlapping 4-byte loads for 4-16 bytes, three byte checks below 4) copies easily into a hot equality loop (inference; not measured in this repo)."
+  ],
+  "when_not_to_use": [
+    "As evidence that Zig is faster than C in general: in the same table C ranks first overall (9.762 s vs Zig 10.737 s) and Zig loses Fibonacci(45) 3.181 s vs 1.694 s.",
+    "For long strings or ordering comparisons: the measured words are 2-6 bytes, and the win comes from avoiding the call, not from a faster bulk compare; above 16 bytes eqlBytes switches to vector chunk loops with no measurement here.",
+    "As a stable margin: the table is one run per language on 3 September 2026; the runner supports --runs N but the published numbers do not use it.",
+    "If you need lexicographic order (memcmp's sign or std::string_view::compare): std.mem.eql answers equality only."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Zig 0.16.0 standard library (std.mem, std.Io); -lc links libc only for std.heap.c_allocator in the binary-trees workload",
+    "min_toolchain": "Zig 0.16.0 as measured (the program uses the 0.16 std.Io and std.process.Init APIs, so older Zig releases will not build it)",
+    "platforms": "Measured on x86-64 Linux only (flake.nix pins x86_64-linux); eqlBytes' fast path is enabled on every Zig backend except the self-hosted aarch64, powerpc, riscv64 and SPIR-V backends (LLVM builds use it)",
+    "thread_safety": "Not applicable: single-threaded workload",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Unequal work on the diagonal: std.mem.eql returns true without reading bytes when both slices share a pointer, so 19 of the 103 equal-length compares per iteration are skipped in Zig while C and C++ still call memcmp on them. That is legitimate library behaviour, but part of the 42% is less work, not faster work.",
+    "Different setup on each side: Zig tokenises the compile-time constant sentence (Zig and LLVM may specialise word lengths or trip counts), C tokenises a heap strdup copy with strtok, and C++ fills a heap std::vector; whether LLVM exploited the constant was not checked (no disassembly), and the README explicitly counts constant folding as a valid result.",
+    "Same LLVM backend, different library: Rust (rustc 1.97.1, also LLVM) takes 2.621 s on the same loop with plain == on &str, slower than C, which points at the equality routine rather than the code generator (inference from the README table and languages/Rust/bench.rs).",
+    "The Zig std source for 0.16.0 could not be read here (the tag is not on the GitHub mirror, whose last lib/std/mem.zig commit is 22 November 2025, and codeberg.org was blocked), so the eqlBytes description assumes the routine did not change between that commit and the 0.16.0 release."
+  ],
+  "pick_this_over_siblings_when": "Pick this entry when the question is specifically about short-string equality cost; for realistic text workloads the catalogued Zig LangArena Etc::Words entry (0.91 s vs C++ 1.638 s, tokenising and hash counting) and csv-zero show Zig wins on whole tasks, and the Rust and Go LangArena Etc::Words entries cover the same task in other languages.",
+  "verified_claims_summary": "benchLANG's 3 September 2026 run on a Ryzen 9 5900X locked at 3.5 GHz (Arch Linux, 48 GB DDR4-3600) timed the Strings workload at 1.504 s for Zig 0.16.0 (zig build-exe -OReleaseFast -mcpu=native -fstrip -lc, std.mem.eql) against 2.132 s for C and 2.190 s for C++ built by GCC 16.2.0 with -O3 -march=native -flto -funroll-loops (glibc memcmp and libstdc++ string_view ==). Zig is 1.42x faster than C and 1.46x faster than C++ on this column (derived from page data), with identical checksums enforced by the analyzer and toolchains pinned in flake.nix.",
+  "status_note": "Small single-author MIT repo (8 stars, 0 forks, 42 commits, last commit 2026-09-03) with Nix-pinned toolchains, so anyone can rerun it; the result is one run of one micro-workload and documents a standard-library technique, not something to adopt as a dependency.",
+  "sources_read": [
+    "https://github.com/GlebOlsen/benchLANG",
+    "https://github.com/GlebOlsen/benchLANG/commits/main",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/README.md",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/C/bench.c",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/C%2B%2B/bench.cpp",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/Zig/bench.zig",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/Rust/bench.rs",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/run_benchmarks.sh",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/analyze_results.sh",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/flake.nix",
+    "https://raw.githubusercontent.com/ziglang/zig/master/lib/std/mem.zig",
+    "https://github.com/ziglang/zig/commits/master/lib/std/mem.zig",
+    "https://raw.githubusercontent.com/ziglang/zig/0.16.0/lib/std/mem.zig (404)",
+    "https://codeberg.org/ziglang/zig/raw/tag/0.16.0/lib/std/mem.zig (blocked, CONNECT 403)"
+  ],
+  "confidence": 0.75
+}

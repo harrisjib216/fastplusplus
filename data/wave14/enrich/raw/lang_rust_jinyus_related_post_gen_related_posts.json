@@ -1,0 +1,66 @@
+{
+  "id": "lang:rust/jinyus/related_post_gen#related-posts",
+  "one_liner": "Community Rust solution to the related-posts benchmark, about 1.28x faster than the suite's C++ solution on one core.",
+  "what_it_does": "A roughly 100-line Rust program (rust/src/main.rs) that reads posts with tags, builds a tag-to-post-index map, counts shared tags for every other post, and keeps the top 5 related posts per post before writing JSON. It is a benchmark entry, not a library: there is no API, but the body of main between the two Instant::now() calls is a self-contained routine you could lift. JSON goes through serde_json with borrowed &str fields, outside the timed region.",
+  "how_it_is_fast": "Same algorithm as cpp/main.cpp, which was ported from the Rust code in Sept 2024 ('copy rust algorithm, process every cacheline'): per-tag Vec<u32> of post indices, a u8 shared-tag counter per post, a scan in 64-byte chunks that skips a chunk unless some count exceeds the running 5th-best, and insert-and-bubble top-5. The counter buffer is a 64-byte-aligned AVec padded to a multiple of 64, the chunk scan uses slice iterators (no per-element bounds checks), and since Feb 2026 each chunk is zeroed right after it is scanned instead of a whole-array fill. The C++ entry runs the same steps with std::vector::at() on every counter access, a full memset per post and std::unordered_map; the suite publishes no profile, so which difference carries the gap is not documented.",
+  "when_to_use": [
+    "As a reference pattern for sparse co-occurrence top-k (posts by tags, items by features) where one row of u8 counters fits in L1/L2: the measured sizes are 5k to 60k items",
+    "Single-core batch jobs with 4-5 tags per item from a small vocabulary (the generator draws from 28 tags), the measured shape",
+    "When end-to-end memory and JSON time matter too: the raw results show 29 MB peak RSS and 1.27-1.32 s whole-process at 60k posts versus 460 MB and 3.35-3.40 s for the C++ entry (nlohmann/json DOM)",
+    "Small inputs: at 5k posts it has the suite's best single-core time (9.84 ms versus D v2 12.06 ms and C++ 12.20 ms)"
+  ],
+  "when_not_to_use": [
+    "As evidence that Rust beats C++: the C++ entry is a port of this algorithm held to .at() everywhere and a separate memset, and nothing in the Rust code (u8 counters, chunk scan, fused zeroing) is beyond standard C++",
+    "Multicore runs: C++ Concurrent (402.33 ms total) beats Rust Concurrent (489.91 ms), and the separate Rust HO entry (51.55 ms) uses specialised data structures",
+    "Items that can share more than 255 tags: counters are u8 and would wrap (the suite caps tags at 100 per post)",
+    "Library integration: hard-coded ../posts.json and ../related_posts_rust.json paths, unwrap() on parse errors, and no API",
+    "Large vocabularies with long tag lists per item, where the per-post counter scan (O(n) per post, O(n^2) total) dominates; that shape was not measured"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "hashbrown 0.14.3 (ahash 0.8.7 default hasher), aligned-vec 0.5.0; serde 1 and serde_json 1.0.111 for JSON I/O only",
+    "min_toolchain": "Rust 2021 edition; usize::next_multiple_of needs Rust 1.73+ (inferred from the API used). The suite builds with rustup stable, version unstated",
+    "platforms": "any Rust target; measured on x86-64 (AWS c7a.xlarge) with no target-cpu flag",
+    "thread_safety": "single-threaded program; a separate rust_con (Rayon) variant exists for the multicore table",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The Rust and C++ rows come from separate container runs (Rust raw results committed 2026-02-11, C++ refreshed 2026-02-24), and docker_start.sh regenerates the 20k and 60k posts.json with gen_fake_posts.py, which calls random.sample without a seed, so the two rows were timed on different random datasets of the same distribution; verify.py checks output only on the 5k round (fixed posts.json).",
+    "The lead predates the fused chunk-zeroing commit (a9d2d27, Feb 2026): in the May 2025 run (Ubuntu 22.04 host), when Rust still zeroed the whole array after each scan like C++'s memset, Rust was 1.30 s versus C++ 1.72 s at 60k posts (about 1.32x, derived from page data). So the gap does not come from that trick, and the suite has not isolated what does (candidates are .at() in the C++ scan and insert loops, unordered_map, and the C++ build without LTO).",
+    "The C++ timer truncates to whole milliseconds (duration_cast<milliseconds>; raw values are 12 or 13 ms at 5k posts), which biases the C++ 5k figure low by up to 1 ms, so if anything Rust's 5k lead is understated. The Rust hot increment still uses bounds-checked indexing, as the suite's no-unchecked rule requires.",
+    "If fewer than 5 other posts share a tag, the unfilled top-5 slots stay (0, 0) and point at post 0, which can be the post itself; the C++ entry behaves the same and the suite's data never triggers it."
+  ],
+  "pick_this_over_siblings_when": "Among the same-suite siblings, pick it for the smallest inputs (fastest at 5k posts, 9.84 ms) or a Rust codebase; D (v2) is faster at 60k posts (961.08 ms versus 1.10 s) and on the total (1.10 s versus 1.23 s), and C3 trails at 1.28 s. Treat all three as implementation comparisons, not language results.",
+  "verified_claims_summary": "On an AWS c7a.xlarge (CPU model not stated), mean processing time without JSON I/O was 9.84 / 124.59 / 1,100 ms for 5k / 20k / 60k posts (10, 3 and 3 runs) for Rust built by cargo --release with fat LTO, codegen-units 1 and panic=abort (stable toolchain, version unstated), versus 12.20 / 164.33 / 1,393 ms for the C++ entry built with Arch Linux clang++ -O3 -std=c++20 (no LTO, no -march, clang version unstated): about 1.28x on the totals (derived from page data). Whole-process times including JSON are 1.27-1.32 s versus 3.35-3.40 s at 60k posts.",
+  "status_note": "The suite (served as zupat/related_post_gen after a transfer from jinyus, 500 stars, MIT) is maintained, with Rust results from 2026-02-11 after a Feb 2026 code change; it is a copyable reference pattern, not a maintained library.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/zupat/related_post_gen/main/readme.md",
+    "https://raw.githubusercontent.com/zupat/related_post_gen/main/run.sh",
+    "https://raw.githubusercontent.com/zupat/related_post_gen/main/docker_start.sh",
+    "https://raw.githubusercontent.com/zupat/related_post_gen/main/cpp/main.cpp",
+    "https://raw.githubusercontent.com/zupat/related_post_gen/main/rust/src/main.rs",
+    "https://raw.githubusercontent.com/zupat/related_post_gen/main/rust/Cargo.toml",
+    "https://raw.githubusercontent.com/zupat/related_post_gen/main/rust/Cargo.lock",
+    "https://raw.githubusercontent.com/zupat/related_post_gen/main/dockerfiles/rust.Dockerfile",
+    "https://raw.githubusercontent.com/zupat/related_post_gen/main/dockerfiles/base.Dockerfile",
+    "https://raw.githubusercontent.com/zupat/related_post_gen/main/results/raw_results_rust.md",
+    "https://raw.githubusercontent.com/zupat/related_post_gen/main/results/raw_results_cpp.md",
+    "https://raw.githubusercontent.com/zupat/related_post_gen/main/verify.py",
+    "https://raw.githubusercontent.com/zupat/related_post_gen/main/gen_fake_posts.py",
+    "https://raw.githubusercontent.com/zupat/related_post_gen/6c556df/results/raw_results_rust.md",
+    "https://raw.githubusercontent.com/zupat/related_post_gen/6c556df/results/raw_results_cpp.md",
+    "https://raw.githubusercontent.com/zupat/related_post_gen/6c556df/readme.md",
+    "https://github.com/zupat/related_post_gen/commits/main/rust",
+    "https://github.com/zupat/related_post_gen/commits/main/cpp/main.cpp",
+    "https://github.com/zupat/related_post_gen/commits/main/results/raw_results_rust.md",
+    "https://github.com/zupat/related_post_gen/commits/main/results/raw_results_cpp.md",
+    "https://github.com/zupat/related_post_gen/commit/a9d2d27",
+    "https://github.com/zupat/related_post_gen/commit/a3a1cf17b1c64ccf7782ffd66dd59f1c41d1b86a",
+    "https://github.com/zupat/related_post_gen/commit/7cbabaf4010d5dcb2ed727d6f4d7d09013590999",
+    "https://github.com/jinyus/related_post_gen/commit/610496503a80ffc7c069a2569a68cbd4c6acd0ec",
+    "https://github.com/zupat/related_post_gen/issues?q=is%3Aissue+cpp",
+    "https://github.com/zupat/related_post_gen/issues/360",
+    "https://github.com/zupat/related_post_gen/issues/203"
+  ],
+  "confidence": 0.7
+}

@@ -1,0 +1,52 @@
+{
+  "id": "paper:c-blake-bu-mk1-w14-sys-blogs",
+  "one_liner": "Nim freshness checker for 1-input-1-output rules; ~3x ninja's no-op check and ~40x GNU make on 40k pairs.",
+  "what_it_does": "mk1 reads back-to-back input/output path pairs (newline- or -n-separated, typically produced by tmpls), gets both mtimes, and prints a command template with %i and %o filled in (shell-quoted as needed) for every pair whose output is missing or older than its input. You pipe that to sh, xargs or a job runner such as stripe. Options borrow GNU make letters where they fit (-B, -q, -o, -W, -k) plus -x to tag each line absent, stale or forced. It is not a build system: no dependency graph, no multi-input rules, no depfiles, no record of command lines; it runs nothing and creates no output directories.",
+  "how_it_is_fast": "It does only what the special case needs: one statx(STATX_MTIME) per path in batches of 32 pairs, a strict input-newer-than-output comparison and a print, with no manifest parse, no log, no graph and no implicit-rule search. Paths live in one growing char buffer addressed by offsets, so there is no per-path allocation. In the published run 34 of its 39 ms is system time for the 80,000 statx calls, while ninja's best case adds 73 ms of user time, mostly reading build.ninja and .ninja_log (an inference from the ru columns). A -d:batch build sends the statx calls through the author's out-of-tree batch-syscall kernel module.",
+  "when_to_use": [
+    "Large fan-outs of independent per-file transforms (hashes, thumbnails, transcodes, compressed copies, shadow trees) re-checked often on a local file system",
+    "Shell pipelines of the form find | tmpls IN OUT | mk1 'cmd %i > %o' | sh, or into a parallel job runner",
+    "Replacing a bash while-read loop with -nt tests (about 3.9x slower on the page) or a GNU make pattern rule over tens of thousands of files",
+    "Scripts that only ask whether anything is stale: -q exits 1 when there is work"
+  ],
+  "when_not_to_use": [
+    "C/C++ compilation or anything with headers or several inputs per output: no depfile or multi-input support, so header edits go unnoticed",
+    "When a changed command line should force rebuilds; ninja tracks commands in .ninja_log, mk1 compares mtimes only",
+    "Network file systems: it passes AT_STATX_DONT_SYNC, which lets the kernel answer from cached attributes, so a remote update may be missed",
+    "When the pair list is expensive to regenerate each time; the timed run starts from a ready-made list",
+    "When you need the tool to run, schedule or clean up jobs; mk1 only prints commands, and the page's footnote shows the extra shell needed to create output directories and remove partial outputs"
+  ],
+  "integration": {
+    "form": "module (single Nim source file built as a CLI by the bu nimble package)",
+    "dependencies": "cligen >= 1.11.0 and bu/esquo (in the same repo); bu.nimble also requires adix, nio, fitl and spfun for other tools",
+    "min_toolchain": "Nim 2.0.0+ (bu.nimble); nim.cfg and bu.nimble set no optimization flags",
+    "platforms": "Linux (statx; optional -d:batch kernel module path); other systems use Nim's getLastModificationTime, and mk1 is in bu.nimble's Windows bin list",
+    "thread_safety": "Single-threaded CLI; not applicable",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Unequal work: mk1 gets a precomputed flat pair list (tmpls, 3.76 ms by the author's tim, outside the timed run), while ninja parses a 40,000-statement build.ninja plus .ninja_log and GNU make expands $(shell cat inp) and runs without -r, so built-in implicit rules stay active. Each tool ran once with no repeats, and no Nim, ninja or make versions or flags are given. The ~3x and ~40x come from a restricted problem, not Nim code generation.",
+    "Harness flaw in the bash row (inference from the script, not measured): the loop runs '[ o -nt i ] || printf', which treats equal mtimes as stale, while mk1 rebuilds only when the input is strictly newer (mk1.nim line 107). The setup touches each directory's .c and .o files in one touch call on tmpfs, so many pairs probably share a timestamp. The bash row may then have printed rebuild commands to /dev/null instead of finding nothing to do, so the rows need not compute the same answer.",
+    "An odd number of input lines silently drops the last unpaired input, because only complete pairs are added. An input that cannot be stat'd aborts with 'mk1: cannot age' and exit 1 unless -k is given.",
+    "The 7.78 s ninja row is a full rebuild (no .ninja_log, all 40,000 touch commands re-run at 488% CPU), not a freshness check; compare against the 0.119 s second run."
+  ],
+  "pick_this_over_siblings_when": "No build-tool sibling is catalogued in this category; the nearest are the same author's stat-heavy replacements (cligen/dents, procs). Pick mk1 over ninja only when every rule is strictly 1-to-1 and freshness checks of tens of thousands of local files dominate; otherwise ninja's graph, depfiles and command tracking are worth the extra ~80 ms.",
+  "verified_claims_summary": "doc/mk1.md times one run of each tool with the author's ru on an i7-1270P (Alder Lake), Linux 6.2.10, /dev/shm, 40,000 up-to-date .c/.o pairs: mk1 0.039 s vs ninja's best no-op (second run with .ninja_log) 0.119 s (about 3x), a bash while-read loop 0.152 s (about 3.9x) and GNU make 1.55 s (about 39x). ninja's first run without .ninja_log took 7.78 s because it re-ran every touch command.",
+  "status_note": "Active (bu last commit 2026-10-09), MIT, about 150 lines and easy to vendor; tier C single-run first-party numbers from a complete, rerunnable script, where the win is less work in a restricted problem and the bash baseline probably decided equal-mtime pairs differently.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/c-blake/bu/HEAD/doc/mk1.md",
+    "https://raw.githubusercontent.com/c-blake/bu/HEAD/mk1.nim",
+    "https://raw.githubusercontent.com/c-blake/bu/HEAD/doc/tmpls.md",
+    "https://raw.githubusercontent.com/c-blake/bu/HEAD/doc/topn.md",
+    "https://raw.githubusercontent.com/c-blake/bu/HEAD/doc/zeh.md",
+    "https://raw.githubusercontent.com/c-blake/bu/HEAD/README.md",
+    "https://raw.githubusercontent.com/c-blake/bu/HEAD/bu.nimble",
+    "https://raw.githubusercontent.com/c-blake/bu/HEAD/nim.cfg",
+    "https://raw.githubusercontent.com/c-blake/bu/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/c-blake/cligen/HEAD/cligen/mfile.nim",
+    "https://raw.githubusercontent.com/c-blake/cligen/HEAD/cligen/sysUt.nim",
+    "https://github.com/c-blake/bu/commits/main",
+    "https://github.com/c-blake/bu/issues?q=is%3Aissue"
+  ],
+  "confidence": 0.65
+}

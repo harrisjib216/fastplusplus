@@ -1,0 +1,66 @@
+{
+ "id": "lang:scala/kostya/benchmarks#brainfuck-bench.b-staged",
+ "one_liner": "Scala 3 quoted-staging Brainfuck runner compiling programs to JVM bytecode at run time; 2.7x faster than kostya's C++ interpreter.",
+ "what_it_does": "brainfuck/bf-staged.scala (about 90 lines, MIT; contributed by philnguyen in PR #461 and embedded into the suite by nuald in PR #472, October 2023) reads a Brainfuck program and, instead of building an op array, builds a quoted Scala expression for each instruction. staging.run then compiles the resulting lambda (Tape, Printer) => Unit with the Scala 3 compiler inside the process and calls it once. It is a Scala CLI script (//> using dep scala3-staging 3.8.4), a benchmark program rather than a library: the only entry point is Program(text, printer).run, and the ',' input instruction is not handled.",
+ "how_it_is_fast": "This is run-time multi-stage programming with scala.quoted quotes and splices (a first Futamura projection of the interpreter). Each '+', '-', '>', '<' and '.' becomes a direct call such as t.inc(1) in one straight-line block, and each '[' becomes a local def body() plus a while loop, so no op-kind pattern match, Array[Op] walk or recursion over ops is left at run time. HotSpot then JIT-compiles that bytecode and can inline the small Tape methods into tight loops. The C++ baseline pays a switch and a recursive std::vector<Op> walk for every instruction. The source does not squash runs of '+' or '>'; whether HotSpot folds them was not checked.",
+ "when_to_use": [
+  "As a reference pattern for Scala 3 programs that receive a small program at run time (rules, filters, query plans, a DSL) and execute it long enough to amortise an in-process compile: bench.b runs in 0.409 s and mandel.b in 7.118 s, compile included.",
+  "When the code already runs on the JVM and pulling the Scala 3 compiler in through the scala3-staging dependency is acceptable.",
+  "Batch or throughput jobs where about 230 MiB resident memory and JVM plus compiler warm-up do not matter.",
+  "Comparing staging techniques across runtimes: the same table has C# (Staged) and Racket (Staged) versions of the identical task."
+ ],
+ "when_not_to_use": [
+  "As evidence that Scala or the JVM beats C++ at equal work: the plain Scala interpreter in the same table is slower than C++/g++ (bench.b 2.379 s vs 1.097 s, mandel.b 15.785 s vs 10.143 s), and the suite has no C++ JIT or staged variant.",
+  "Memory-tight processes: 229.62 MiB base plus 7.00 MiB increase on bench.b (plus 71.23 MiB on mandel.b), against 3.38 MiB for the C++ interpreter.",
+  "One-shot or latency-sensitive runs: every Program builds a new staging.Compiler and runs the full Scala 3 compiler. The benchmark's self-check has already compiled one program before the timer starts, so a cold first compile costs more than the row shows; that cost is not measured separately.",
+  "Deployments without a run-time compiler or class loading: the Scala 3 staging reference requires the compiler on the classpath (scala3-staging, or -with-compiler for scalac/scala).",
+  "Untrusted Brainfuck input: the tape grows only to the right, so a program that steps left of cell 0 dies with an ArrayIndexOutOfBoundsException (safe, but not handled)."
+ ],
+ "integration": {
+  "form": "source-drop (one Scala CLI script, brainfuck/bf-staged.scala)",
+  "dependencies": "org.scala-lang::scala3-staging 3.8.4, which brings in the Scala 3 compiler; resolved by the scala (Scala CLI) runner",
+  "min_toolchain": "Scala 3.8.4 as pinned (quiet syntax, scala.quoted staging). The JDK behind the README run is unclear: the README Versions table says Java 24.0.2, but the Dockerfile from the same commit installs OpenJDK 26.0.1",
+  "platforms": "any JVM platform; measured only on x86-64 Linux (Xeon E-2324G)",
+  "thread_safety": "not documented; Tape and Printer are mutable per run, and each Program instance creates its own staging.Compiler",
+  "drop_in_for_baseline": false
+ },
+ "gotchas": [
+  "This is a different algorithm from the baseline. brainfuck/README.md says implementations interpret 'all bf instructions, one by one', and the maintainer (nuald, issue #485, 2024-03-20) says staged variants are 'not the reference implementations, and rather included just for testing purposes'. The C++ side is the reference interpreter, not a C++ JIT.",
+  "The timed region opens with the notify call after verify() and includes staging.Compiler.make, the Scala 3 compile of bench.b and HotSpot JIT time. verify() has already run a full staged compile of a Hello World program before that, so compiler classes are loaded and partly warmed (the 229.62 MiB base RSS reflects this). The plain bf.scala defines verify but never calls it. For every JVM row, JVM start-up and the Scala CLI script compile are outside the timer.",
+  "The harness does not validate output. xtime.rb and analyze.rb record time, memory and energy only, and nothing compares the printed 'Output checksum' with an expected value for any row; the built-in Hello World self-check is the only correctness guard. By source reading, the staged semantics (Int cells, loop while the cell is > 0, Fletcher-16 mod 255) match bf.cpp.",
+  "The README Versions table is partly stale. Java 24.0.2, Crystal 1.17.1, Julia 1.11.6 and Kotlin 2.2.0 there disagree with the Dockerfile of the same commit 5bc68b3 (OpenJDK 26.0.1, Crystal 1.21.0, Julia 1.12.6, Kotlin 2.4.10), and javac uses --release 26. The README also says measurements are taken 'semi-manually'. The JVM runs with default options (SCALA_RUN is xtime.rb scala, no flags)."
+ ],
+ "pick_this_over_siblings_when": "Among the staged rows of the same table, C# (Staged) is faster and much leaner (bench.b 0.373 s and 36.62 MiB; mandel.b 2.917 s against 7.118 s), and Racket (Staged) is slower (0.885 s, 101.37 MiB; mandel.b 15.722 s). Pick this one when your host is Scala or the JVM and you want type-checked quoted code generation. To get the same run-time specialisation while staying in C++, look at the catalogued ClangJIT or Proteus entries instead.",
+ "verified_claims_summary": "kostya/benchmarks (README UPDATE 2026-07-19, Intel Xeon E-2324G, median of 10 runs with MAD): Scala (Staged), on Scala 3.8.4 with scala3-staging 3.8.4 and default JVM options, ran bench.b in 0.409 s (MAD 0.011) and 26.31 J. The C++ AST interpreter built with g++ 16.1.0 -O3 -march=native -flto=auto (libstdc++) took 1.097 s and 46.21 J, so the staged runner is about 2.7x faster; on mandel.b it is 7.118 s against 10.143 s, about 1.4x (both derived from page data). The timer includes the run-time compile, and the win is run-time compilation set against a reference interpreter: the same-algorithm Scala interpreter is about 2.2x slower than C++/g++.",
+ "status_note": "The suite is active (MIT, 2.9k stars, last update 2026-07-19 in PR #516). bf-staged.scala has four commits, all maintenance or embedding by nuald (latest 5bc68b3, 2026-07-19), on top of philnguyen's original PR #461. It is a copyable teaching sample of Scala 3 staging, not a maintained library, and the C tier cap for the language-level claim stands.",
+ "sources_read": [
+  "https://github.com/kostya/benchmarks",
+  "https://github.com/kostya/benchmarks/commits/master/brainfuck/bf-staged.scala",
+  "https://github.com/kostya/benchmarks/commits/master/docker/Dockerfile",
+  "https://github.com/kostya/benchmarks/pull/461",
+  "https://github.com/kostya/benchmarks/pull/472",
+  "https://github.com/kostya/benchmarks/pull/516",
+  "https://github.com/kostya/benchmarks/issues?q=staged",
+  "https://github.com/kostya/benchmarks/issues/485",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/README.md",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/LICENSE",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/xtime.rb",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/analyze.rb",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/repeat.rb",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/run.sh",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/common/commands.mk",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/common/libnotify/libnotify.h",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/docker/Dockerfile",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/README.md",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/Makefile",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bf-staged.scala",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bf.scala",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bf.cpp",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bf.c",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bench.b",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/mandel.b",
+  "https://raw.githubusercontent.com/scala/scala3/main/docs/_docs/reference/metaprogramming/staging.md",
+  "https://docs.scala-lang.org/scala3/reference/metaprogramming/staging.html (fetch failed: ENOTFOUND)"
+ ],
+ "confidence": 0.72
+}

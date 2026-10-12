@@ -1,0 +1,50 @@
+{
+  "id": "lang:zig/kostya/benchmarks#base64",
+  "one_liner": "Zig std.base64 in kostya/benchmarks: 8192 rounds of 128 KiB encode plus decode 1.31x faster than a hand-written scalar C codec (clang), 1.59x (gcc).",
+  "what_it_does": "A row of the Base64 test in kostya/benchmarks, a long-running multi-language suite, not a library. base64/test.zig encodes a 131072-byte string of 'a' 8192 times and decodes the 174,764-character result 8192 times with std.base64.standard, the base64 codec in Zig's standard library; the C row (base64/test-nolib.c) is a hand-written codec in the same file, built with gcc 16.1.0 or clang 22.1.8. The external runner times the span between the program's start and stop messages, so the published figure is encode and decode together. For a C++ user the reusable part is the table technique in Zig's lib/std/base64.zig, which can be ported; the Zig code itself cannot be linked in as a C++ dependency.",
+  "how_it_is_fast": "The win comes from a better scalar algorithm in Zig's standard library, not from the language. The decoder uses four 256-entry u32 tables, one per position in a 4-character quantum, pre-shifted so that four lookups ORed together give the 3 output bytes in place, checks validity once per quantum with a single mask test (invalid characters map to 0xff000000), and in its fast loop handles 16 characters per step with one 16-byte u128 store. The encoder reads 16 input bytes as one big-endian u128 and emits 16 characters per 12 bytes. The C program decodes through one table with a sign test and branch on every character, scans for '\\n' and '\\r' before each quantum and stores byte by byte. SIMD codecs are far faster still: aklomp/base64 in the same table takes 0.095 s.",
+  "when_to_use": [
+    "You write Zig and need RFC 4648 base64 on in-memory buffers: std.base64 is built in, has no dependencies and beat both hand-written C builds and the Rust base64 0.22.1 crate (0.842 s) in this test.",
+    "As a portable scalar reference to port to C or C++ when SIMD is not available (no AVX2, SSSE3 or NEON, or a small embedded target): the four pre-shifted decode tables cost 4 KiB and remove the per-character branch.",
+    "Bulk strict decoding of clean, padded input such as API payloads or data URLs where line breaks never occur."
+  ],
+  "when_not_to_use": [
+    "When throughput matters most: SIMD C libraries are about 7x faster in the same table (C/clang aklomp 0.095 s, C/gcc aklomp 0.097 s), and PHP's built-in C base64 (0.065 s) is faster still.",
+    "MIME or PEM text with line breaks: the standard decoder returns error.InvalidCharacter on '\\n' or '\\r'; the slower Base64DecoderWithIgnore path is needed, while the C program skips them inline.",
+    "Mixed-alphabet input: the C decoder accepts both '+'/'-' and '/'/'_', while std.base64.standard accepts only '+' and '/' and enforces padding strictly (error.InvalidPadding).",
+    "As evidence that Zig beats C as a language: the two sides run different algorithms, and the fair C comparison (aklomp) is far ahead."
+  ],
+  "integration": {
+    "form": "module (std.base64 in the Zig standard library; the benchmark itself is one source file)",
+    "dependencies": "none beyond the Zig standard library; the test links libc (-lc) for std.heap.c_allocator and talks to the suite's runner on localhost:9001 when it is present",
+    "min_toolchain": "Zig 0.16.0 as measured (test.zig uses the 0.16 std.Io, std.Io.Threaded and std.Io.net APIs); std.base64's encode and decode API is older",
+    "platforms": "Portable scalar code (any Zig target); measured on an Intel Xeon E-2324G in a Debian forky/sid Docker image",
+    "thread_safety": "Not documented; the encoder and decoder are immutable structs with constant tables and encode and decode only write the caller's buffers, so concurrent use looks safe (inference from the source)",
+    "drop_in_for_baseline": "partial: same RFC 4648 output for the standard alphabet, but a different API (caller-sized buffers via calcSize and calcSizeForSlice), stricter padding, and no inline skipping of line breaks or URL-safe characters"
+  },
+  "gotchas": [
+    "Possible harness asymmetry (not verified, no disassembly): the timed Zig loop calls decode with `catch unreachable`, and in ReleaseFast the Zig language reference says the optimizer assumes unreachable code is never hit. If LLVM inlines decode into main, every `return error.InvalidCharacter` check in the decode loop can be deleted, so the Zig side may run without input validation, while the C side keeps a sign test and branch on every character because its failure path calls exit().",
+    "Feature asymmetry on the C side: test-nolib.c scans for '\\n' and '\\r' before every 4-character quantum and accepts URL-safe '-' and '_' alongside '+' and '/', work std.base64.standard does not do; part of the gap is the cost of that leniency.",
+    "Neither side really allocates in the timed loops: Zig takes the buffer from a FixedBufferAllocator that is reset every iteration and C uses stack VLAs, whatever the README's 'newly allocated buffers' says; the Rust row (base64 0.22.1) does allocate a fresh String and Vec per iteration and still takes only 0.842 s.",
+    "Build-flag asymmetry: the C, C++, Nim and Rust builds add branch padding (-Wa,-mbranches-within-32B-boundaries or the LLVM equivalent) while Zig is built with plain -O ReleaseFast -lc; the effect on this test is not measured."
+  ],
+  "pick_this_over_siblings_when": "Among catalogued siblings, tachyon-rs is the entry to read for SIMD base64 and crypto in Rust, and the kostya/benchmarks Rust and V brainfuck rows are same-harness language rows of similar strength; pick this entry only as evidence that Zig's scalar standard-library codec beats a naive C loop, and use aklomp/base64 or another SIMD codec when you need speed in C or C++.",
+  "verified_claims_summary": "The kostya/benchmarks README (update 2026-07-19, Intel Xeon E-2324G, Debian forky/sid Docker image, medians with median absolute deviation) lists Base64 at 0.703 s for Zig 0.16.0 (-O ReleaseFast, std.base64) against 0.918 s for C/clang 22.1.8 and 1.117 s for C/gcc 16.1.0 (-O3 -march=native -flto=auto, hand-written scalar codec), about 1.31x and 1.59x (derived from page data), for 8192 encodes plus 8192 decodes of a 128 KiB buffer. Energy follows the same order (26.42 J vs 34.47 J and 41.76 J), and the SIMD aklomp builds (0.095 and 0.097 s) beat Zig by about 7x.",
+  "status_note": "The suite is active and MIT-licensed (2.9k stars, 262 forks, 892 commits, results refreshed 2026-07-19; the Zig test was added in 2021 and updated in the July 2026 maintenance commit), and std.base64 ships with every Zig release, so the codec is usable now in Zig and easy to port; the benchmark row itself measures an algorithm gap, not a language gap.",
+  "sources_read": [
+    "https://github.com/kostya/benchmarks",
+    "https://github.com/kostya/benchmarks/commits/master/base64/test.zig",
+    "https://github.com/kostya/benchmarks/issues?q=is%3Aissue+base64",
+    "https://github.com/kostya/benchmarks/tree/master/base64/base64.rs",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/README.md",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/base64/Makefile",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/base64/test.zig",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/base64/test-nolib.c",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/base64/base64.rs/Cargo.toml",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/base64/base64.rs/src/bin/base64.rs",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/common/commands.mk",
+    "https://raw.githubusercontent.com/ziglang/zig/master/lib/std/base64.zig",
+    "https://raw.githubusercontent.com/ziglang/zig/master/doc/langref.html.in"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,67 @@
+{
+  "id": "lang:rust/kostya/benchmarks#brainfuck-bench-b",
+  "one_liner": "Rust tree-walking brainfuck interpreter in kostya/benchmarks: 9-16% faster than the C and C++ ports on bench.b, slower on mandel.b.",
+  "what_it_does": "A roughly 170-line Rust program (brainfuck/bf.rs/src/main.rs) that parses brainfuck into a nested Op tree and interprets it one instruction at a time, with no run-length folding, as the suite's rules require. It is a benchmark entry, not a library: there is no API, and its only dependency is the suite's in-repo utils crate for the notify! timing macro. In the measured QUIET mode, output goes into a Fletcher-16 checksum instead of stdout.",
+  "how_it_is_fast": "The suite states no mechanism. The Rust port differs from bf.c and bf.cpp in layout only: an enum with dataless Inc/Dec/Prev/Next variants (no operand load, where C and C++ load a +1/-1 offset), loop bodies stored inline as Box<[Op]> (C goes through an op_list pointer), tape access through get_unchecked (as unchecked as C's raw array and C++'s vector operator[]), and a recursive run() over &mut references. The same interpreter logic lost to C++/g++ by 1.25x in the 2023 run, so the lead tracks compiler versions rather than these choices.",
+  "when_to_use": [
+    "As a compact reference for an enum-and-match tree-walking interpreter in Rust that lands within about 15% of equivalent C and C++ ports on current LLVM",
+    "As a baseline when measuring your own interpreter's dispatch and loop-call overhead on bench.b (about 9.5e8 interpreted operations in about 1 s on a Xeon E-2324G)",
+    "Programs dominated by tiny loop bodies such as [-], the shape where it leads"
+  ],
+  "when_not_to_use": [
+    "As evidence that Rust beats C or C++: with the same bf.c, bf.cpp and logically identical bf.rs, C++/g++ was 1.25x faster in the 2023 run, and on mandel.b C++/g++ is 1.43x faster today",
+    "Running real brainfuck fast: it deliberately skips instruction folding, and the suite's staged rows are far faster (C# Staged 0.373 s on bench.b, 2.917 s on mandel.b)",
+    "Untrusted programs: a '<' at cell 0 wraps pos in a release build and the next get_unchecked reads out of bounds (undefined behaviour), despite the SAFETY comment that pos is checked in next()",
+    "Code that needs standard brainfuck semantics: cells are unbounded i32 and loops run while the cell is greater than 0, not non-zero (the C and C++ ports do the same)"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none outside the suite (path dependency on common/rust utils for the notify! macro, removable)",
+    "min_toolchain": "Rust 1.85+ (edition 2024 in Cargo.toml); the published rows were built with Rust 1.89.0",
+    "platforms": "any Rust target; measured on x86-64 with -C target-cpu=native",
+    "thread_safety": "single-threaded program; not documented beyond that",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The published rows are older than the toolchains the README lists. In the 2026-07-19 README the bench.b and mandel.b tables match the 2025-08-17 README digit for digit, including MAD and energy, except the .NET rows (C#, C# Staged, F#). So the Rust, C and C++ times were measured with Rust 1.89.0, gcc/g++ 14.2.0 and clang 19.1.7 on Debian trixie/sid, not with Rust 1.97.1, gcc 16.1.0 and clang 22.1.8. bf.c, bf.cpp, bf.rs, Cargo.toml and the C/C++/Rust flags in common/commands.mk are unchanged since that run.",
+    "The ranking flips with toolchain on the same code: the 2023-10-16 README (Rust 1.73.0, gcc 13.2.0, clang 16.0.6, same Xeon E-2324G, same bf.c and bf.cpp, a bf.rs differing only in variable names and edition) has C++/g++ 1.323 s, Rust 1.658 s, C/gcc 1.667 s and C/clang 1.674 s on bench.b. V on the same source swings from 0.985 s (gcc backend) to 1.846 s (clang backend).",
+    "bench.b is call-bound, not dispatch-bound. Counted from bench.b in this session: about 5.78e8 Inc/Dec, 5.78e7 moves and 2.89e8 loop-body entries, about 90% of them the one-instruction [-] body, and each entry is a recursive run() call in all three ports. The largest cell value is 10 and the output is 27 bytes, so C's char-truncating tape_get and the per-character flush do not matter here.",
+    "analyze.rb takes the median of 10 runs between the program's start and stop socket messages (parsing included, the self-test excluded) and never compares output checksums across languages. Each binary checks only a Hello World program before timing."
+  ],
+  "pick_this_over_siblings_when": "Against the V/gcc bench.b sibling (0.985 s, a C-emitting backend built with -no-bounds-checking) it is the same-speed choice with bounds discipline left to two unsafe calls, and unlike V it keeps its rank on mandel.b better (14.46 s versus V/gcc 17.87 s). The Rust serde json and Zig base64 siblings in the same suite are library-backed results, while this one is a pure interpreter-codegen comparison with the weakest claim of the three.",
+  "verified_claims_summary": "On an Intel Xeon E-2324G in Docker, median of 10 QUIET runs: Rust 1.008 s versus C++/g++ 1.097 s, C/gcc 1.112 s, C/clang 1.136 s and C++/clang++ (libc++) 1.167 s on bench.b, about 1.09-1.16x (derived from page data). All were built at -O3 -march=native -flto=auto (Rust: target-cpu=native, fat LTO, codegen-units 1, panic=abort), and the rows come from the 2025-08-17 run (Rust 1.89.0, gcc 14.2.0, clang 19.1.7). On mandel.b the same binaries reverse: Rust 14.460 s versus C++/g++ 10.143 s and C/gcc 12.544 s.",
+  "status_note": "The suite (MIT, 2.9k stars) is maintained, with a README update on 2026-07-19, but the brainfuck rows for Rust, C and C++ were not re-run then; the interpreter is copyable as a teaching reference, not a maintained library.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/README.md",
+    "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/README.md",
+    "https://raw.githubusercontent.com/kostya/benchmarks/0fc4e58/README.md",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/Makefile",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/README.md",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/common/commands.mk",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/bf.rs/Cargo.toml",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/bf.rs/src/main.rs",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/bf.c",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/bf.cpp",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/bf.v",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/bench.b",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/mandel.b",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/analyze.rb",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/xtime.rb",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/common/rust/src/lib.rs",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/common/rust/Cargo.toml",
+    "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/common/commands.mk",
+    "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/brainfuck/bf.c",
+    "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/brainfuck/bf.cpp",
+    "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/brainfuck/bf.rs/src/main.rs",
+    "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/brainfuck/bf.rs/Cargo.toml",
+    "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/brainfuck/Makefile",
+    "https://raw.githubusercontent.com/kostya/benchmarks/0fc4e58/brainfuck/bf.rs/src/main.rs",
+    "https://raw.githubusercontent.com/kostya/benchmarks/0fc4e58/brainfuck/bf.rs/Cargo.toml",
+    "https://raw.githubusercontent.com/kostya/benchmarks/0fc4e58/brainfuck/bf.c",
+    "https://raw.githubusercontent.com/kostya/benchmarks/0fc4e58/brainfuck/bf.cpp",
+    "https://raw.githubusercontent.com/kostya/benchmarks/0fc4e58/common/commands.mk",
+    "https://github.com/kostya/benchmarks/commits/master/brainfuck/bf.rs",
+    "https://github.com/kostya/benchmarks/issues?q=is%3Aissue+brainfuck"
+  ],
+  "confidence": 0.75
+}

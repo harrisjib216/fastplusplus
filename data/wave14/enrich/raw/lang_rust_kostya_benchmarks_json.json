@@ -1,0 +1,72 @@
+{
+  "id": "lang:rust/kostya/benchmarks#json",
+  "one_liner": "serde_json typed streaming deserializer in kostya/benchmarks: 0.103 s versus 0.131 s for C yyjson DOM parsing, not like for like.",
+  "what_it_does": "The Json test of kostya/benchmarks parses a generated, pretty-printed JSON file of about 110 MB (524,288 objects, each with x, y and z floats, a name string and a nested opts object) and averages x, y and z. The 'Serde Custom' program (json/json.rs/src/json_pull.rs) derives serde::Deserialize for a three-field Coordinate and hooks a custom Visitor onto the coordinates array with deserialize_with, so each element is decoded into a stack struct and added to running sums; 'Serde Typed' (json_struct.rs) collects a Vec<Coordinate> first, and 'Serde Untyped' (json_value.rs) builds a serde_json::Value tree. To use it you add the serde (derive) and serde_json crates and declare structs; it is a schema-driven API, not a drop-in replacement for a DOM library.",
+  "how_it_is_fast": "Schema-driven deserialization: serde_derive generates a field matcher for x, y and z, serde_json reads directly from the borrowed &str, and the unknown name and opts fields are skipped as IgnoredAny without allocating, so no DOM is built (peak RSS increase 0.00 MiB versus 229.38 MiB for yyjson). Two harness details also favour the Rust rows. serde_json 1.0.150 is built without its float_roundtrip feature, so floats go through the best-effort f64_from_parts path (significand cast to f64, then one multiply or divide by a power-of-ten table entry), which serde_json's Cargo.toml says is about 2x cheaper than the exact path. And the UTF-8 check of the input happens in fs::read_to_string before the timer starts, after which serde_json's StrRead trusts the string (from_utf8_unchecked), while yyjson validates UTF-8 inside its timed parse.",
+  "when_to_use": [
+    "Rust code that deserializes large JSON documents with a known schema into structs, especially when only a few fields or aggregates are needed: a deserialize_with visitor folds a huge array without materialising it.",
+    "Memory-constrained ingestion: on the 110 MB input the streaming visitor added 0.00 MiB of RSS, Vec<Coordinate> added 11.12 MiB and serde_json::Value added 839.75 MiB.",
+    "Extract-a-few-fields workloads where a typed deserializer replaces a general DOM parser such as yyjson, gason or RapidJSON's Document.",
+    "Data whose floats tolerate an error of 1-2 ULP, or builds that enable serde_json's float_roundtrip feature and accept its cost (not measured in this suite)."
+  ],
+  "when_not_to_use": [
+    "As evidence that Rust beats C or C++: in the same table C++ simdjson On-Demand takes 0.060 s and DAW JSON Link (typed, streaming, like serde) 0.085 s with clang++ and 0.089 s with g++; simdjson DOM ties at 0.103 s.",
+    "Schemaless or dynamic JSON: the Rust DOM row (serde_json::Value) takes 0.557 s and adds 839.75 MiB, about 4.3x slower than C yyjson (derived from page data).",
+    "When correctly rounded doubles are required and float_roundtrip is not enabled: the measured build uses best-effort float parsing.",
+    "Inside a C++ program: the gain comes from typed or on-demand parsing, which simdjson On-Demand and DAW JSON Link already provide in C++."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "serde 1.0.228 (derive feature) and serde_json 1.0.150 as pinned in json/json.rs/Cargo.lock; serde_json pulls in itoa, memchr and zmij",
+    "min_toolchain": "serde_json 1.0.150 declares rust-version 1.71 and serde 1.0.228 declares 1.56 (crates.io); the benchmark crate uses edition 2024 and was built with Rust 1.97.1",
+    "platforms": "Portable Rust; measured on x86-64 (Intel Xeon E-2324G) with -C target-cpu=native, LTO, codegen-units 1 and panic=abort",
+    "thread_safety": "Not documented in the sources read; the benchmark parses on one thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness asymmetry in float parsing: json.rs/Cargo.toml does not enable serde_json's float_roundtrip feature, so 1.0.150 uses its best-effort f64_from_parts (src/de.rs). A Python emulation of that function on numbers drawn the way json/generate_json.rb draws them (200,000 samples per field, shortest round-trip formatting) gave results 1-2 ULP away from correct rounding for about 35% of x values (around 1e-30), 10.5% of y and 10.4% of z; this is an emulation, not a run of the benchmark binary. yyjson ('can accurately read ... double numbers') and simdjson ('lossless parsing') claim exact parsing, the README's list of number-parsing inaccuracies (DAW JSON Link, gason, default RapidJSON, D) omits serde_json, and the self-test values 2.0, 0.5 and 0.25 are exact, so the check cannot catch it. For scale, RapidJSON's exact mode costs 0.212 s against 0.154 s for its default mode with g++.",
+    "UTF-8 validation of the 110 MB input is outside the Rust timed region (fs::read_to_string runs before notify), while yyjson and simdjson ('Full JSON and UTF-8 validation') validate inside theirs. The cost was not measured; at the 13 GB/s simdjson quotes for its own validator the pass would take roughly 8 ms, about 8% of the 0.103 s row (derived; a lower-bound estimate, since std::str::from_utf8 is not that SIMD validator).",
+    "The C++ streaming-callback row is handicapped by its harness: test_rapid_sax.cpp feeds RapidJSON's Reader through IStreamWrapper over a std::stringstream with the wrapper's default 4-byte buffer, so it calls std::istream::read every 4 bytes and runs 0.366 s, 2.4x slower than the RapidJSON DOM row that parses a std::string (0.154 s). No RapidJSON row defines RAPIDJSON_SSE2 or RAPIDJSON_SSE42, so its SIMD whitespace skipping is off. Do not read that row as the cost of streaming in C++.",
+    "The C yyjson rows link Debian's prebuilt libyyjson-dev instead of a build with the suite's -O3 -march=native -flto (verifier finding). Times are wall clock from xtime.rb, one median per configuration, with memory sampled every 10 ms."
+  ],
+  "pick_this_over_siblings_when": "This is the only JSON-parsing row in the category, and weaker evidence than the LangArena Rust slice::sort row: there the algorithms match, while here the Rust win comes from typed streaming against DOM parsers and from best-effort float parsing. A C++ project that wants the same effect should look at simdjson On-Demand or DAW JSON Link rather than a language change.",
+  "verified_claims_summary": "In kostya/benchmarks' Json test (README update 2026-07-19, Intel Xeon E-2324G, Debian forky Docker image, medians), Rust 1.97.1 with serde_json 1.0.150 took 0.103 s with a custom visitor and 0.110 s collecting Vec<Coordinate>, against 0.131 s for C yyjson (gcc 16.1.0, Debian's shared library) and 0.127 s for C++ gason (g++ -O3 -march=native -flto). That is about 1.27x over yyjson (derived from page data), but C++ simdjson On-Demand (0.060 s) and DAW JSON Link (0.085 s) were faster, and the Rust DOM path (0.557 s) was 4.3x slower.",
+  "status_note": "Active MIT-licensed suite (2.9k stars, last commit 2026-07-19); serde and serde_json are MIT OR Apache-2.0 and actively released (serde_json 1.0.154 on 2026-10-11), but this row is a library-level data point whose margin over yyjson rests partly on best-effort float parsing and untimed UTF-8 validation, harness flaws found in this enrichment.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/README.md",
+    "https://github.com/kostya/benchmarks/commits/master",
+    "https://github.com/kostya/benchmarks/issues?q=is%3Aissue+json+serde",
+    "https://github.com/kostya/benchmarks/issues?q=json",
+    "https://github.com/kostya/benchmarks/pull/509",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/Makefile",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/generate_json.rb",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/Cargo.toml",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/Cargo.lock",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/src/json_pull.rs",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/src/json_struct.rs",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/src/json_value.rs",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/test_yyjson.c",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/test_gason.cpp",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/test_rapid.cpp",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/test_rapid_sax.cpp",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/test_dawjsonlink.cpp",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/test_simdjson.cpp",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/test_simdjson_dom.cpp",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/test_boost_json.cpp",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/test_yajl.c",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/common/commands.mk",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/common/rust/src/lib.rs",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/common/libnotify/libnotify.h",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/xtime.rb",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/docker/Dockerfile",
+    "https://raw.githubusercontent.com/serde-rs/json/master/Cargo.toml",
+    "https://raw.githubusercontent.com/serde-rs/json/master/src/read.rs",
+    "https://raw.githubusercontent.com/serde-rs/json/v1.0.150/src/de.rs",
+    "https://raw.githubusercontent.com/Tencent/rapidjson/master/include/rapidjson/istreamwrapper.h",
+    "https://raw.githubusercontent.com/ibireme/yyjson/master/README.md",
+    "https://crates.io/api/v1/crates/serde_json",
+    "https://crates.io/api/v1/crates/serde",
+    "https://raw.githubusercontent.com/simdjson/simdjson/master/README.md"
+  ],
+  "confidence": 0.75
+}

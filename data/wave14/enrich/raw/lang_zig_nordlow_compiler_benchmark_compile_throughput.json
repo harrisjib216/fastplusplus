@@ -1,0 +1,45 @@
+{
+  "id": "lang:zig/nordlow/compiler-benchmark#compile-throughput",
+  "one_liner": "Zig's self-hosted x86-64 backend and linker build a 40,000-function test file 3.6-4.1x faster than gcc, about level with clang.",
+  "what_it_does": "nordlow/compiler-benchmark generates one source file per language holding 200 chains x 200 levels = 40,000 tiny i64 functions (each returns x + the next lower function + a constant re-randomised per run), with main calling the 200 chain heads; it times check, compile-to-object and build-to-executable, runs the binary, and reports microseconds per function. For Zig the harness runs zig build-exe -fno-llvm -fno-lld -fno-clang with no -O flag, i.e. a Debug build through Zig's own x86-64 code generator and built-in ELF linker. The catalogued 'implementation' is the Zig compiler as a toolchain for Zig source, not a component a C or C++ build can adopt.",
+  "how_it_is_fast": "Zig lowers source through its own pipeline (AstGen, Sema, then the self-hosted x86-64 backend) and links in-process, so no LLVM IR, LLVM code generation or separate system linker run; gcc and clang compile at -O0 and their drivers invoke the system linker. The README's column breakdown shows where the gain sits: on Check (semantic analysis only) Zig is slower than every C and C++ compiler (22.3 us/f vs gcc-15 11.9 and clang 13.5); on link-free Compile it is 2.1x faster than gcc-15 (93.2 vs 193.8) and 4.3x faster than gcc 16.2.1 (400.1) but 1.2x slower than clang (77.9); its Total lead over clang (110 vs 118) comes from linking in-process, roughly 17 us/f of Total beyond Compile against about 40 for clang (derived from page data). The README credits comptime evaluation of uniform scalar types for the absent generic penalty.",
+  "when_to_use": [
+    "Debug-build edit-compile-run loops in Zig projects on x86-64 Linux: per the Zig 0.15.1 release notes (search snippet only) the self-hosted x86 backend became the Debug default there with about 5x faster debug compilation, and -fno-llvm forces it.",
+    "Choosing a systems language where clean unoptimised rebuild time matters and the reference toolchain is GCC: here Zig built the same program 3.6x faster than gcc 15.3.0 and 4.1x faster than gcc 16.2.1 (C), and 2.8x to 6.5x faster than g++ 15.3.0 and 16.2.1 (C++, plain and templated).",
+    "Generic-heavy code: Zig's comptime-generic variant built no slower than the plain one (Total 92 vs 110 us/f), while g++-15 went from 303 to 600 us/f on the templated variant."
+  ],
+  "when_not_to_use": [
+    "As evidence that Zig compiles faster than C with Clang: clang compiles the same C faster on Check (13.5 vs 22.3 us/f) and Compile (77.9 vs 93.2), the Totals (118 vs 110) are inside the run-to-run spread, and the README's earlier run had clang 87 vs zig 97 us/f.",
+    "For optimised builds: only unoptimised builds were measured (no -O flag for any compiler); Zig's ReleaseFast and ReleaseSafe build times and the speed of the generated code are not covered.",
+    "When binary size matters: Zig's Debug executables carry 1,422-1,503 bytes per function against 121 for gcc and 146 for clang (README: runtime scaffolding, unwinding metadata and alignment padding).",
+    "For an existing C or C++ codebase: the measured path compiles Zig source only (the harness disables Zig's bundled Clang with -fno-clang), so switching a C/C++ build to the zig driver does not reproduce these numbers.",
+    "Targets other than x86-64: per the 0.15.1 notes (snippet only) the aarch64 self-hosted backend was still in progress, and the 2025 announcement said the default was not yet changed on Windows."
+  ],
+  "integration": {
+    "form": "toolchain (single zig executable compiling Zig source; not a library)",
+    "dependencies": "none for the measured path: -fno-llvm -fno-lld -fno-clang means no LLVM, LLD, Clang or system linker is invoked",
+    "min_toolchain": "measured on zig 0.18.0-dev.35+5e754304d (an unreleased development build from Codeberg); the self-hosted x86 backend became the Debug default in 0.15.1 (release notes, search snippet only)",
+    "platforms": "x86-64 (measured on Arch Linux, AMD Ryzen AI 7 350); other targets not measured",
+    "thread_safety": "not applicable (command-line compiler); the harness pins each compiler process to one logical CPU, so any internal compiler threads share that CPU",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness inconsistency found in the table: Zig's templated Total (build-exe, 92 us/f) is lower than its own templated Compile (build-obj, 109.8 us/f), although building an executable includes compiling; clang++ templated has the same inversion (107 vs 128.7) and gcc-15's C Total (392) is twice its Compile (193.8). Cells therefore carry noise of 20% or more, and the README's 'near-zero generic overhead' for Zig rests on the Total column, while Zig's own Check (22.3 to 33.8 us/f, +52%) and Compile (93.2 to 109.8, +18%) columns show a real templated cost (derived from page data).",
+    "Harness: all tasks run at the same time in a multiprocessing pool with one worker pinned per CPU; cpu_topology.py's frequency-based hybrid path does not drop SMT sibling threads, the Ryzen AI 7 350 mixes Zen 5 and Zen 5c cores, and the CPU each row ran on is not recorded. Builds over 3 s keep the minimum of only 2 runs, which covers Zig's roughly 4.4 s build (110 us/f x 40,000) and every gcc and g++ row.",
+    "The win over clang is the in-process linker, not code generation: Zig uses its own linker (-fno-lld) while gcc and clang call the system linker; on the link-free Compile column clang is 1.2x faster than Zig.",
+    "Nothing checks the output: the harness sends the built program's output to /dev/null and ignores its exit code, and the compilers do unequal work at 'unoptimised' (Zig Debug emits runtime safety checks, C and C++ at default -O0 with -Wall -Wextra do not), which works against Zig."
+  ],
+  "pick_this_over_siblings_when": "In the same table dmd is about 8x faster than Zig on Total (13 vs 110 us/f) and also faster on Check and Compile, so pick the dmd entry for raw cold-build throughput; Zig beats the Odin (147), C3 (153) and rustc (187) rows on Total, so pick it among those when you want comptime generics with no measured build penalty and a full semantic check in debug builds.",
+  "verified_claims_summary": "In one run of nordlow/compiler-benchmark (AMD Ryzen AI 7 350, Arch Linux, tables committed 2026-10-09), zig 0.18.0-dev.35 with -fno-llvm -fno-lld -fno-clang in Debug mode built and ran a generated 40,000-function file in 110 us per function (92 templated), against unoptimised builds of the same program with gcc 15.3.0 (392), gcc 16.2.1 (454) and clang 23.1.1 (118) for C, and g++ 15.3.0 (303 / 600 templated), g++ 16.2.1 (486 / 566) and clang++ 23.1.1 (236 / 107) for C++. That is 3.6x to 4.1x faster than gcc, 2.8x to 6.5x faster than g++ and 1.07x faster than clang on Total; on link-free compile clang is faster (77.9 vs 93.2 us/f) (all ratios derived from page data).",
+  "status_note": "Zig is MIT-licensed and actively developed on Codeberg, with the GitHub repository a frozen copy since 2025-11-27 ('README: migrated to codeberg'), and the measured compiler is an unreleased 0.18 development build; the evidence is one single-machine run of a public MIT harness that changes daily (ten commits on 2026-10-12), with no output check and table cells that contradict each other by 20% or more.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/benchmark",
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/cbench",
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/cpu_topology.py",
+    "https://github.com/nordlow/compiler-benchmark/commits/master",
+    "https://github.com/ziglang/zig",
+    "https://github.com/ziglang/zig/commits"
+  ],
+  "confidence": 0.6
+}

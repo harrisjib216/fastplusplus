@@ -1,0 +1,66 @@
+{
+ "id": "lang:v/kostya/benchmarks#brainfuck-bench-b",
+ "one_liner": "kostya's Brainfuck op-tree interpreter ported to V and compiled through gcc; about 10% faster than C++/g++, on bench.b only.",
+ "what_it_does": "brainfuck/bf.v (about 200 lines) is the V port of the suite's reference interpreter. It parses the source into a tree of Op structs (loop bodies are nested []Op), runs it with a recursive run_ops over a []int tape that starts at one cell and grows on demand, and in QUIET mode folds the output into a Fletcher-16 checksum. It is a benchmark program, not a library. V compiles to C, so the V/gcc row measures V-generated C built by gcc 16.1.0.",
+ "how_it_is_fast": "Not documented: the README, the source and the commit history give no mechanism, and nothing was built here to check one. The algorithm is the same as bf.cpp, so the gap comes from the C that V hands to gcc and from the extra flags. Untested source-level differences: (1) by V 0.5.2's match.v, a match inside a loop is emitted as an if/else-if chain (tested in the order inc, move, print, loop) rather than a C switch; (2) V -prod on gcc adds -fno-strict-aliasing, -fwrapv and -DNDEBUG on top of the suite flags; (3) V emits the program and its builtins as one C translation unit. Because the same V source runs 1.87x slower through clang (1.846 s) and 1.76x slower than C++ on mandel.b, the bench.b lead looks like a code-generation and layout effect specific to one input and one backend, not a property of the language.",
+ "when_to_use": [
+  "As a data point when choosing V for interpreter-style code: through gcc with -prod, V's output matched or beat hand-written C and C++ on one small dispatch-bound loop (bench.b 0.985 s vs C++/g++ 1.097 s and C/gcc 1.112 s).",
+  "If you already ship V: build with -cc gcc rather than clang for this kind of code (0.985 s vs 1.846 s on the same source).",
+  "Small-footprint batch tools: 2.12 MiB resident against 3.38 MiB for the C++ interpreter, and 41.65 J against 46.21 J.",
+  "Short-lived, single-threaded batch programs where the -prealloc arena (no GC, memory never freed) is acceptable."
+ ],
+ "when_not_to_use": [
+  "As a general claim that V beats C++: on the suite's other program, mandel.b, V/gcc takes 17.865 s against 10.143 s for C++/g++ (C++ 1.76x faster), and it also trails C/gcc 12.544 s, Rust 14.460 s and Go 14.540 s.",
+  "With the clang backend: V/clang 1.846 s on bench.b is slower than every C and C++ row (C++/clang++ 1.167 s).",
+  "When you need V's safety defaults: the row was measured with -no-bounds-checking and -prealloc, and per vlib/v/pref, -prealloc switches the build to no GC (gc_mode .no_gc) with a bump-pointer arena.",
+  "Long-running or multi-threaded services: V's docs say -prealloc 'is only suitable to speed up short lived, single-threaded, batch-like programs (like compilers)'.",
+  "Decisions that hinge on a 10% margin: it rests on a single 220-byte program on one machine, and the backend alone moves the same V source by 1.87x."
+ ],
+ "integration": {
+  "form": "source-drop (one V file, brainfuck/bf.v)",
+  "dependencies": "V toolchain plus a C compiler; only vlib os and net (net carries the harness notification)",
+  "min_toolchain": "V 0.5.2 (7647ce1) and gcc 16.1.0 as measured; flags -prod -no-bounds-checking -prealloc -cc gcc plus -cflags with -O3 -march=native -flto=auto",
+  "platforms": "x86-64 Linux as measured (-march=native, Xeon E-2324G); other targets not tested",
+  "thread_safety": "not documented; the program is single-threaded, and V's docs restrict -prealloc to single-threaded batch programs",
+  "drop_in_for_baseline": false
+ },
+ "gotchas": [
+  "The flags are not identical. V 0.5.2's builder/cc.v adds its own -O3 -flto -fno-strict-aliasing for gcc -prod, plus -fwrapv on Linux and -DNDEBUG, on top of the suite's COMMON_FLAGS. The C++ build has none of these extras, so 'same flags' holds for -O3, -march=native and LTO only.",
+  "Data layout differs. A V Op is two 32-bit ints plus a 32-byte array header (about 40 bytes), and `for op in ops` copies it by value each iteration (V's for.v emits `Op op = ((Op*)ops.data)[i]`). C++ reads a 32-byte Op by const reference, and C uses a 16-byte tagged union. The V tape grows one element per append (`t.tape << 0`), while C++ doubles with resize. None of these differences was measured in isolation.",
+  "The harness does not validate output. xtime.rb and analyze.rb record time, memory and energy only, and nothing compares the printed 'Output checksum' with an expected value; the built-in Hello World self-check is the only correctness guard. The V Printer truncates each cell to u8 before checksumming, where C++ uses the int value; this is equivalent for byte-range output.",
+  "The README Versions table is partly stale (Java 24.0.2, Crystal 1.17.1, Julia 1.11.6, while the Dockerfile of the same commit 5bc68b3 has OpenJDK 26.0.1, Crystal 1.21.0 and Julia 1.12.6), and the README says measurements are taken 'semi-manually'. V 0.5.2, gcc 16 and clang 22 do match the Dockerfile."
+ ],
+ "pick_this_over_siblings_when": "The catalogued Rust bench.b sibling shows the same roughly 10% lead (1.008 s vs 1.097 s) without a C backend in between, and like V it loses on mandel.b (Rust 14.460 s, V 17.865 s, C++/g++ 10.143 s); prefer the Rust entry as the more robust data point and use this one only if you already write V. For an other-language win over C or C++ that holds beyond one input, the category's ipnsort/driftsort or fd entries carry broader evidence.",
+ "verified_claims_summary": "kostya/benchmarks (README UPDATE 2026-07-19, Intel Xeon E-2324G, median of 10 runs, MAD 0.001-0.002 s): bf.v built by V 0.5.2 with -prod -no-bounds-checking -prealloc through gcc 16.1.0 (-O3 -march=native -flto=auto) ran bench.b in 0.985 s. C++/g++ 16.1.0 with libstdc++ and the same suite flags took 1.097 s, so V/gcc is about 1.11x faster (derived from page data); C/gcc took 1.112 s and C++/clang++ (libc++) 1.167 s. On mandel.b the order reverses: V/gcc 17.865 s vs C++/g++ 10.143 s.",
+ "status_note": "The suite is active (MIT, 2.9k stars, last update 2026-07-19). bf.v last changed on 2024-11-14 (97a820b, PR #495) in nuald's maintenance passes. It is a copyable reference port, not a library. The C tier (no mechanism) stands, and the mandel.b and clang reversals argue against reading it as a V-over-C++ result.",
+ "sources_read": [
+  "https://github.com/kostya/benchmarks",
+  "https://github.com/kostya/benchmarks/commits/master/brainfuck/bf.v",
+  "https://github.com/kostya/benchmarks/commits/master/docker/Dockerfile",
+  "https://github.com/kostya/benchmarks/pull/516",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/README.md",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/LICENSE",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/xtime.rb",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/analyze.rb",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/repeat.rb",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/run.sh",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/common/commands.mk",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/docker/Dockerfile",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/README.md",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/Makefile",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bf.v",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bf.cpp",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bf.c",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bench.b",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/mandel.b",
+  "https://raw.githubusercontent.com/vlang/v/0.5.2/vlib/v/builder/cc.v",
+  "https://raw.githubusercontent.com/vlang/v/0.5.2/vlib/v/gen/c/match.v",
+  "https://raw.githubusercontent.com/vlang/v/0.5.2/vlib/v/gen/c/for.v",
+  "https://raw.githubusercontent.com/vlang/v/0.5.2/vlib/v/pref/pref.v",
+  "https://raw.githubusercontent.com/vlang/v/0.5.2/vlib/v/pref/default.v",
+  "https://raw.githubusercontent.com/vlang/v/0.5.2/vlib/builtin/prealloc.c.v",
+  "https://raw.githubusercontent.com/vlang/v/0.5.2/vlib/builtin/array.v",
+  "https://raw.githubusercontent.com/vlang/v/0.5.2/doc/docs.md"
+ ],
+ "confidence": 0.62
+}

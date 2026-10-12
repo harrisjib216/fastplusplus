@@ -1,0 +1,55 @@
+{
+  "id": "paper:c-blake-bu-dups-w14-sys-blogs",
+  "one_liner": "Nim exact-duplicate file finder; claimed ~2x over jdupes when RAM-cached, though the author's 2019 timing favored jdupes by 7%.",
+  "what_it_does": "dups takes paths on the command line and/or a delimited path list on stdin (e.g. find -type f -print0 | dups -d\\\\0) and prints each set of files with identical contents as one tab-separated line, naming each i-node by its first-found hard link; it exits non-zero when any duplicate exists. Options pick the digest (size, wy, nim, SHA), byte comparison (-c), a file slice (-s), worker processes (-j), a wasted-bytes summary (-l summ), brief mode (-b) and per-set time ordering (-t). It only reports: there is no delete or link action, and its flags and output differ from jdupes. The dupSets iterator is exported for use from other Nim code.",
+  "how_it_is_fast": "It walks with cligen/dents (getdents64 plus statx, one path kept per device/i-node pair) and groups files by st_size, so size-unique files are never opened. A size group of exactly two files gets one memcmp of both mmap'd files with no hashing ('1 cmp ALWAYS less work than 2 hash'). Groups of three or more get one whole-file 64-bit wyhash variant (cligen hashWY) over mmap, with the size prefixed to the digest so all groups share one hash table, and by default the hash is trusted with no confirmation pass; -c instead sorts the mmap'd files with memcmp. Optional -j hashes in a forked process pool, which the source says rarely helps because hashing outruns I/O.",
+  "when_to_use": [
+    "Mapping duplicate data in local, page-cached trees (source trees, home directories, build outputs) when you want a report rather than automatic deletion",
+    "Scripts that only need a yes/no answer: the exit status is non-zero if any duplicate exists, and -b stops after the first set",
+    "Trees where most size collisions are pairs: those are always settled by an exact byte compare",
+    "Nim programs that want a dupSets iterator over a size-to-paths table instead of shelling out",
+    "Quick approximate pre-passes with -H size or -s slice before a careful -c pass"
+  ],
+  "when_not_to_use": [
+    "Deleting or hard-linking from the default output: groups of three or more same-size files are matched on a 64-bit non-cryptographic hash unless -c is given",
+    "NFS, sshfs or other network/FUSE trees walked recursively: dups hard-codes eof0=false in its cligen/dents walk, whose short-read early-EOF shortcut the dents source says fails on sshfs/NFS, so entries can be skipped; feed a find -print0 list instead",
+    "Cold-cache or slow-disk runs: the page itself says uncached use is dominated by I/O, and no cold numbers exist",
+    "Windows: dups is commented out of the Windows bin list in bu.nimble",
+    "When you need jdupes-style actions or flags; dups has no delete, link or dedupe options"
+  ],
+  "integration": {
+    "form": "module (single Nim source file built as a CLI by the bu nimble package; dupSets iterator importable)",
+    "dependencies": "cligen >= 1.11.0 (bu.nimble also requires adix, nio, fitl and spfun for other tools); always links OpenSSL libcrypto (-lcrypto) for the SHA option, even when it is not used",
+    "min_toolchain": "Nim 2.0.0+ (bu.nimble); nim.cfg and bu.nimble set no optimization flags, and the author advises -d:release for any timing (cligen issue #99)",
+    "platforms": "Linux and other POSIX systems; macOS linking of libcrypto was fixed in August 2026 (bu issue #9); excluded from the Windows build",
+    "thread_safety": "Not applicable to the CLI; -j uses forked worker processes (cligen procpool), not threads; library thread safety not documented",
+    "drop_in_for_baseline": "partial — same job as jdupes's default listing, but different flags and output, no delete/link actions, and recursion must be asked for with -r 0"
+  },
+  "gotchas": [
+    "Default -H wy trusts the hash for groups of three or more; only -c compares bytes, and even with -c a set of 4000 or more files (the mmap limit in carefulSplit) is printed uncompared with a 'too big to sort' warning, which matters most with -H size -c.",
+    "Correctness bug found by reading dups.nim (not run): when digest() cannot open or mmap a file it writes an all-zero digest, overwriting the size prefix, so every unreadable file in a size group of three or more lands under the same key and is printed as one duplicate set (exit 1) unless -c is given; only the stderr 'dups: digesting ...' lines warn.",
+    "Default -r 1 recurses only one directory level (0 means unlimited), and on NFS/sshfs the hard-coded early-EOF directory read can drop entries, so the help text's 'False negatives not possible' does not hold there.",
+    "Evidence conflict: in cligen issue #99 (2019-06-30) the author compared like modes (jdupes -mnr vs dups -cbls, or jdupes -Q vs dups without -c) and his only published numbers, a hot-cache /usr/src/linux run, had jdupes faster: 410 ms vs 439 ms. The doc's undated ~2X therefore depends on the tree and is not backed by any published setup."
+  ],
+  "pick_this_over_siblings_when": "No duplicate finder is catalogued in this category (fclones is a separate wave-11 entry); dups is built on the same author's cligen/dents walker, so it inherits that entry's NFS caveat. Pick dups for a small, hackable Nim reporter on cached local trees, and add -c before acting on its output.",
+  "verified_claims_summary": "The only claim is one undated first-party sentence in doc/dups.md: ~2X faster than jdupes on a fully RAM-cached test case, with no file set, machine, versions, flags or script. The author's own concrete timing (cligen issue #99, 2019, /usr/src/linux hot cache, both tools confirming byte for byte) had jdupes 7% faster, and his April 2019 comment gave '1.25 to 2x' on three or four personal trees.",
+  "status_note": "Active (bu last commit 2026-10-09; dups macOS link fix August 2026), MIT, a roughly 200-line file easy to vendor, but the speed claim is undated and contradicted by the author's own 2019 measurement, and code reading shows unreadable files reported as duplicates of each other unless -c is used.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/c-blake/bu/HEAD/doc/dups.md",
+    "https://raw.githubusercontent.com/c-blake/bu/HEAD/dups.nim",
+    "https://raw.githubusercontent.com/c-blake/bu/HEAD/README.md",
+    "https://raw.githubusercontent.com/c-blake/bu/HEAD/bu.nimble",
+    "https://raw.githubusercontent.com/c-blake/bu/HEAD/nim.cfg",
+    "https://raw.githubusercontent.com/c-blake/bu/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/c-blake/cligen/HEAD/cligen/fileUt.nim",
+    "https://raw.githubusercontent.com/c-blake/cligen/HEAD/cligen/mfile.nim",
+    "https://raw.githubusercontent.com/c-blake/cligen/HEAD/cligen/strUt.nim",
+    "https://raw.githubusercontent.com/c-blake/cligen/HEAD/cligen/sysUt.nim",
+    "https://raw.githubusercontent.com/c-blake/cligen/HEAD/cligen/dents.nim",
+    "https://github.com/c-blake/cligen/issues/99",
+    "https://github.com/c-blake/bu/commits/main",
+    "https://github.com/c-blake/bu/issues?q=is%3Aissue",
+    "https://github.com/c-blake/bu/issues/9"
+  ],
+  "confidence": 0.65
+}
