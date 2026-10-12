@@ -149,3 +149,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Enricher w8 pair-030 lead: Leon Bottou SGD/ASGD mirror https://github.com/npinto/bottou-sgd (LGPL-3.0, 34 stars, no README benchmarks).
 - Enricher w8 pair-036 leads (unchecked): GauXC (https://github.com/wavefunction91/GauXC, sn-LinK exchange), libcint (https://github.com/sunqm/libcint), NVIDIA-Omniverse/PhysX (successor of physx-3.4; repo_url override candidate).
 - Enricher w8 pair-044: mattmilten/mittelmann-plots holds scraped Mittelmann LP/QP/MIP data reachable via raw.githubusercontent.com, usable for solver retiers (HiGHS and COIN-OR Clp still uncatalogued; GLPK absent from Mittelmann since 2022).
+- Seed-pass enrichment leads (2026-10-13): magurosan/dSFMT_AVX512 (AVX2, AVX-512 and NEON dSFMT parked on MersenneTwister-Lab/dSFMT's experimental branch, '2-3x' claim, no numbers, AVX-512 path broken); starwing/amoeba (C Cassowary solver, no numbers).

@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/nucleic/kiwi",
+  "one_liner": "Header-only C++11 Cassowary linear-constraint solver for UI layout, claimed 10-500x faster than the original Cassowary C++ solver.",
+  "what_it_does": "Kiwi solves systems of linear equality and inequality constraints with required, strong, medium and weak strengths, incrementally, as needed for widget layout (it is the solver behind Enaml and Matplotlib's kiwisolver dependency). The C++ API is kiwi::Solver with addConstraint/removeConstraint, addEditVariable/suggestValue and updateVariables, with constraints built from operator-overloaded expressions such as x + y == 10. It is a fresh implementation of the Cassowary paper, not a drop-in for the original Cassowary API: stay constraints are gone and strengths are plain doubles.",
+  "how_it_is_fast": "It implements the incremental simplex method of the Cassowary paper (primal optimize after adds, dual simplex after suggestValue on edit variables) but replaces Cassowary's lexicographic symbolic weights with single doubles (strength::create packs three tiers as a*1e6 + b*1e3 + c), so every tableau cell is one double. All solver maps (rows, variables, constraints, edits and each row's cells) are Loki AssocVector sorted vectors, which the docs credit with about 2x over std::map, and Variable/Constraint handles use a non-atomic intrusive refcount instead of std::shared_ptr.",
+  "when_to_use": [
+    "GUI or document layout engines that re-solve a few dozen to a few hundred linear constraints on every resize, using edit variables for window width and height.",
+    "Python code that needs a Cassowary solver: kiwisolver (1.5.1, Python 3.10+) ships wheels and is already installed wherever Matplotlib is (matplotlib 3.11.2 requires kiwisolver>=1.3.1).",
+    "C++ projects that want a dependency-free, BSD-3-Clause, header-only constraint solver consumable through CMake FetchContent as kiwi::kiwi.",
+    "Replacing the original Cassowary C++ toolkit or other ports where stay constraints are not needed or can be emulated with edit variables."
+  ],
+  "when_not_to_use": [
+    "When you need general LP or QP solving with an objective you choose: Kiwi has no user objective (open issues #164 and #176 ask for one); use an LP/QP solver such as HiGHS, PIQP or OSQP.",
+    "Strict strength hierarchies: because strengths are summed doubles, many weak constraints can outweigh a medium one (documented in solver_internals.rst); the original Cassowary's lexicographic ordering guarantees the hierarchy.",
+    "Large or high-churn systems on one long-lived solver: every map is a sorted vector (O(n) insert and erase), and removed edit variables and constraints leave zeroed cells in the objective, so maintainers recommend rebuilding the solver when constraints change often (issue #154).",
+    "Multithreaded use of shared Variable or Constraint objects: refcounts are non-atomic and a maintainer states 'kiwisolver is not threadsafe' (issue #230).",
+    "Anyone who needs the 10-500x figure for a decision: no benchmark against Cassowary, workload, hardware or compiler has ever been published."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for C++ (Loki AssocVector is vendored in kiwi/AssocVector.h); the Python wrapper builds with cppy",
+    "min_toolchain": "C++11 (CMakeLists sets cxx_std_11, CMake 3.15+; CI tests C++11 and C++20); Python wrapper needs Python 3.10+",
+    "platforms": "any platform with a C++11 compiler; Python wheels per release notes include free-threaded CPython builds and RISC-V",
+    "thread_safety": "not thread safe: one solver per thread, and Variable/Constraint handles must not be shared across threads because SharedData uses non-atomic reference counts; the Python wrapper holds the GIL or a global lock around solver calls",
+    "drop_in_for_baseline": "partial — same Cassowary model and edit-variable workflow, but a different API, no stay constraints, and floating-point instead of lexicographic strengths, so solutions can differ in corner cases"
+  },
+  "gotchas": [
+    "Errors are C++ exceptions (UnsatisfiableConstraint, DuplicateConstraint, UnknownEditVariable, BadRequiredStrength, InternalSolverError), and edit variables cannot have required strength.",
+    "Feasibility and pivoting use a fixed absolute epsilon of 1e-8 (impl::nearZero), regardless of the magnitude of coordinates or coefficients.",
+    "Strength components are clipped to [0, 1000] each, so custom strengths saturate (strong is 1e6, required is 1,001,001,000) and weighting tricks beyond those bounds silently do nothing.",
+    "The repo's own C++ benchmark (benchmarks/enaml_like_benchmark.cpp, nanobench, g++ -O2) times only Kiwi, and its 'suggest value WxH' cases resubmit the same width and height every iteration, so after the first iteration delta is 0 and no dual-simplex work is timed; the Python benchmark cycles six sizes and is the better re-solve measurement."
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling solves Cassowary constraints; the category's QP solvers (PIQP, ProxQP, QPALM) handle general convex objectives, while Kiwi is the pick for incremental, strength-prioritised layout constraints re-solved on every resize. For JavaScript, use its TypeScript descendant lume/kiwi (wave 13) instead.",
+  "verified_claims_summary": "The only evidence is first-party README prose ('10x to 500x faster than the original Cassowary solver with typical use cases gaining a 40x improvement', memory savings over 5x), unchanged since the 2013-2014 0.1.x releases, with no named Cassowary version, workload, hardware, compiler or benchmark code; the repo's benchmarks measure Kiwi alone and cannot reproduce the comparison.",
+  "status_note": "Actively maintained by the Nucleic team (solver 1.5.1 released 2026-08-28, commits into October 2026, 781 stars) as a Matplotlib dependency, BSD-3-Clause and header-only, though a March 2026 static-review batch of Python-wrapper bugs (issues #223-#231, refcount and lock handling) is still open.",
+  "sources_read": [
+    "https://github.com/nucleic/kiwi",
+    "https://github.com/nucleic/kiwi/issues",
+    "https://github.com/nucleic/kiwi/issues/154",
+    "https://github.com/nucleic/kiwi/issues/230",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/README.md",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/releasenotes.rst",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/docs/source/index.rst",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/docs/source/basis/solver_internals.rst",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/docs/source/basis/basic_systems.rst",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/docs/source/use_cases/enaml.rst",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/benchmarks/enaml_like_benchmark.cpp",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/benchmarks/enaml_like_benchmark.py",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/benchmarks/build_and_run_bench.sh",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/kiwi/kiwi.h",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/kiwi/solverimpl.h",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/kiwi/solver.h",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/kiwi/maptype.h",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/kiwi/AssocVector.h",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/kiwi/row.h",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/kiwi/strength.h",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/kiwi/shareddata.h",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/kiwi/errors.h",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/kiwi/util.h",
+    "https://raw.githubusercontent.com/nucleic/kiwi/HEAD/kiwi/version.h",
+    "https://pypi.org/pypi/kiwisolver/json",
+    "https://pypi.org/pypi/matplotlib/json"
+  ],
+  "confidence": 0.75
+}
