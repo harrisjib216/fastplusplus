@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SPEC = ROOT / "faster-than-std-agent-prompt.md"
+SPEC = ROOT / "pipeline" / "spec.md"
 INTERNAL_FIELDS = {"assignment_ids", "corrected_fields", "found_via"}
 
 HARNESS = """

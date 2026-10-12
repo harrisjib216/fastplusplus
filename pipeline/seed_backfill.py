@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Backfill seed-record passes from data/seeds/seeds.json (QUEUE.md section F, steps 2-4).
+"""Backfill seed-record passes from data/seeds/seeds.json (docs/QUEUE.md section F, steps 2-4).
 Groups seeds by guessed wave, registers `mine` assignments (w{N}-mine-{k}) in the wave's
 assignments.json and renders one prompt per group to data/wave{N}/prompts/<id>.txt. Unlike seed.py,
 a project with no numeric comparison against a recognisable baseline gets NO record: the agent

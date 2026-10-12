@@ -61,7 +61,7 @@ def read_url_list(path):
     return [l.strip() for l in path.read_text().splitlines() if l.strip() and not l.startswith("#")]
 
 
-OPTIONAL_KEYS = {"language_level_claim", "same_algorithm", "same_opt_level", "why_faster"}  # wave 14 cross-language keys (QUEUE.md section C)
+OPTIONAL_KEYS = {"language_level_claim", "same_algorithm", "same_opt_level", "why_faster"}  # wave 14 cross-language keys (docs/QUEUE.md section C)
 
 
 def validate(e):

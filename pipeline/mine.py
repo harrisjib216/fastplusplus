@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed-list mining (QUEUE.md section F): split a curated list's README into sections and render one
+"""Seed-list mining (docs/QUEUE.md section F): split a curated list's README into sections and render one
 mining prompt per section to data/seeds/prompts/<source>__<slug>.txt. The agent writes its JSON array to
 data/seeds/raw/<source>__<slug>.json. Sections named in EXCLUDE (GUI, games, books, tutorials, tooling) are skipped."""
 import argparse, json, re

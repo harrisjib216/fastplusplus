@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Compile data/seeds/no_evidence/*.json (projects a backfill agent found no numeric baseline
-comparison for) into SEEDS_NO_EVIDENCE.md at the repo root (QUEUE.md section F, rule 4)."""
+comparison for) into SEEDS_NO_EVIDENCE.md at the repo root (docs/QUEUE.md section F, rule 4)."""
 import json
 from pathlib import Path
 
