@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/clausecker/pospop",
+  "one_liner": "Go (plus a newer C port) positional popcount in AVX-512/AVX2/SSE2/NEON assembly; about 5-24x the repo's best scalar Go kernel.",
+  "what_it_does": "Computes a positional population count: for an array of 8-, 16-, 32- or 64-bit words it adds, for every bit position, how many words have that bit set. The Go API is pospop.Count8/16/32/64(&counts, buf) and CountString, which add into a caller-owned *[N]int (counts accumulate, so zero them yourself). A C port in src.c exposes pospopcount8/16/32/64(uint64_t counts[N], const T *buf, size_t len) as a static or shared library with ifunc dispatch.",
+  "how_it_is_fast": "Each kernel first reduces 15 (then 16) input vectors with a carry-save adder (CSA) tree, the Harley-Seal technique built on VPTERNLOGD on AVX-512, so the expensive per-bit work is done once per 960/480/240-byte block instead of per word. The resulting place-value vectors are split by a bit-matrix transposition (masks 0x55/0x33/0x0f then byte/word shuffles) into 16-bit lane counters that are flushed to the 64-bit totals just before they could overflow. Heads are handled with masked or aligned loads and tails with overlapping aligned reads that never cross a page, which is the 'better handling of unaligned and very short arrays' the CCPE 2025 paper describes (abstract seen via search snippet).",
+  "when_to_use": [
+    "Go code that needs per-bit-position counts over large arrays: bit-sliced indexes, bitmap columns, bioinformatics and database workloads the paper abstract names.",
+    "Buffers of roughly 10 kB and up, ideally around 100 kB per call and a multiple of 64 bytes, which is where the README and package doc say the kernels reach full speed.",
+    "amd64 machines with AVX2+BMI2 or AVX-512 F/BW+BMI2 (82.1 GB/s AVX-512 and 34.8 GB/s AVX2 on a Xeon Gold 6138 at 100 kB) and arm64 with NEON (36.9 GB/s on Apple M1).",
+    "C on ELF/SysV x86-64 or AArch64 Linux/BSD, via the src.c library, when you can patch the header for C++ (see gotchas)."
+  ],
+  "when_not_to_use": [
+    "Many tiny calls (tens of bytes): in issue #2 an AVX2 count8 call on 32 B took 13-15 ns (about 2 GB/s) on a Ryzen 7 2700X, and the newer carry kernel was slower than older code at 512 B and below.",
+    "32-bit ARM, ppc64le, RISC-V, s390x and other targets: only the generic Go/C kernels exist there (the README lists arm generic8 at 49 MB/s on a Cortex-A72).",
+    "Plain (non-positional) popcount: a math/bits.OnesCount loop or a dedicated popcount package is simpler.",
+    "C on macOS or Windows: the C port uses GNU ifunc and assumes an ELF ABI with SysV/AAPCS calling conventions; the README asks users to request other ports.",
+    "When you need numbers against an external incumbent: the repo only compares with its own generic kernels; the comparison with Klarqvist-Mula-Lemire positional-popcount lives in the paper, which was not opened here."
+  ],
+  "integration": {
+    "form": "module (Go); static lib or shared lib, or source-drop of the listed .S/.c files (C port)",
+    "dependencies": "golang.org/x/sys v0.7.0 (cpu feature detection; unix for the over-read test); C port: none (GNU assembler syntax .S files, GCC or clang)",
+    "min_toolchain": "Go 1.20 (go.mod; uses unsafe.StringData); C port: C99 compiler with GNU ifunc support on ELF",
+    "platforms": "amd64 (AVX-512 F/BW+BMI2, AVX2+BMI2, SSE2), 386 (AVX2+BMI2, SSE2), arm64 (NEON); generic Go elsewhere. C port: x86-64 and AArch64 ELF, generic C elsewhere",
+    "thread_safety": "not documented; the kernel is chosen once at package init (Go) or by an ifunc resolver (C) and the functions keep no shared mutable state, so concurrent calls with separate counts arrays are safe by construction",
+    "drop_in_for_baseline": "partial — replaces the package's own generic Go/C kernels transparently (same functions, runtime dispatch); there is no standard-library positional popcount to drop it in for"
+  },
+  "gotchas": [
+    "C++ users: src.c/pospop.h closes its extern \"C\" block under a misspelled guard ('#ifdef __cplusplis'), so the brace opened under __cplusplus is never closed; reproduced here with g++ 13 and clang++ ('expected '}' at end of input', or 'template with C linkage' when a C++ standard header follows). Fix the typo to __cplusplus before including it from C++, despite the README calling the port usable from C and C++.",
+    "The C port's amd64 dispatcher (src.c/dispatch.c) picks AVX-512 or AVX2 from CPUID leaf 7 bits alone, with no OSXSAVE/XGETBV check that the OS has enabled the AVX or AVX-512 register state; Go's golang.org/x/sys/cpu does that check. On a system or VM that masks the state but not the CPUID bits, the C library would fault with SIGILL.",
+    "Kernels read whole aligned 64-byte blocks beyond both ends of the slice (masked or discarded); TestOverread checks they never cross a page boundary, but byte-precise memory checkers may still flag the reads.",
+    "Counts are added, not stored: reuse of a counts array accumulates across calls. Benchmark figures reuse one 100 kB buffer (L2-resident on the Xeon Gold 6138), and the 80x headline is against generic8, a byte-at-a-time CSA loop; generic64 (3.43 GB/s) is the fairer scalar baseline (24x)."
+  ],
+  "pick_this_over_siblings_when": "Pick pospop when you need per-bit-position counts; tmthrgd/go-popcount and the other Go assembly siblings (go-and, vectorcmp) solve total popcount or bitwise ops, not this. Among positional popcount codes, mklarqvist/positional-popcount (listed elsewhere in this wave) is the earlier C/C++ library that the CCPE 2025 paper builds on and benchmarks against; pospop is the Go-native choice and its C port is newer (version 0.2, November 2025) with no published C numbers.",
+  "verified_claims_summary": "The README table, produced by bench_test.go over a random 100 kB buffer, gives 82.1 GB/s (AVX-512), 34.8 GB/s (AVX2) and 16.0 GB/s (SSE2) on an Intel Xeon Gold 6138 at 2.00 GHz against 1.02-3.43 GB/s for the package's own scalar CSA Go kernels (generic8 to generic64), and 36.9 GB/s NEON versus 1.68-6.56 GB/s generic on an Apple M1; the stated 'Go 1.16' cannot be the toolchain for the amd64 and NEON rows re-measured for v1.4.0 (2024-11-26) under a go.mod requiring Go 1.20. An independent user (issue #2, Ryzen 7 2700X) measured the AVX2 count8 kernel at about 22-28 GB/s at 100 kB across 2020-2021 versions, without a scalar baseline.",
+  "status_note": "Active (last commits 2025-11-28 adding C port version 0.2, after the CCPE 2025 paper), BSD-2-Clause, 70 stars, test suite covers overflow and page-boundary over-reads; the Go module is mature, the C port is new and has the C++ header bug above.",
+  "sources_read": [
+    "https://github.com/clausecker/pospop",
+    "https://github.com/clausecker/pospop/commits/master",
+    "https://github.com/clausecker/pospop/issues?q=is%3Aissue",
+    "https://github.com/clausecker/pospop/issues/2",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/README",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/go.mod",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/dispatch.go",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/bench_test.go",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/COPYING",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/generic.go",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/overread_test.go",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/overflow_test.go",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/safe.go",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/select_amd64.go",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/select_386.go",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/select_arm64.go",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/count_test.go",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/countavx512_amd64.s",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/countavx2_amd64.s",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/src.c/README",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/src.c/dispatch.c",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/src.c/pospop.h",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/src.c/Makefile",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/src.c/internal.h",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/src.c/kernelavx2.S",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/src.c/kernelavx512.S",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/src.c/countavx2_64.S",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/src.c/countgeneric.c",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/src.c/test.c",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/src.c/dotest.sh",
+    "https://raw.githubusercontent.com/clausecker/pospop/HEAD/src.c/libpospop.map",
+    "WebSearch snippet: arXiv 2412.16370 abstract (arxiv.org, refubium.fu-berlin.de and papers.cool not reachable)"
+  ],
+  "confidence": 0.78
+}

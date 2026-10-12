@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/cleonard2341/ai-kernel-optimizer",
+  "one_liner": "Python driver that prompts an AI for x86-64 asm and races it against GCC -O3; winning kernels unpublished.",
+  "what_it_does": "optimize.py has four subcommands: scan (regex-parses C files and scores functions as kernel candidates), analyze (compiles with gcc -O3 -march=native, prints the disassembly and a ready-made prompt for an AI model), verify (generated differential-fuzz harness) and compete (fuzz, benchmark and AI_WINS/TIE/GCC_WINS verdict). It writes no assembly itself: you paste the prompt into a model and save the .S. The repo also holds three case-study reports (base64 decode, LZ4 1.10.0 fast-path decode, Redis SipHash 1-2) and a blog post, but not their C references, .S kernels, harnesses or build scripts.",
+  "how_it_is_fast": "The one real win, base64 decode, swaps a scalar 256-byte lookup-table decoder for the SSSE3 vector technique: pshufb on the high nibble picks a per-range offset (with a pcmpeqb fix-up for '/'), then pmaddubsw, pmaddwd and pshufb pack 16 ASCII bytes into 12 output bytes per iteration. This is the published Mula-Lemire style vector base64 approach (arXiv 1704.00605, seen as a search result), here without input validation or padding. The LZ4 attempt only widens the match copy to one 16-byte vmovdqu and merges pointer arithmetic into LEA (noise-level). The SipHash attempt reschedules SIPROUND and loses to GCC.",
+  "when_to_use": [
+    "As a starting scaffold for experiments with LLM-written x86-64 assembly on Linux and GCC: it extracts gcc -O3 -march=native disassembly and a SysV-ABI prompt for a pure C function.",
+    "To triage a C file for side-effect-free candidate kernels (no I/O, allocation or globals) with scan's heuristic score before hand-optimizing.",
+    "As a template for C-versus-.S differential testing, but only after rewriting the harness so it compares output buffers and feeds inputs that respect the kernel's contract."
+  ],
+  "when_not_to_use": [
+    "As a source of fast base64, LZ4 or SipHash code: none of the benchmarked assembly is in the repo; use a maintained SIMD base64 library (the record names aklomp/base64 and simdutf) or upstream LZ4.",
+    "As evidence that a kernel is correct: the published verify/compete harness never compares plain pointer outputs (see gotchas), so its '100K PASS' proves little for kernels that write into a buffer.",
+    "For benchmarks you need to trust: the generated benchmark is one back-to-back run per version on a fixed input, with no warmup or repeats, and a 2% threshold decides the verdict.",
+    "Off Linux x86-64 with GCC and GNU binutils (objcopy, objdump), or for kernels with more than six register arguments, struct-by-value parameters or code the regex parser misreads (it takes the first non-static function matching a simple pattern)."
+  ],
+  "integration": {
+    "form": "source-drop (single Python script, optimize.py)",
+    "dependencies": "GCC, GNU binutils (objcopy, objdump), Python 3 standard library; an external AI model to write the .S",
+    "min_toolchain": "Python 3.6+ and GCC with x86-64 support (README); Linux",
+    "platforms": "Linux x86-64 only (prompt assumes the SysV ABI and offers SSE through AVX2, BMI and BMI2)",
+    "thread_safety": "not applicable (command-line tool); not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw in the published verifier: gen_harness classifies every non-const pointer parameter without a struct type (for example uint8_t *dst or int *src_consumed) as an input, fills it with random bytes, passes the same array to both versions and never compares it; only return values and struct-pointer outputs are checked. Generated here for the base64 signature b64_decode_kern(const uint8_t *src, size_t src_len, uint8_t *dst): the 100,000-iteration fuzz compares only the return value src_len*3/4, so a decoder that writes wrong bytes passes. The case studies' '100K PASS' came from separate, unpublished harness.c files.",
+    "The generated fuzz uses random bytes and random lengths 0-255 regardless of the kernel's contract (base64 needs valid characters and a length divisible by 4; LZ4's end pointers must point into the same buffer, but each pointer parameter gets its own unrelated array). The generated benchmark fixes every scalar at 42 and fills inputs with j*7+13, then times GCC and AI once each, back to back.",
+    "The LZ4 row cannot measure the stated workload: 10M iterations in 0.024-0.027 s is about 2.5 ns per call for a 4096-byte block, so the kernel probably returned after a few sequences. The report text is also unreliable in detail: SipHash 1-2 is described as having 2 finalization rounds and then the AI version as using 'all 3 finalization rounds', and a VEX vmovdqu is called an SSE copy.",
+    "The analyze prompt tells the model 'no error checking, inputs valid', so AI kernels drop validation a production decoder needs. 'Provably outperforms GCC -O3' and 'generates optimized x86-64 assembly' overstate a tool that prints a prompt and runs fuzz tests. MIT appears only in the README; there is no LICENSE file and GitHub shows no license."
+  ],
+  "pick_this_over_siblings_when": "Pick it only as a small, readable Linux/GCC scaffold for trying LLM-written assembly on one function. STOKE (stochastic superoptimizer with verification), SuperCoder (LLM assembly superoptimization evaluated on a benchmark suite) and SLOTHY (scheduler for crypto and DSP kernels) are research tools with published evaluations, while this repo publishes neither its winning kernels nor a verifier that checks output buffers.",
+  "verified_claims_summary": "Self-reported and not reproducible from the repo: an AI-written SSSE3 base64 decoder ran 4.80x (64 B), 6.23x (1 KiB) and 6.26x (16 KiB) faster than a scalar 256-byte-LUT C decoder built with gcc -O3 -march=native (about 1.8 GB/s versus 8.5-11.6 GB/s). The CPU and GCC version are unnamed, and each figure is one back-to-back run. The LZ4 fast-path row is a tie at an implausible 2.5 ns per call, and the Redis SipHash 1-2 rewrite is 1-4% slower than GCC.",
+  "status_note": "Three commits (2026-02-15 initial release and blog post, 2026-05-17 FUNDING.yml), 2 stars, 0 forks, no releases. MIT is claimed only in the README, so reuse rights are unclear, and only the Python driver is copyable; none of the benchmarked kernels are published.",
+  "sources_read": [
+    "https://github.com/cleonard2341/ai-kernel-optimizer",
+    "https://github.com/cleonard2341/ai-kernel-optimizer/commits/main",
+    "https://raw.githubusercontent.com/cleonard2341/ai-kernel-optimizer/HEAD/README.md",
+    "https://raw.githubusercontent.com/cleonard2341/ai-kernel-optimizer/HEAD/optimize.py",
+    "https://raw.githubusercontent.com/cleonard2341/ai-kernel-optimizer/HEAD/case_studies/SUMMARY.md",
+    "https://raw.githubusercontent.com/cleonard2341/ai-kernel-optimizer/HEAD/case_studies/base64/REPORT.md",
+    "https://raw.githubusercontent.com/cleonard2341/ai-kernel-optimizer/HEAD/case_studies/lz4/REPORT.md",
+    "https://raw.githubusercontent.com/cleonard2341/ai-kernel-optimizer/HEAD/case_studies/redis/REPORT.md",
+    "https://raw.githubusercontent.com/cleonard2341/ai-kernel-optimizer/HEAD/blog/ai-assembly-vs-gcc-o3.md",
+    "https://raw.githubusercontent.com/cleonard2341/ai-kernel-optimizer/HEAD/.github/FUNDING.yml",
+    "https://raw.githubusercontent.com/cleonard2341/ai-kernel-optimizer/HEAD/LICENSE (404)",
+    "https://raw.githubusercontent.com/cleonard2341/ai-kernel-optimizer/HEAD/case_studies/base64/b64_decode_kern.c (404)",
+    "https://raw.githubusercontent.com/cleonard2341/ai-kernel-optimizer/HEAD/case_studies/base64/harness.c (404)",
+    "WebSearch: no independent coverage found; result list included arXiv 1704.00605 (Faster Base64 Encoding and Decoding Using AVX2 Instructions), not opened"
+  ],
+  "confidence": 0.8
+}
