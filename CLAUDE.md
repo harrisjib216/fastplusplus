@@ -29,6 +29,9 @@ and baselines). Scripts are in `pipeline/`, data in `data/waveN/`, rendered list
   no invented abbreviations; names, numbers, paths and errors exact). Data files, rendered
   lists, decisions and commit messages stay normal prose. The subagent wording is in
   `pipeline/cloud_harness.md`; repeat it in prompts that do not include that file.
+- **Token discipline (2026-10-13):** user saw heavy token use; orchestrator and agents keep caveman ultra in all
+  their own text, read files in slices (grep/head/sed ranges, never whole large files), dump few records per call,
+  and skip restating findings. Agent wrappers carry a TOKEN DISCIPLINE line.
 - **Tokens are not a concern:** raise or remove caps when it yields more or better results.
   Sonnet for search (get coverage from more search agents, not a bigger model), Opus for verify,
   enrich and re-tier checks.

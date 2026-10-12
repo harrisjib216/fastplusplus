@@ -37,3 +37,5 @@ Privacy and file rules:
 Output path: the repository root is /home/user/fastpp. Searches write /home/user/fastpp/data/waveN/raw/<ASSIGNMENT_ID>.json (this replaces any /Users/... or /home/claude/... path in the prompt file); verifiers and enrichers write the path their prompt names, rewritten under /home/user/fastpp if it points elsewhere. Check it parses with python3 json.load.
 
 Final reply to the orchestrator: caveman ultra style (fragments, no articles, no filler, no arrows, no invented abbreviations; names, numbers and errors exact), max ~8 lines: entry count and names, plus any blocker. The JSON file itself stays normal prose.
+
+TOKEN DISCIPLINE (2026-10-13): caveman ultra in all your own text; read files in slices (grep, head, sed ranges), never whole large files; one fetch per resource; JSON fields stay normal prose.
