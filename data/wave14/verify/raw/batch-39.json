@@ -1,0 +1,98 @@
+[
+  {
+    "id": "lang:mojo/dev0x13/gemm-benchmark-2023#multithread-gemm",
+    "verdict": "reject",
+    "reject_reason": "other: the timed Mojo 'Swizzled' kernel in src/matmul.mojo does not compute a full GEMM (wrong-answer fast path, stb-zip precedent), and the Eigen column it beats is double precision (Eigen::MatrixXd) against Mojo float32",
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "D",
+    "tier_reason": "Code (src/cpp_matmul_*.cpp, src/matmul.mojo), clang++ -O3 -march=native flags (src/Makefile) and CPU (Xeon Platinum 8124M) are all public, so the evidence would be A, but the comparison is invalid: src/cpp_matmul_eigen.cpp uses Eigen::MatrixXd (FP64) while Mojo uses DType.float32, and the Mojo 'Swizzled' kernel does not compute C = A*B. Against the same-precision baselines (OpenBLAS and MKL cblas_sgemm) Mojo is mostly slower.",
+    "corrections": {
+      "baseline": "Eigen 3.4.0 C.noalias() = A*B on Eigen::MatrixXd (DOUBLE precision, src/cpp_matmul_eigen.cpp) with -fopenmp; OpenBLAS 0.3.25 and Intel MKL cblas_sgemm (float32); naive float32 m-k-n triple loop; all C++ built with clang++ -O3 -march=native",
+      "workload": "GEMM on 19 shapes from 128x128x128 to 1024x2560x1024, GFLOPS. Mojo, OpenBLAS, MKL and the naive loop use float32; the Eigen program uses float64 (Eigen::MatrixXd), so its column measures a different, twice-as-wide workload. Mojo 'Swizzled' is Modular's 2023 matmul.mojo sample (tiled, parallelized, swizzled tile order); Mojo 'Vectorized' is the same m-k-n loop as the naive C++ program with explicit SIMD.",
+      "claimed_speedup": "No speedup is claimed by the README; it publishes GFLOPS tables only. Mojo 'Swizzled' (multi-thread) vs Eigen: 835.4 vs 378.8 on 256x1024x4096 (2.2x, derived from page data), 808.8 vs 437.3 on 1024x2560x1024 (1.8x, derived), but the Eigen runs are FP64 and Mojo FP32, so this is not a like-for-like win. Against same-precision cblas_sgemm: Mojo ahead of OpenBLAS on 5 of 18 run shapes by at most 1.15x (795.0 vs 688.9 on 128x4096x1024, derived from page data) and behind on 13 (808.8 vs 1126.2 on 1024x2560x1024); MKL ahead on every shape (1063.6 vs 835.4 on 256x1024x4096). Same-algorithm single-thread comparison (Mojo 'Vectorized' vs naive C++ -O3, identical m-k-n loop): C++ ahead on 15 of 18 run shapes (11.0 vs 10.0 GFLOPS on 256x1024x4096), Mojo ahead on 3 (26.0 vs 13.1 on 256x768x768).",
+      "compiler_and_flags": "C++: clang++ -O3 -march=native (src/Makefile; -fopenmp for Eigen and OpenBLAS, MKL linked with libiomp5 and mkl_intel_thread), Ubuntu 22.04 apt clang (version not pinned), OpenBLAS 0.3.25 built from source, MKL per Dockerfile ARG 2024.0.0.49673 (README says 2020.4.304); single-thread runs set OMP_NUM_THREADS=1 (src/run_benchmark.sh). Mojo 0.6.0 via 'mojo matmul.mojo' with default settings; Mojo times with benchmark.run(max_runtime_secs=0.5).mean(), C++ times a fixed iteration count with std::chrono including the first call.",
+      "hardware": "Intel Xeon Platinum 8124M, AWS c5.4xlarge (README says 16 cores; the instance has 16 vCPUs, i.e. 8 physical cores with Hyper-Threading), Ubuntu 22.04",
+      "caveats": "Invalid comparison on two counts. (1) src/cpp_matmul_eigen.cpp declares 'using MatT = Eigen::MatrixXd;', so the Eigen column is a double-precision GEMM while Mojo, OpenBLAS, MKL and the naive loop are float32; with AVX-512 the FP32 rate is twice the FP64 rate, which accounts for the 1.8-2.2x 'win' over Eigen. (2) The timed Mojo 'Swizzled' kernel (and 'Reordered') copies the inner loop of Modular's 2023 'accumulated' sample: 'for _ in range(tile_i): for i in range(tile_k): for k in range(tile_k_unroll)' updates only rows 0-7 of each 32x64 tile and only k in ko..ko+7 of each 64-wide k block, repeated 32 times, into stack accumulators that are never zeroed; tile_parallel_swizzled maps work items only to tile rows 0-3 (C rows 0-127) and lets column tiles run past N (it divides N by tile_y, not tile_x). An index-level NumPy simulation of the committed code gives max abs error 177 on 128x128x128 and covers 4 tile rows on 256x1024x256; the FLOP count equals a real GEMM, but the memory footprint is far smaller, so the GFLOPS figure is not a GEMM rate. Modular removed that 'accumulated' kernel from its sample on 2024-02-09 (commit cd64c557, #31132) and switched the sample's tests to per-element checks the same day (ba274280, #31133). The repo's own test_all (sum comparison) would raise on such output, so the published table either came from a run with that check bypassed or from code not in the repo; either way it cannot be reproduced as a correct GEMM. The 1024x352x512 Mojo cell reads 0.0 because that shape is commented out in matmul.mojo ('crashes with a segfault', modularml/mojo issue #1426). One run per cell, no spread. The Mojo file carries Modular's Apache-2.0 with LLVM exceptions header inside an MIT repo. The README never claims Mojo is faster.",
+      "same_algorithm": false,
+      "same_opt_level": null,
+      "why_faster": "No language mechanism. The apparent win over Eigen comes from comparing float32 Mojo against float64 Eigen (half the SIMD lanes) and from a Mojo tiled kernel that, read from the committed source, does not compute a full GEMM. On the one like-for-like algorithm pair (Mojo 'Vectorized' vs the naive C++ loop at -O3) C++ is faster on most shapes."
+    },
+    "notes": "Reject as invalid evidence: FP64 Eigen vs FP32 Mojo, plus a Mojo kernel whose loop structure and swizzle mapping do not cover the GEMM (checked by NumPy simulation of the committed index arithmetic; upstream Modular deleted the same inner loop in Feb 2024). If the orchestrator prefers keep-and-document, the entry is tier D under the crippled-baseline precedent (precision mismatch) and is not faster than same-precision OpenBLAS or MKL; the open question is only how the published Mojo numbers passed the repo's sum check. Metadata (MIT, 4 stars, last commit 2024-06-18, stale) confirmed.",
+    "urls_opened": [
+      "https://github.com/dev0x13/gemm-benchmark-2023",
+      "https://github.com/dev0x13/gemm-benchmark-2023/commits/master",
+      "https://raw.githubusercontent.com/dev0x13/gemm-benchmark-2023/HEAD/README.md",
+      "https://raw.githubusercontent.com/dev0x13/gemm-benchmark-2023/HEAD/Dockerfile",
+      "https://raw.githubusercontent.com/dev0x13/gemm-benchmark-2023/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/dev0x13/gemm-benchmark-2023/HEAD/src/Makefile",
+      "https://raw.githubusercontent.com/dev0x13/gemm-benchmark-2023/HEAD/src/matmul.mojo",
+      "https://raw.githubusercontent.com/dev0x13/gemm-benchmark-2023/HEAD/src/common.h",
+      "https://raw.githubusercontent.com/dev0x13/gemm-benchmark-2023/HEAD/src/cpp_matmul_eigen.cpp",
+      "https://raw.githubusercontent.com/dev0x13/gemm-benchmark-2023/HEAD/src/cpp_matmul_naive.cpp",
+      "https://raw.githubusercontent.com/dev0x13/gemm-benchmark-2023/HEAD/src/cpp_matmul_openblas.cpp",
+      "https://raw.githubusercontent.com/dev0x13/gemm-benchmark-2023/HEAD/src/cpp_matmul_mkl.cpp",
+      "https://raw.githubusercontent.com/dev0x13/gemm-benchmark-2023/HEAD/src/run_benchmark.sh",
+      "https://github.com/modularml/mojo/commits/main/examples/matmul.mojo",
+      "https://raw.githubusercontent.com/modularml/mojo/976dcc5c550913892a178245b221f3fc5695b263/examples/matmul.mojo",
+      "https://raw.githubusercontent.com/modularml/mojo/665fba3740bf9f396e2ad71e63aab2510929353a/examples/matmul.mojo",
+      "https://raw.githubusercontent.com/modularml/mojo/cd64c557f1b5aeea803f964f8cf57862e45ffd37/examples/matmul.mojo",
+      "https://raw.githubusercontent.com/modularml/mojo/ba274280c7e002231859ee20c52a0ae9aa211fd0/examples/matmul.mojo"
+    ]
+  },
+  {
+    "id": "lang:julia/anicusan/acceleratedkernels-benchmark#ljg-kernel",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "Code (ArithmeticBenchmark/potential_kernel.jl, arithmetic_kernel.c), C flags (Makefile -O2) and CPUs (Apple M3 Max, Intel 8360Y in ArithmeticBenchmarkTable.png) are public, but the C compiler and the Julia version are not named, so not A; the numbers are the library author's own paper artifact (arXiv 2507.16710, a preprint), so C.",
+    "corrections": {
+      "hardware": "Apple M3 Max (aarch64) and Intel Xeon 8360Y (Ice Lake, x86_64; rows labelled BBIceLake in benchmarks.csv); AMD MI210, NVIDIA A100-40 and Apple M3 GPU for the AcceleratedKernels GPU rows",
+      "compiler_and_flags": "C: Makefile FLAGS = -Wall -Werror -Wextra -fPIC -lm -O2 via $(CC), built as a shared library and called from Julia with @ccall; compiler not named ('-Xclang -fopenmp' with Homebrew libomp suggests Apple clang on the M3). No -O3, -march=native or -ffast-math. The checked-in disassembly shows scalar x86_64 code calling powf, expf and sqrtf from libm per element, with ljg_cpu2 calling dist3 through the PLT (not inlined); the aarch64 build unrolls 4 lanes but still calls powf and expf per lane. Julia: ljg_cpu! ('CPU Base') uses @inbounds @fastmath; Julia version not stated (Project.toml lists deps only, no Manifest). Timing with BenchmarkTools @benchmark, N = 100,000,000.",
+      "caveats": "Not like for like: the C code is built at -O2 without fast-math (wave 14 asks for -O3) and calls libm powf for the ^12 and ^6 terms and libm expf per element (confirmed in the checked-in .s files), while the Julia loop is compiled under @fastmath, where literal integer powers become multiplications and LLVM may vectorize exp; the repo's own 'C (hand-written powf)' row (ljg_cpu2, integer powers by multiplication) narrows the gap to 1.9x on M3 Max and 1.1x on Intel, and the remainder is plausibly fast-math vectorization (inference). Julia loses on the RBF kernel (318.35 vs 210.57 ms on M3 Max, 734.22 vs 641.26 ms on Intel). AcceleratedKernels.jl on CPU vs C OpenMP is parity. The repo has no README and makes no Julia-beats-C claim; the paper abstract (arXiv 2507.16710, snippet only, arXiv blocked here) says arithmetic kernels perform on par with C and OpenMP and that Julia is sometimes more consistent than conventional C compilers. Results also in ArithmeticBenchmarkTable.png and Benchmark.xlsx; the dataset is mirrored on IEEE DataPort (DOI 10.21227/94q9-p565, snippet only).",
+      "why_faster": "Not stated by the source. From the code and disassembly: Julia @fastmath with literal integer powers lowered to multiplications versus strict-IEEE C at -O2 that calls libm powf and expf per element; with hand-written powers in C the Julia lead falls to 1.1-1.9x, consistent with fast-math vectorization of exp (inference)."
+    },
+    "notes": "Numbers match benchmarks.csv and the table image exactly. Keep at C with the flag mismatch documented: -O2 C without fast-math vs Julia @fastmath, so the win is a build-flag and libm-call effect, not a language effect; it is not -O0, so the crippled-baseline D rule was not applied, though the orchestrator may choose to. Metadata (GPL-3.0, 2 stars, 4 commits all 2024-09-22, stale) confirmed.",
+    "urls_opened": [
+      "https://github.com/anicusan/AcceleratedKernels-Benchmark",
+      "https://github.com/anicusan/AcceleratedKernels-Benchmark/tree/main/ArithmeticBenchmark",
+      "https://github.com/anicusan/AcceleratedKernels-Benchmark/commits/main",
+      "https://raw.githubusercontent.com/anicusan/AcceleratedKernels-Benchmark/HEAD/ArithmeticBenchmark/Makefile",
+      "https://raw.githubusercontent.com/anicusan/AcceleratedKernels-Benchmark/HEAD/ArithmeticBenchmark/arithmetic_kernel.c",
+      "https://raw.githubusercontent.com/anicusan/AcceleratedKernels-Benchmark/HEAD/ArithmeticBenchmark/benchmarks.csv",
+      "https://raw.githubusercontent.com/anicusan/AcceleratedKernels-Benchmark/HEAD/ArithmeticBenchmark/potential_kernel.jl",
+      "https://raw.githubusercontent.com/anicusan/AcceleratedKernels-Benchmark/HEAD/ArithmeticBenchmark/rbf_kernel.jl",
+      "https://raw.githubusercontent.com/anicusan/AcceleratedKernels-Benchmark/HEAD/ArithmeticBenchmark/Project.toml",
+      "https://raw.githubusercontent.com/anicusan/AcceleratedKernels-Benchmark/HEAD/ArithmeticBenchmark/arithmetic_kernel.x86_64.s",
+      "https://raw.githubusercontent.com/anicusan/AcceleratedKernels-Benchmark/HEAD/ArithmeticBenchmark/arithmetic_kernel.aarch64.s",
+      "https://raw.githubusercontent.com/anicusan/AcceleratedKernels-Benchmark/HEAD/ArithmeticBenchmark/ArithmeticBenchmarkTable.png"
+    ]
+  },
+  {
+    "id": "lang:julia/lilithhafner/interlanguagesortingcomparisons#sort-float64",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "D",
+    "tier_reason": "data.txt records the C and C++ builds as 'gcc script.c' and 'g++ -std=c++11 script.cpp' with no -O flag (Apple clang 13, so -O0), so the C/C++ baselines are crippled; under the crippled-baseline precedent the Julia-vs-C++ ratios carry no valid language-level measurement, hence D.",
+    "corrections": {
+      "maintenance_status": "abandoned",
+      "compiler_and_flags": "Commands recorded in data.txt: C 'gcc script.c' and C++ 'g++ -std=c++11 script.cpp', both Apple LLVM 13.0.0 (clang-1300.0.27.3) with no -O flag (-O0); Julia 1.9.0-beta3 and 1.8.5 with default settings; Rust 1.67.0 'cargo run --release'.",
+      "caveats": "Crippled baseline: the C and C++ programs were compiled without any optimization flag (-O0) while Rust used --release, so std::sort's templated comparisons run unoptimized and the 5.9x (Julia 1.9 vs C++) and 8.8x (Julia 1.9 vs C) figures are mostly a build artifact. The C++ figure is not a sort time: script.cpp prints total runtime (vector allocation, generation, sort and dot product) times a fixed 0.85 (comment says 0.8, label says 80%) instead of subtracting the no-sort control, and it stops at 3^14 (N = 14) while the other languages run to 3^15. script.cpp also constructs a fresh default-seeded std::default_random_engine for every vector, so all repetitions of one size sort identical data. The C row is qsort with a function-pointer comparator, a different algorithm from std::sort and from Julia's sort!. Each data point is a single trial (README says so). No LICENSE file (raw LICENSE and LICENSE.md requests returned 404; the repo page shows no license), so reference only. The repo owner works on Julia's Base sorting (general knowledge, not verified in this run), so the Julia side is close to first-party. A sorting-heavy workload rather than numerics proper.",
+      "why_faster": "Not stated for C++; the README only says the benchmark isolates sorting speed. The C and C++ sides were built at -O0, and Julia 1.9's default sort! for Float64 at these sizes uses a different (radix-based) algorithm than introsort (inferred, not stated in the repo)."
+    },
+    "notes": "Numbers verified in data.txt (row 14: Julia 1.9 35.1, Julia 1.8 92.5, C++ 207.6, C 307.2 ns per element). Downgrade C to D under the crippled-baseline precedent (C/C++ at -O0); keep with the shortcoming documented. Last commit 2023-02-17 is over 3 years old, so maintenance corrected to abandoned; 11 stars, no license confirmed.",
+    "urls_opened": [
+      "https://github.com/LilithHafner/InterLanguageSortingComparisons",
+      "https://github.com/LilithHafner/InterLanguageSortingComparisons/commits/main",
+      "https://raw.githubusercontent.com/LilithHafner/InterLanguageSortingComparisons/HEAD/README.md",
+      "https://raw.githubusercontent.com/LilithHafner/InterLanguageSortingComparisons/HEAD/data.txt",
+      "https://raw.githubusercontent.com/LilithHafner/InterLanguageSortingComparisons/HEAD/src/script.cpp",
+      "https://raw.githubusercontent.com/LilithHafner/InterLanguageSortingComparisons/HEAD/src/script.c",
+      "https://raw.githubusercontent.com/LilithHafner/InterLanguageSortingComparisons/HEAD/src/script.jl"
+    ]
+  }
+]

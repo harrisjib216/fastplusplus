@@ -1,0 +1,87 @@
+[
+  {
+    "id": "https://github.com/hyperium/tonic",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "B",
+    "tier_reason": "grpc_bench is a well-known independent third-party suite, and its 2022-04-23 wiki page shows rust_tonic_st at 41,546 req/s against cpp_grpc_st 26,700, cpp_grpc_mt 26,376 and cpp_asio_grpc 24,926 at 1 CPU on a Xeon E5-1650 v3. The server code and Dockerfiles at commit 14a8435 are public (g++ -O3 -flto in cpp_grpc_st_bench/Dockerfile; rust 1.59 with opt-level 3, LTO and codegen-units 1 in rust_tonic_st_bench/Cargo.toml). The C++ side links the distro libgrpc++ package, whose version and build flags the repo does not state, so this is not A.",
+    "corrections": {
+      "compiler_and_flags": "2022-04-23 run at grpc_bench commit 14a8435. rust_tonic_st: rust:1.59 image, cargo build --release --locked, [profile.release] opt-level 3, codegen-units 1, lto true; jemallocator 0.3.2, tonic 0.7, prost 0.10, tokio 1.17 current_thread. cpp_grpc_st: gcc:11 image, g++ -O3 -flto on main.cpp and the protoc-generated stubs, linked with -lgrpc++ -lprotobuf -lgrpc -ljemalloc from the distro packages (apt libgrpc++-dev). cpp_grpc_mt: the same plus --std=c++20 and -lpthread, one completion queue and thread per GRPC_SERVER_CPUS. cpp_asio_grpc: asio-grpc 1.0.0, CMake Release, the same distro libgrpc++. The gcc:11 image was presumably Debian bullseye, whose libgrpc++-dev is gRPC 1.30.2-3 (Debian package listing, search snippet only); that library was built with Debian's flags, not the benchmark's -O3 -flto.",
+      "caveats": "The win appears only with the server limited to 1 CPU. There, all three C++ servers (cpp_grpc_st 26,700, cpp_grpc_mt 26,376, cpp_asio_grpc 24,926 req/s) trail rust_tonic_st (41,546) and rust_tonic_mt (35,443). With 2 and 3 CPUs, cpp_grpc_mt (69,882 and 71,806) and cpp_asio_grpc (66,828 and 71,296) lead rust_tonic_mt (53,832 and 64,091). The wiki page states no compiler versions or flags; they come from the Dockerfiles at commit 14a8435, and the repo's current Dockerfiles (gcc 16.1, Rust 1.94) are newer than the run. The C++ servers link the distro libgrpc++ package (probably gRPC 1.30.2 from Debian bullseye, a 2020 release, against tonic 0.7 from 2022). That library is built with distribution flags, while the Rust stack is compiled whole with opt-level 3 and LTO. At 1 CPU, rust_grpcio, which compiles the gRPC C core from source, reached 31,035 req/s, also above every C++ server, so part of the gap may come from the distro build or the old gRPC version rather than from tonic. go_vtgrpc (44,074) topped the 1-CPU table. Both servers do the same echo work (copy the request string into the reply). It is a single run with no variance reported. The tonic README makes no performance claim; the evidence is the third-party grpc_bench suite, whose latest wiki results page is this 2022-04-23 run.",
+      "same_opt_level": false,
+      "why_faster": "Inference from the setup; no source states it. tonic's current_thread tokio runtime runs on one thread with jemalloc, which suits a 1-CPU quota, while the C++ servers run on an older distro libgrpc++ (probably 1.30.2) built with distribution flags."
+    },
+    "notes": "Numbers and derived ratios match the 2022-04-23 wiki page. The record's compiler_and_flags described the repo's current HEAD Dockerfiles; they are replaced with the commit-14a8435 build used for the run. The caveat that the 1-CPU ratio compares only against single-threaded C++ servers was wrong, since cpp_grpc_mt also ran at 1 CPU (26,376). Shortcomings: win only at a 1-CPU limit; C++ baseline is a stale distro libgrpc++ not built with the benchmark's flags; rust_grpcio (C core) also beat it; single 2022 run. Metadata confirmed: MIT, 12.5k stars, last commit 2026-10-07.",
+    "urls_opened": [
+      "https://github.com/LesnyRumcajs/grpc_bench/wiki/2022-04-23-bench-results",
+      "https://github.com/LesnyRumcajs/grpc_bench/wiki",
+      "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/14a8435/cpp_grpc_st_bench/Dockerfile",
+      "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/14a8435/cpp_grpc_mt_bench/Dockerfile",
+      "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/14a8435/cpp_asio_grpc_bench/Dockerfile",
+      "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/14a8435/rust_tonic_st_bench/Dockerfile",
+      "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/14a8435/rust_tonic_st_bench/Cargo.toml",
+      "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/14a8435/rust_tonic_mt_bench/Cargo.toml",
+      "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/14a8435/cpp_grpc_st_bench/main.cpp",
+      "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/14a8435/cpp_grpc_mt_bench/main.cpp",
+      "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/14a8435/rust_tonic_st_bench/src/main.rs",
+      "https://github.com/hyperium/tonic",
+      "https://github.com/hyperium/tonic/commits"
+    ]
+  },
+  {
+    "id": "https://github.com/wizzardo/http",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The screenshot shows independent TechEmpower plaintext numbers, but no win: wizzardo-http is at 6,995,129 responses/s, between C++ cinatra (6,998,076, above) and C++ lithium (6,993,976, below), in a test that saturates the 10 GbE link. The data comes from a third-party screenshot (the round is named only by the gnet README) because the TFB results page was not reachable. Tier B needs a win against the baseline, so C.",
+    "corrections": {
+      "hardware": "Dell R440 Xeon Gold + 10 GbE (screenshot header). The gnet README's TechEmpower section lists 28 HT cores of Intel Xeon Gold 5120, 32 GB RAM, a dedicated Cisco 10-gigabit switch and Debian 12.",
+      "compiler_and_flags": "Not stated on the screenshot. TFB master (not pinned to Round 22): wizzardo-http runs on openjdk:11.0.3-jdk-slim with -Xmx2G -Xms2G -server -XX:+UseNUMA -XX:+UseParallelGC -XX:+AggressiveOpts. Its event loop is the author's native library wizzardo/epoll, whose EpollCore.c is compiled with gcc -g -Ofast -shared -fpic and called through JNI (Dockerfile-x64). lithium builds with clang++ -O3 -march=native -flto plus a PGO pass (compile.sh), and cinatra with a default CMake build at commit c9bec30.",
+      "caveats": "A tie, not a win. Ranks 1 to 17 of the plaintext test are within 1.5% because the 10 GbE link is the limit. C++ cinatra (rank 7) is above wizzardo-http, and lithium (rank 9) is 0.02% below. The repo README makes no benchmark claim. The numbers are read from a screenshot in panjf2000/illustrations that the gnet README attributes to TechEmpower Round 22, not from the live TechEmpower page, which was not reachable. wizzardo-http's network hot path runs through the author's C epoll library via JNI (wizzardo/epoll EpollCore.c, gcc -Ofast), so the Java entry is partly C. TFB master now tags the wizzardo-http test 'broken', and the screenshot does not show the round's commit or flags. Classes differ: wizzardo-http and lithium are 'Micro', cinatra is 'Full'."
+    },
+    "notes": "Screenshot numbers match the record (rank 8, 6,995,129 vs lithium 6,993,976 and cinatra 6,998,076; libsniper 6,883,107; cuehttp 6,224,825; userver[bare] 5,974,256). Downgraded B to C because the independent data shows parity at the network cap, not a win, and the Java framework's I/O core is native C via JNI. Shortcomings: not faster (tie at 10 GbE cap), JNI C epoll core, screenshot-only source, TFB test now tagged broken, stale repo (last commit 2025-05-11, 221 stars, MIT confirmed).",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/panjf2000/illustrations/master/benchmark/techempower-plaintext-top50-light.jpg",
+      "https://raw.githubusercontent.com/panjf2000/gnet/HEAD/README.md",
+      "https://github.com/wizzardo/http",
+      "https://github.com/wizzardo/http/commits",
+      "https://raw.githubusercontent.com/wizzardo/http/HEAD/README.md",
+      "https://github.com/wizzardo/epoll",
+      "https://github.com/wizzardo/epoll/tree/master/natives",
+      "https://raw.githubusercontent.com/wizzardo/epoll/HEAD/README.md",
+      "https://raw.githubusercontent.com/wizzardo/epoll/HEAD/build_natives.sh",
+      "https://raw.githubusercontent.com/wizzardo/epoll/HEAD/Dockerfile-x64",
+      "https://raw.githubusercontent.com/TechEmpower/FrameworkBenchmarks/master/frameworks/Java/wizzardo-http/wizzardo-http.dockerfile",
+      "https://raw.githubusercontent.com/TechEmpower/FrameworkBenchmarks/master/frameworks/Java/wizzardo-http/benchmark_config.json",
+      "https://raw.githubusercontent.com/TechEmpower/FrameworkBenchmarks/master/frameworks/C++/lithium/lithium.dockerfile",
+      "https://raw.githubusercontent.com/TechEmpower/FrameworkBenchmarks/master/frameworks/C++/lithium/compile.sh",
+      "https://raw.githubusercontent.com/TechEmpower/FrameworkBenchmarks/master/frameworks/C++/cinatra/cinatra.dockerfile"
+    ]
+  },
+  {
+    "id": "https://github.com/nixigaj/wut-server",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The README has first-party, self-described 'non-scientific' wrk output for nginx and wut-server (25,650.31 vs 38,110.60 req/s) with the CPU models and the nginx config. The nginx version, compiler, flags and wrk command line are not given, and the harness is not in the repo, so C.",
+    "corrections": {
+      "workload": "wrk, 10 s, 6 threads, 1000 connections (from the wrk output header), against https://ip.erix.dev (nginx, port 443) and https://ip.erix.dev:11313 (wut-server) on the same host. Both servers terminate TLS and return the caller's IP address as the body; wrk speaks HTTP/1.1.",
+      "compiler_and_flags": "wut-server: Cargo.toml [profile.release] lto = true, codegen-units = 1, strip = true (default opt-level 3); hyper 0.14 with hyper-rustls 0.24, rustls 0.21 and tokio 1.34; rustc version not stated. nginx: 'all optimization options enabled', LTO, static OpenSSL and ngx_headers_more; version, compiler and exact flags not stated.",
+      "caveats": "First-party single run per server, with no variance, no wrk command line, no versions, and the two runs were not interleaved. The author calls it a 'non-scientific comparison'. Both servers use TLS 1.3 over HTTPS (the wut-server wrk URL is https://...:11313, and the binary requires --cert-path and --key-path), but the TLS stacks differ: rustls 0.21 with ring on the Rust side, statically linked OpenSSL in nginx. Average latency is higher for wut-server (45.00 ms vs 28.07 ms), while max latency is lower (279.57 ms vs 520.46 ms). nginx logged 95 connect and 17 read socket errors, so it served fewer than the 1000 connections. wut-server formats the client IP once per connection, while nginx evaluates $remote_addr per request. The benchmark harness is not in the repo. The repo has 2 commits and 0 stars."
+    },
+    "notes": "README numbers match the record (38,110.60 vs 25,650.31 req/s, about 49% more per the page). The record's caveat that wut-server might not terminate TLS was wrong and is corrected: both sides serve HTTPS. Shortcomings: single non-interleaved first-party run, different TLS libraries (rustls/ring vs OpenSSL) so the win is not a language effect, nginx connect errors, higher average latency, versions unstated. Metadata confirmed: MIT, 0 stars, last commit 2024-03-09, stale.",
+    "urls_opened": [
+      "https://github.com/nixigaj/wut-server",
+      "https://github.com/nixigaj/wut-server/commits",
+      "https://raw.githubusercontent.com/nixigaj/wut-server/HEAD/README.md",
+      "https://raw.githubusercontent.com/nixigaj/wut-server/HEAD/Cargo.toml",
+      "https://raw.githubusercontent.com/nixigaj/wut-server/HEAD/src/main.rs"
+    ]
+  }
+]
