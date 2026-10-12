@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/haradatakuma/authia",
+  "one_liner": "Rust/Wasm Ed25519-only JWT verifier; first-party 1.5x lower latency than jose on Cloudflare Workers, 6-20x slower on Node.",
+  "what_it_does": "Verifies EdDSA (Ed25519) JWTs and returns the decoded claims through two synchronous functions, verifyAccessToken(token, options) and verifyRefreshToken(token, options), where options carry the public key as a raw JWK JSON string (publicKeyJwkRaw) or base64-encoded JWK (publicKeyJwk) plus the expected audience and issuer. Claims are parsed into a fixed struct (sub, iss, aud, authId, email, tokenVersion, exp, iat, type, plus jti for refresh tokens), so it fits the author's token schema rather than arbitrary JWTs. It ships as an npm package with wasm-pack Node.js and bundler/Workers builds and as a Rust crate; it does not issue tokens.",
+  "how_it_is_fast": "Each call is one synchronous trip into Rust compiled to Wasm: base64url decoding, a single serde_json pass straight into the typed claims struct (v0.3.0 cut three JSON passes to one), and ed25519-dalek 2.x signature verification, with the decoded VerifyingKey kept in a process-wide OnceLock so the JWK is parsed once. The release profile uses opt-level 3, LTO and codegen-units 1 (wasm-opt disabled). The claimed Workers win is over jose's WebCrypto Ed25519 path; on Node.js the README and ROADMAP put the JS-to-Wasm boundary cost (serde-wasm-bindgen conversion of options and payload) at about 0.1-0.15 ms per call, which is why jose's native crypto wins there.",
+  "when_to_use": [
+    "Cloudflare Workers or another edge runtime verifying Ed25519 JWTs that are all signed by one fixed key, where a synchronous verify call is convenient.",
+    "Tokens that match the author's schema (string sub, exp, single-string iss and aud, type access or refresh) and need no custom claims returned.",
+    "Experiments with Rust-to-Wasm JWT verification (the README lists learning Rust and WebAssembly as a good fit)."
+  ],
+  "when_not_to_use": [
+    "Node.js or Bun backends: by the README's own table jose with native crypto takes 0.01-0.03 ms against 0.17-0.20 ms for authia, and the author recommends jose there and for production systems requiring maximum stability.",
+    "More than one verification key in a process or isolate (multi-tenant issuers, key rotation without restart): the OnceLock cache keeps the first key and silently verifies later calls against it (see gotchas).",
+    "Strict or custom claim handling: iss, aud, iat and type are optional, nbf is ignored, array-valued aud fails to parse, and unknown claims (roles, scope) are dropped from the returned payload because it is re-serialized from the fixed struct.",
+    "Any algorithm other than EdDSA/Ed25519 (RS256, ES256, HS256) or token issuance.",
+    "Size-sensitive bundles: the npm 0.3.4 package unpacks to 509,719 bytes (two wasm-pack targets, wasm-opt disabled)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime for the npm package (Wasm embedded); the Rust crate uses wasm-bindgen, serde, serde_json, serde-wasm-bindgen, base64 0.22, ed25519-dalek 2.1, js-sys and subtle",
+    "min_toolchain": "Node.js 18+ (package.json engines); building needs Rust (edition 2021) and wasm-pack",
+    "platforms": "any JavaScript runtime with WebAssembly: Node.js, bundlers/browsers, Cloudflare Workers",
+    "thread_safety": "not documented; each JS isolate or worker gets its own Wasm instance, and the public-key cache is a single process-wide OnceLock shared by every call in that instance",
+    "drop_in_for_baseline": "partial — replaces jose's jwtVerify only for EdDSA tokens with the author's fixed claim schema; different call signature (synchronous, JWK string inside options) and custom claims are stripped from the result"
+  },
+  "gotchas": [
+    "Security bug in the key cache (src/jwt.rs get_or_decode_public_key): CACHED_PUBLIC_KEY is a OnceLock; when a call passes a different publicKeyJwkRaw or publicKeyJwk than the cached one, the new key is decoded, CACHED_PUBLIC_KEY.set() fails silently, and the function returns the first cached key, so the signature is checked against the wrong key. In a multi-key isolate, tokens signed with the first key are accepted for the second key's issuer/audience and genuine second-key tokens are rejected. Only a Japanese code comment ('restart the process if the public key changes') mentions the single-key assumption; the README says the library 'automatically caches the decoded public key internally'.",
+    "Claim validation is weaker than SECURITY.md states ('All required claims (iss, aud, exp, iat, type) are validated'): in 0.3.4 only sub and exp are required, iss and aud are compared only when present, iat is optional, the type claim is never compared (a token without type passes both verifyAccessToken and verifyRefreshToken, so INVALID_TOKEN_TYPE is never raised) and nbf is not checked. Claims are validated before the signature, and invalid_issuer/invalid_audience errors include the expected values, which reach unauthenticated callers if errors are surfaced. The alg check is a substring search for 'EdDSA' anywhere in the header (harmless, since Ed25519 is always used).",
+    "Benchmark harness flaw: the repository has no code for the jose comparison, and its Rust benches are placeholders that time no-ops: in benches/jwt_verify_real.rs the verify_token_legacy_base64 and verify_token_raw_jwk closures only black_box string literals (the verification call is commented out) and the public_key_cache group times black_box(\"cached_key\"), while jwt_verify.rs times only token.split('.'). The README and CHANGELOG '2-5x faster with publicKeyJwkRaw' and the docs/api.md '~2-4x faster than JavaScript implementations' claims therefore have no measurement behind them, and docs/benchmarks.md, which api.md links to, is a 404.",
+    "Docs drift: the README Known Issues says 0.3.1-0.3.3 reject tokens missing optional fields such as email, but the 0.3.3/0.3.4 code makes every field except sub and exp optional; docs/api.md still documents publicKeyJwk-only options and required fields; SECURITY.md lists only 0.1.x as supported; package.json and Cargo.toml still point to Taniyama2024/authia."
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling verifies JWTs (tiny-secp256k1 and bls-eth-wasm cover other signature schemes, hash-wasm covers hashes); pick authia only for single-key Ed25519 JWT checks on Workers, and given its key-cache and claim-validation flaws jose remains the safer default.",
+  "verified_claims_summary": "First-party README tables only: on Cloudflare Workers, authia (Wasm) averaged 0.20 ms per verification (p50 0.17, p95 0.36) against jose on WebCrypto at 0.30 ms (0.28, 0.50), about 1.5x lower average latency (derived from page data); on Node.js jose with native crypto took 0.01-0.03 ms against 0.17-0.20 ms for authia, 6-20x slower. No hardware, Workers/Node/jose versions, iteration counts or harness are published, and how sub-millisecond per-call times were taken inside Workers (whose timers do not advance during synchronous execution) is not explained.",
+  "status_note": "Effectively a one-day project: all seven npm versions (0.1.0-0.3.4) were published on 2026-01-22/23, the repository has 3 commits, 0 stars and 102 crates.io downloads, with no commits since 2026-01-23; MIT and small enough to vendor, but the first-key cache bug, lax claim checks and no-op benchmarks make it unsuitable beyond single-key experiments without fixes.",
+  "sources_read": [
+    "https://github.com/HaradaTakuma/authia",
+    "https://raw.githubusercontent.com/HaradaTakuma/authia/HEAD/README.md",
+    "https://raw.githubusercontent.com/HaradaTakuma/authia/HEAD/README.ja.md",
+    "https://raw.githubusercontent.com/HaradaTakuma/authia/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/HaradaTakuma/authia/HEAD/ROADMAP.md",
+    "https://raw.githubusercontent.com/HaradaTakuma/authia/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/HaradaTakuma/authia/HEAD/docs/api.md",
+    "https://raw.githubusercontent.com/HaradaTakuma/authia/HEAD/docs/benchmarks.md",
+    "https://raw.githubusercontent.com/HaradaTakuma/authia/HEAD/package.json",
+    "https://raw.githubusercontent.com/HaradaTakuma/authia/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/HaradaTakuma/authia/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/HaradaTakuma/authia/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/HaradaTakuma/authia/HEAD/src/jwt.rs",
+    "https://raw.githubusercontent.com/HaradaTakuma/authia/HEAD/src/types.rs",
+    "https://raw.githubusercontent.com/HaradaTakuma/authia/HEAD/src/error.rs",
+    "https://raw.githubusercontent.com/HaradaTakuma/authia/HEAD/scripts/build.js",
+    "https://raw.githubusercontent.com/HaradaTakuma/authia/HEAD/benches/jwt_verify.rs",
+    "https://raw.githubusercontent.com/HaradaTakuma/authia/HEAD/benches/jwt_verify_real.rs",
+    "https://registry.npmjs.org/authia",
+    "https://crates.io/api/v1/crates/authia"
+  ],
+  "confidence": 0.85
+}
