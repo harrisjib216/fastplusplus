@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/openresty/lua-resty-core",
+  "one_liner": "LuaJIT-FFI reimplementation of ngx_lua's ngx.* API that lets calling Lua code stay JIT-compiled; claimed faster than the Lua C API, never measured.",
+  "what_it_does": "A pure-Lua library that reimplements much of ngx_lua's Nginx API for Lua on top of LuaJIT's FFI: ngx.shared.DICT, ngx.re.*, ngx.var, ngx.ctx, ngx.req.*, ngx.header, time, hashing, base64 and URI escaping. It installs the new functions under the same ngx.* and ndk.* names, so user code does not change. It also ships APIs that exist only as Lua modules (ngx.balancer, ngx.ssl, ngx.ssl.clienthello, ngx.semaphore, ngx.pipe, ngx.errlog, ngx.process). OpenResty has loaded it by default since 1.15.8.1, and it is mandatory since ngx_lua v0.10.16.",
+  "how_it_is_fast": "Each API is a Lua function that calls a flat C entry point exported by ngx_lua, such as ngx_http_lua_ffi_shdict_get, through ffi.cdef and ffi.C. Results come back through preallocated cdata out-parameters and a reused scratch buffer (base.get_string_buf, 4096 bytes by default), not through the Lua stack of a lua_CFunction. LuaJIT's trace compiler can compile FFI calls into the trace, so user loops that call these APIs can stay compiled; per the README, Lua C API functions are never JIT-compiled. The C work itself (shared-memory lookup, PCRE matching, hashing) is unchanged, so the gain is in call overhead and keeping the caller compiled, not faster C.",
+  "when_to_use": [
+    "You run OpenResty or ngx_lua v0.10.16 or later: it is already loaded and cannot be turned off, so keep the bundled copy.",
+    "Hot request-path Lua that calls ngx.shared.DICT get/set/incr, ngx.re.match/find/gsub, ngx.var or ngx.ctx inside loops LuaJIT can trace.",
+    "You need APIs that exist only here: dynamic upstream balancing (ngx.balancer), certificate selection in the SSL handshake (ngx.ssl, ngx.ssl.clienthello), cross-request semaphores, non-blocking subprocesses (ngx.pipe) or error-log capture.",
+    "You can profile with LuaJIT tools (lj-vm-states, sample-bt, lj-lua-stacks) to find code that falls back to the interpreter, as the author recommends."
+  ],
+  "when_not_to_use": [
+    "Code that mostly runs in the LuaJIT interpreter (NYI-heavy, rarely hot, coroutine-heavy). The README warns of a 'performance drop in interpreted mode', and in issue #15 a user saw latency rise from about 20 ms to about 250 ms on a 15k req/s server after enabling it on OpenResty 1.7.7.2, with no improvement on 1.11.2.4.",
+    "Outside nginx, or with PUC Lua: it works only inside ngx_http_lua_module or ngx_stream_lua_module on LuaJIT with FFI. LuaJIT 2.0 triggers an ALERT log line, and 2.1 is required in practice.",
+    "Mixing versions: a standalone copy paired with a different ngx_lua fails at startup ('ngx_http_lua_module 0.10.32 required but got ...').",
+    "If you need a measured speedup figure to justify a migration: none is published in the repository, its issues or the web results found."
+  ],
+  "integration": {
+    "form": "module (pure Lua, bundled with OpenResty or installed with make install LUA_LIB_DIR=...)",
+    "dependencies": "LuaJIT 2.1 (OpenResty's luajit2 fork recommended by ngx_lua), ngx_http_lua_module exactly 0.10.32 or ngx_stream_lua_module exactly 0.0.20 (base.lua check), lua-resty-lrucache; dist.ini also lists nginx >= 1.29.2",
+    "min_toolchain": "LuaJIT 2.1 with FFI; the ngx_lua release it was cut for",
+    "platforms": "Wherever OpenResty runs with LuaJIT FFI. Linux is the main target. macOS gets separate struct-argument FFI entry points for shared dicts, and regexes compiled in the init phase are never JIT-compiled or cached there (PCRE 8.43+ MAP_JIT issue). Other platforms not documented.",
+    "thread_safety": "One Lua VM per nginx worker process, single-threaded. Shared-dict operations take the zone's shared-memory lock inside the C functions. ngx.semaphore works across requests but not across worker processes (README).",
+    "drop_in_for_baseline": "partial — it replaces the listed ngx.* and ngx.shared.* functions in place under the same names, but only those; the C API functions it replaced have since been removed from ngx_lua, so there is no longer a choice to make"
+  },
+  "gotchas": [
+    "The baseline no longer exists. In current lua-nginx-module, src/ngx_http_lua_shdict.c registers Lua C API functions only for lpush, rpush, lpop, rpop, llen, flush_expired and get_keys; get, set, incr, ttl, expire, flush_all, capacity and free_space exist only as ngx_http_lua_ffi_* exports. Likewise md5, base64 and escape_uri are FFI-only in ngx_http_lua_string.c. A head-to-head 'FFI vs C API' run therefore needs ngx_lua v0.10.15 or earlier, and lua_load_resty_core has had no effect since v0.10.16.",
+    "Strict version lock with inconsistent docs. base.lua refuses anything but ngx_lua 0.10.32 (stream 0.0.20), while the README prerequisites say v0.10.25 / v0.0.13 and dist.ini says ngx_http_lua = 0.10.30. Always use the copy shipped with your OpenResty release, as the README's WARNING says.",
+    "Load it only in init_by_lua*. The author says FFI code paths 'would be very slow if being interpreted' and suggests require \"jit\".opt.start(\"minstitch=3\") (trace stitching) so as much code as possible is compiled (issue #15).",
+    "The README's 'safer' claim needs care. FFI code has its own pitfalls: commit a60ab0e (2026-06-06) fixed a NULL check in ngx.ssl get_upstream_ssl_pointer that could never fire (cdata pointers are always truthy), a crash in ngx.resp set_status when reason was nil, and errors raised as raw cdata in ngx.get_phase."
+  ],
+  "pick_this_over_siblings_when": "It is not an alternative to its siblings: on OpenResty it is the API you already use. For actual numbers on the mechanism, see the LuaJIT 2.0 FFI entry from dyu/ffi-overhead, which measured 1.78 vs 2.36 ns per plusone() call against C through the dynamic linker. pflua is the other LuaJIT-in-networking entry with a measured win over C.",
+  "verified_claims_summary": "Nothing was measured. The README states, with no numbers, hardware, versions or benchmark code, that the FFI implementation is 'faster, safer, and more complete' than ngx_lua's Lua C API, and warns it can be slower when code is interpreted. The only numbers found (issue #15) are a user's slowdown, about 20 ms to 250 ms latency. The claimed effect is LuaJIT trace compilation of the calling Lua code against interpreted code; the same C functions still run, so this is not JIT code beating AOT C.",
+  "status_note": "Actively maintained by OpenResty Inc. (759 commits, version 0.1.35 bumped 2026-06-20, last commit 2026-08-24, 855 stars, BSD two-clause) and loaded in production by every OpenResty release; usable only as the copy matched to its ngx_lua release.",
+  "sources_read": [
+    "https://github.com/openresty/lua-resty-core",
+    "https://github.com/openresty/lua-resty-core/commits/master",
+    "https://github.com/openresty/lua-resty-core/commit/a60ab0e8ef5a9810216c5b544387059ebf535c0c",
+    "https://github.com/openresty/lua-resty-core/issues?q=is%3Aissue%20slower",
+    "https://github.com/openresty/lua-resty-core/issues?q=is%3Aissue%20performance",
+    "https://github.com/openresty/lua-resty-core/issues/15",
+    "https://raw.githubusercontent.com/openresty/lua-resty-core/HEAD/README.markdown",
+    "https://raw.githubusercontent.com/openresty/lua-resty-core/HEAD/dist.ini",
+    "https://raw.githubusercontent.com/openresty/lua-resty-core/HEAD/Makefile",
+    "https://raw.githubusercontent.com/openresty/lua-resty-core/HEAD/lib/resty/core.lua",
+    "https://raw.githubusercontent.com/openresty/lua-resty-core/HEAD/lib/resty/core/base.lua",
+    "https://raw.githubusercontent.com/openresty/lua-resty-core/HEAD/lib/resty/core/shdict.lua",
+    "https://raw.githubusercontent.com/openresty/lua-resty-core/HEAD/lib/resty/core/regex.lua",
+    "https://raw.githubusercontent.com/openresty/lua-resty-core/HEAD/lib/resty/core/var.lua",
+    "https://raw.githubusercontent.com/openresty/lua-resty-core/HEAD/lib/resty/core/ctx.lua",
+    "https://raw.githubusercontent.com/openresty/lua-resty-core/HEAD/lib/resty/core/request.lua",
+    "https://raw.githubusercontent.com/openresty/lua-resty-core/HEAD/lib/resty/core/utils.lua",
+    "https://raw.githubusercontent.com/openresty/lua-nginx-module/HEAD/README.markdown",
+    "https://raw.githubusercontent.com/openresty/lua-nginx-module/HEAD/src/ngx_http_lua_shdict.c",
+    "https://raw.githubusercontent.com/openresty/lua-nginx-module/HEAD/src/ngx_http_lua_string.c",
+    "https://opm.openresty.org/package/openresty/lua-resty-core/ (WebSearch snippet only)",
+    "https://nginx-extras.getpagespeed.com/lua/core/ (WebSearch snippet only)"
+  ],
+  "confidence": 0.6
+}

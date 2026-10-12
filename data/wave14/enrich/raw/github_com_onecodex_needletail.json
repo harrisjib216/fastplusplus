@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/onecodex/needletail",
+  "one_liner": "Rust zero-copy FASTA/FASTQ parser; 1.75x faster than C kseq.h on plain 4-line FASTQ in lh3's 2020 biofast run.",
+  "what_it_does": "Streams FASTA and FASTQ records out of files, readers or stdin. One call (parse_fastx_file, parse_fastx_reader or parse_fastx_stdin) picks FASTA or FASTQ from the first byte and gzip, bzip2, xz or zstd from the magic bytes, and returns a Box<dyn FastxReader> whose next() lends a SequenceRecord with id(), seq(), raw_seq(), qual(), num_bases() and write(). It also ships k-mer helpers (kmers, canonical_kmers, bit_kmers, normalize, reverse_complement), Phred decoding and Python bindings. It is a different API from kseq.h, not a drop-in: Rust only, no C header, and no separate name/comment fields.",
+  "how_it_is_fast": "Since 0.4 the parser is adapted from seq_io: it fills a 64 KiB buffer completely, finds the four line ends of each FASTQ record with memchr, and hands back the record as offsets into that buffer, so id, sequence and quality are never copied. Only the '@' start byte, the '+' separator and equal sequence/quality lengths are checked, and an incomplete record at the buffer end is shifted to the front (make_room) or the buffer is grown. kseq.h, the baseline, reads 16 KiB at a time and copies name, comment, sequence and quality into four growable kstrings for every record, finding the end of the name with a per-byte isspace loop. In biofast it also reads plain files through zlib's gzread. For multi-line FASTA, seq() strips newlines into a fresh Vec only when the record contains them.",
+  "when_to_use": [
+    "Rust tools that stream short-read Illumina-style 4-line FASTQ or FASTA from uncompressed files and only need slices of id, sequence and quality (read counting, k-mer counting, QC statistics).",
+    "You want one entry point that auto-detects FASTA or FASTQ and gzip, bzip2, xz or zstd input, including multi-member gzip and stdin.",
+    "Pipelines that already use its k-mer helpers (canonical k-mers with reverse complement, 2-bit bit_kmers up to k=32) next to parsing.",
+    "Python scripts that need a faster FASTX iterator than pure-Python parsers, through the PyO3 bindings (parse_fastx_file, parse_fastx_string).",
+    "Files with Windows CRLF line endings, which are trimmed transparently and reported by line_ending()."
+  ],
+  "when_not_to_use": [
+    "Multi-line (wrapped) FASTQ: the FASTQ reader assumes exactly four lines per record and stops with an error, while kseq.h parses multi-line FASTA and FASTQ.",
+    "Gzip-compressed input where decompression dominates: biofast shows no parser gain (9.3 s vs 9.7 s), so overall speed depends on the decompressor, not on needletail.",
+    "Damaged or partially downloaded files you want to salvage: the first parse error (bad '@', bad '+', unequal sequence and quality lengths) sets the reader to finished, so later records are unreachable (open issue #118, August 2026).",
+    "C or C++ code bases: there is no C API, and kseq.h is a single header with no dependencies.",
+    "Parallel record-batch processing: parsing is single-threaded and multithreading optimisation is an open issue (#111); paraseq's documentation (search snippet only) claims higher throughput for record-set, multi-threaded use."
+  ],
+  "integration": {
+    "form": "crate (rlib, plus cdylib for the Python extension)",
+    "dependencies": "buffer-redux, bytecount (runtime-dispatch-simd), memchr; the default 'compression' feature adds flate2, bzip2 0.6, liblzma and zstd; optional pyo3 0.29 for the 'python' feature",
+    "min_toolchain": "Rust edition 2021 (1.56 or newer); no rust-version is declared, so the real floor set by memchr 2.7, pyo3 0.29 and the compression crates is not documented",
+    "platforms": "any Rust target with std; SIMD comes from memchr and bytecount's runtime dispatch; Python wheels built for macOS (x86 and ARM) and Ubuntu x86 per README",
+    "thread_safety": "FastxReader requires Send, so a reader can be moved to another thread, but one reader is consumed by one thread and each record borrows the reader's buffer until the next call; no built-in parallel parsing.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Benchmark harness asymmetry: in lh3/biofast, fqcnt_c1_kseq.c copies name, comment, sequence and quality into kstrings per record, splits the name at whitespace and reads even the plain file through zlib's gzopen/gzread, while fqcnt_rs2_needletail.rs only takes the lengths of borrowed slices. The 1.4 s vs 0.8 s gap therefore measures zero-copy design and I/O path, not Rust against C (the Crystal kseq.h port lands at 1.5 s). The C side is gcc 4.8.5 at -O2, biofast has no Cargo.lock (needletail '0.4', rustc and the flate2 decoder backend are unrecorded), and the C program sums lengths in 32-bit int while the Rust one uses u64.",
+    "FastxReader::next() is a lending iterator, not std::iter::Iterator: records borrow the internal buffer, so keep data by copying it (for example seq().into_owned()), and adapters such as map or collect are not available (issue #70).",
+    "A record larger than the buffer makes it double up to 8 MiB and then grow in 8 MiB steps with no upper bound, so one huge FASTA record (a whole chromosome) is held in memory in full; for multi-line FASTA, seq() allocates a newline-free copy.",
+    "bit_kmers panics with 'attempt to multiply with overflow' for k above 32 (issue #58). README still shows needletail = \"0.6.0\" and the CHANGELOG stops at 0.7.1, while crates.io is at 0.7.3."
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued bioinformatics siblings, z-fasta is a CLI for indexing and extracting from FASTA, and A*PA2 and Sassy are aligners; pick needletail when a Rust program has to stream FASTA or FASTQ records itself, and z-fasta when you need samtools-faidx-style random access.",
+  "verified_claims_summary": "lh3/biofast (2020, by the author of kseq.h) counted records, bases and quality characters in a 5,682,010-record 4-line FASTQ (M_abscessus_HiSeq.fq) on a CentOS 7 server with two EPYC 7301 CPUs, with hyperfine CPU time averaged over at least ten rounds. needletail 0.4 took 0.8 s against 1.4 s for C kseq.h (gcc 4.8.5, -g -Wall -O2, zlib gzread) on plain input, about 1.75x (derived from page data), and 9.3 s against 9.7 s on gzip input. The rustc version is not stated, and no newer needletail-versus-C run was found.",
+  "status_note": "Actively maintained by One Codex (last commit 2026-10-06; 0.7.3 on crates.io since 2026-04-20; about 604,000 downloads), MIT-licensed, fuzz-tested and small, so it is safe to depend on, although the only C comparison is the 2020 biofast run on 0.4.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/onecodex/needletail/HEAD/README.md",
+    "https://raw.githubusercontent.com/onecodex/needletail/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/onecodex/needletail/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/onecodex/needletail/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/onecodex/needletail/HEAD/src/parser/mod.rs",
+    "https://raw.githubusercontent.com/onecodex/needletail/HEAD/src/parser/fastq.rs",
+    "https://raw.githubusercontent.com/onecodex/needletail/HEAD/src/parser/fasta.rs",
+    "https://raw.githubusercontent.com/onecodex/needletail/HEAD/src/parser/utils.rs",
+    "https://raw.githubusercontent.com/onecodex/needletail/HEAD/src/parser/record.rs",
+    "https://raw.githubusercontent.com/onecodex/needletail/HEAD/src/errors.rs",
+    "https://raw.githubusercontent.com/onecodex/needletail/HEAD/benches/benchmark.rs",
+    "https://github.com/onecodex/needletail",
+    "https://github.com/onecodex/needletail/commits/master",
+    "https://github.com/onecodex/needletail/issues",
+    "https://github.com/onecodex/needletail/issues/34",
+    "https://github.com/onecodex/needletail/issues/118",
+    "https://crates.io/api/v1/crates/needletail",
+    "https://raw.githubusercontent.com/lh3/biofast/HEAD/README.md",
+    "https://raw.githubusercontent.com/lh3/biofast/HEAD/fqcnt/README.md",
+    "https://raw.githubusercontent.com/lh3/biofast/HEAD/fqcnt/Makefile",
+    "https://raw.githubusercontent.com/lh3/biofast/HEAD/fqcnt/fqcnt_rs2_needletail.rs",
+    "https://raw.githubusercontent.com/lh3/biofast/HEAD/fqcnt/fqcnt_c1_kseq.c",
+    "https://raw.githubusercontent.com/lh3/biofast/HEAD/fqcnt/fqcnt_rs1_rustbio.rs",
+    "https://raw.githubusercontent.com/lh3/biofast/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/lh3/biofast/HEAD/lib/kseq.h",
+    "https://crates.io/api/v1/crates/helicase",
+    "https://crates.io/api/v1/crates/paraseq",
+    "https://raw.githubusercontent.com/imartayan/helicase/HEAD/README.md",
+    "https://raw.githubusercontent.com/imartayan/helicase/HEAD/bench/README.md"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/phpcraftdream/sefer-alloc",
+  "one_liner": "Pure-Rust global allocator whose committed large-segment cache makes same-size 4-64 MiB alloc/free 12-33x cheaper than mimalloc.",
+  "what_it_does": "A drop-in Rust #[global_allocator] (SeferAlloc, enabled with the `production` feature bundle) plus an unrelated typed handle store (Region<T>) in one crate, written entirely in Rust with no C/C++ allocator underneath. It replaces mimalloc, jemalloc or the system allocator process-wide through the standard GlobalAlloc trait, and adds its own knobs: LargeCacheConfig/Profile presets, SeferAlloc::trim_current_thread() and an opt-in start_maintenance() background sweeper.",
+  "how_it_is_fast": "Per-thread heaps with a lock-free magazine (tcache) fast path on 4 MiB segments, as in mimalloc-style designs. The headline large-block win is the OPT-E large-segment cache: freed large segments (8 slots per heap) stay reserved and committed, so a later request of similar size (needed <= cached <= 2x needed) is a slot scan plus header rewrite with no VirtualAlloc/mmap. Realloc of large blocks grows in place (OPT-G) because every allocation over ~253 KiB already owns a whole committed 4 MiB segment, so growth up to that span is a header update instead of copy-and-free.",
+  "when_to_use": [
+    "Rust programs that repeatedly allocate and free large buffers of the same size (4-64 MiB, size within 2x of a cached span) on the same thread, such as per-frame or per-batch scratch buffers, where the allocation call itself shows up in profiles.",
+    "Workloads that grow single large Vec-like buffers by realloc within 4 MiB (realloc_grow_neighbour_pressure: ~400 ns vs mimalloc ~1.34 ms on the author's Windows host).",
+    "Builds that must avoid any C/C++ dependency (cross-compilation or audit-perimeter reasons) but still want a per-thread-heap allocator on x86_64 or aarch64 Linux/Windows.",
+    "Medium small-object churn of 256 B to 1 KiB with immediate reuse, where the author measured 1.57x (256 B) and 8.59x (1 KiB) over mimalloc on one noisy host."
+  ],
+  "when_not_to_use": [
+    "Long-running services on the published crate: 0.2.1 (the only non-yanked crates.io release) has an open, unanswered report of 1,081 retained 4 MiB arenas (4.22 GiB committed) for one or two live 278-435 KB buffers, ending in an OOM abort after about six minutes on Windows.",
+    "Programs with many live allocations over ~253 KiB: each takes its own 4 MiB segment (up to ~16x commit amplification at 256 KiB) and there is a hard wall of 4,095 simultaneously live Large objects, after which alloc returns null and a GlobalAlloc consumer aborts.",
+    "Memory-capped containers or many-thread servers with default settings: the large cache keeps up to 256 MiB committed per thread heap, and idle time reclaims nothing (0 KiB in all 36 arms of the author's sweep) unless you call trim_current_thread() or start the maintenance worker.",
+    "Small-object-heavy or single-threaded allocation-bound code: cold 16 B and 256 B allocations are 2.4-2.7x slower than mimalloc and single-thread larson/mstress is 1.28-1.36x behind; mixed-size large allocations miss the cache.",
+    "Processes that fork without exec while multithreaded (no pthread_atfork handling), 32-bit targets (rejected at compile time), or anyone needing a released, externally reviewed allocator (README calls HEAD a dirty snapshot pending acceptance; 1 star, one author)."
+  ],
+  "integration": {
+    "form": "crate (sefer-alloc; HEAD is 0.3.0, crates.io latest 0.2.1)",
+    "dependencies": "No C/C++ libraries; at HEAD the allocator features pull the author's companion crates (aligned-vmem, once-ptr-cell, size-classes, sefer-region, numa-shim for numa-aware) as path+version dependencies; mimalloc 0.1 is a dev-dependency only, used as the benchmark baseline",
+    "min_toolchain": "Rust 1.93 at HEAD (raised from 1.88 because older std aborts with TLS-destructor registration on Windows/Apple); crates.io 0.2.1 declares 1.88",
+    "platforms": "64-bit only for allocator features: x86_64 linux-gnu and windows-msvc, aarch64 linux-gnu and apple-darwin in CI; other 64-bit targets untested; 32-bit rejected at compile time",
+    "thread_safety": "GlobalAlloc implementation with one heap per active thread and lock-free own-thread fast path; cross-thread free via the alloc-xthread feature (in `production`); fork() of a multithreaded process followed by allocation before exec is unsupported; Windows ExitProcess with allocator locks held degrades to leaking through System.",
+    "drop_in_for_baseline": "partial — drop-in as a Rust #[global_allocator] (three lines), but the README documents no C malloc replacement path, and the `production` feature plus memory-policy settings are needed to avoid pinned segments and unbounded per-heap retention"
+  },
+  "gotchas": [
+    "Open issue #1 (2026-08-22, no maintainer reply, not mentioned in README or CHANGELOG): a wezterm fork using sefer-alloc 0.2.1 `production` on x86_64-pc-windows-msvc kept 1,081 regions of exactly 4 MiB (4.22 GiB, each reserving 8 MiB) for at most one or two live per-frame buffers of 278-435 KB, about 10x amplification, until an OOM abort; this is the large-allocation path the headline benchmark flatters with same-size reuse.",
+    "Harness: benches/large_realloc.rs allocates and immediately frees the same size without touching the memory, so page faults and commit cost are not measured. Derived from page data: mimalloc's ~716 ns at 4 MiB is already ~25x below System's ~17.7 us, so mimalloc is not making an OS round trip either; the 12-33x gap is about 0.65-2.5 us of bookkeeping per cycle, while the project's own CHANGELOG puts a 2 MiB copy at ~50-100 us on this host, so the saving is around 1 percent or less of the cost of writing the block once. The last published cache-miss figure for SeferAlloc at 4 MiB was ~237-254 us (13x slower than System), before later commit-path changes; no current miss-path number is published.",
+    "Every allocation above SMALL_MAX (~253 KiB) without the opt-in medium-classes feature owns a dedicated 4 MiB segment and a SegmentTable slot (cap 4,095 live); the realloc and neighbour-pressure wins come from that pre-committed span, a memory cost the benches do not charge.",
+    "README discloses a Miri-reported Stacked/Tree Borrows violation (P1-box: free-list links inside freed small blocks freed through a by-value Box), no pthread_atfork handlers, and that the default large cache retains up to 256 MiB per heap with no reclamation while idle."
+  ],
+  "pick_this_over_siblings_when": "Against allox, the only other Rust general-purpose allocator catalogued here (its wins are small-object throughput over glibc, mimalloc and snmalloc), pick sefer-alloc only when same-size large-buffer churn or in-place large realloc dominates and you can cap its retention; for small-object or mixed workloads allox's claims or plain mimalloc fit better.",
+  "verified_claims_summary": "Author-run criterion micro-benchmarks (sample_size 10, one Windows 10 dev machine with unstated CPU and rustc, absolute numbers drifting up to +-60 percent between runs) call SeferAlloc, the mimalloc 0.1 crate and System directly through GlobalAlloc: same-size alloc+free of 4/16/64 MiB took ~59-62 ns vs mimalloc ~0.72-2.58 us, and realloc 64 B to 4 MiB took ~238 us vs ~431 us (the earlier 9.7 us figure was withdrawn). The 2026-10-10 committed-span guard fix (07a3652) is in try_promote_to_large, which per the R15-3 changelog compiles only with the opt-in medium-classes feature, so it does not touch these `production` measurements.",
+  "status_note": "Very active single-author, heavily agent-driven project (3,048 commits, last commit 2026-10-11) under MIT OR Apache-2.0, but the crates.io release (0.2.1, June 2026) carries an open memory-retention OOM report and HEAD describes itself as a snapshot without a release GO, so treat it as experimental.",
+  "sources_read": [
+    "https://github.com/PHPCraftdream/sefer-alloc",
+    "https://github.com/PHPCraftdream/sefer-alloc/issues",
+    "https://github.com/PHPCraftdream/sefer-alloc/issues/1",
+    "https://github.com/PHPCraftdream/sefer-alloc/commit/07a3652b74ea535977cb7c5c487a66b416c4205c",
+    "https://raw.githubusercontent.com/PHPCraftdream/sefer-alloc/HEAD/README.md",
+    "https://raw.githubusercontent.com/PHPCraftdream/sefer-alloc/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/PHPCraftdream/sefer-alloc/HEAD/docs/ALLOC_BENCH.md",
+    "https://raw.githubusercontent.com/PHPCraftdream/sefer-alloc/HEAD/benches/large_realloc.rs",
+    "https://raw.githubusercontent.com/PHPCraftdream/sefer-alloc/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/PHPCraftdream/sefer-alloc/HEAD/CLAUDE.md",
+    "https://crates.io/api/v1/crates/sefer-alloc"
+  ],
+  "confidence": 0.6
+}

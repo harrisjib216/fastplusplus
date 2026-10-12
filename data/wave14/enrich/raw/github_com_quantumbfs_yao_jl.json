@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/quantumbfs/yao.jl",
+  "one_liner": "Julia quantum-circuit framework with state-vector simulation; its author's 2020 suite shows it beating QuEST through Python, not qulacs.",
+  "what_it_does": "Yao is a Julia framework for designing and simulating quantum algorithms: circuits are trees of blocks (put, control, chain, kron, rotation gates) applied to array registers (ArrayReg, BatchedArrayReg, DensityMatrix) with apply!, and it adds expectation values, measurement, built-in reverse-mode gradients for parametric circuits, symbolic matrices (YaoSym), plotting, export to tensor-network contractions (YaoToEinsum) and CUDA registers (CuYao extension). It is a full Julia API, not a replacement for a C or C++ simulator library.",
+  "how_it_is_fast": "Gates go through YaoArrayRegister's instruct! kernels, which dispatch on the gate's matrix type (identity skipped, permutation matrices become row swaps, diagonals become row scaling, Pauli/H/T/SWAP and others have named fast paths) and walk the state vector with bit-mask loops from BitBasis; StaticArrays and LuxurySparse keep small gate matrices on the stack. Composite blocks such as put(i=>chain(Rz, Rx, Rz)) are collapsed into one 2x2 matrix before touching the state, so a rotation chain costs one pass. Julia's JIT specializes each kernel per element type, and the current kernels use Threads.@threads from 10 qubits up when Julia runs with several threads.",
+  "when_to_use": [
+    "Variational or parameterized circuit research in Julia where you want fused single-qubit rotation chains, batched registers and built-in gradients in one package",
+    "Single-thread state-vector simulation at 20-25 qubits where the alternative is QuEST driven gate-by-gate through pyquest-cffi (about 1.8-2.5x slower than Yao on X, H and CNOT in the 2020 suite)",
+    "Batched simulation of many small circuits (the suite's QCBM batch rows with 1000 registers) or moving the same circuit to an NVIDIA GPU through CuYao",
+    "Teaching and prototyping, where the 3-line block syntax (e.g. QFT) and symbolic matrices matter more than raw gate throughput"
+  ],
+  "when_not_to_use": [
+    "C or C++ code that needs a fast simulator library: qulacs (C++, -O3 -march=native with AVX2) matched or beat Yao on single gates at 11-25 qubits in the same suite, down to about 0.3x of Yao's time on H",
+    "Small circuits below about 11 qubits driven from Python bindings, where qulacs was faster than Yao on the parameterized circuit (about 0.34x Yao's time at 4 qubits)",
+    "Latency-sensitive one-shot runs: the first call of each new circuit or function pays Julia JIT compilation (issue #422: a wrapped gradient took 0.037 s with 99.82% compilation time, against 37 us for the built-in expect' gradient)",
+    "Projects needing current, independent speed evidence: the only cross-simulator numbers are its author's 2020 charts (Yao 0.6, Julia 1.3), and the README still calls the project an early-release beta"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Julia packages BitBasis, LuxurySparse, YaoAPI, YaoArrayRegister, YaoBlocks, YaoSym, YaoPlots, YaoToEinsum, Reexport (StaticArrays, MLStyle, StatsBase and others transitively); CUDA.jl 4 or 5 optional for the CuYao extension",
+    "min_toolchain": "Julia 1.x (Project.toml compat julia = \"1\"; Yao 0.9.3)",
+    "platforms": "any platform Julia runs on; NVIDIA GPUs through the CuYao extension",
+    "thread_safety": "not documented; kernels multithread internally with Threads.@threads when Julia has more than one thread and the register has 10 or more qubits",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The headline QCBM result does unequal work: Yao fuses each qubit's rotation chain into one 2x2 pass and builds one fewer layer, so it makes 19n state passes against 41n gate passes for qulacs and QuEST (2.16x), which covers the whole reported 1.9x over qulacs; qulacs' own gate-fusion optimizer was not used. Yao's QCBM also uses zero angles (Rx(0), Rz(0)) where the others use random ones; in YaoArrayRegister 0.6.2 the dense 2x2 path does not test for identity, so this changes the result values, not the speed.",
+    "Single-gate rows are not fully matched: Yao applies gates to qubit 2 (one-based, bit stride 2) from rand_state while qulacs and QuEST use qubit 3 (zero-based, stride 8) from |0>, and qulacs and QuEST are timed through pybind11 and cffi calls from Python, which dominate below about 10 qubits; QuEST was built at its CMake default -O2.",
+    "Results are chart images only (log scale, minimum time), from 2020 package versions; the benchmark repo (now yardstiq/quantum-benchmarks) says the results are only up to date till 2020 and a rewrite is in progress.",
+    "Mixing element types (e.g. a ComplexF32 register with a ComplexF64 gate matrix) prints an 'Element Type Mismatch' warning and converts the operator on every call, which the code itself flags as a possible performance issue."
+  ],
+  "pick_this_over_siblings_when": "No other quantum-circuit simulator is catalogued in this category; the nearest sibling is ITensors.jl, which wins on tensor-network (DMRG) workloads, while Yao is the pick for state-vector circuits with built-in gradients and can hand a circuit to a tensor-network backend through YaoToEinsum.",
+  "verified_claims_summary": "In its author's single-thread suite on a Xeon Gold 6230 (Julia 1.3.0, MKL, Python 3.7.3; Yao 0.6.1 against qulacs 0.1.9 and QuEST via pyquest-cffi 0.1.1), Yao applied X, H and CNOT to 25-qubit states about 1.8-2.5x faster than QuEST built at -O2 and called through Python, but QuEST was faster on T and qulacs was equal or faster on single gates at most sizes from 11 to 25 qubits. The 1.9x lead over qulacs on the 25-qubit parameterized circuit comes from Yao doing about 2.16x fewer state passes, so it is not a per-gate or language win.",
+  "status_note": "Maintained at low volume by QuantumBFS (Yao 0.9.3 released 2026-03-01, last commit 2026-09-08, 21 open issues), Apache-2.0 and installable with Pkg, but the speed evidence is six years old and first-party.",
+  "sources_read": [
+    "https://github.com/QuantumBFS/Yao.jl",
+    "https://github.com/QuantumBFS/Yao.jl/commits",
+    "https://github.com/QuantumBFS/Yao.jl/issues?q=is%3Aissue+performance",
+    "https://github.com/QuantumBFS/Yao.jl/issues/422",
+    "https://raw.githubusercontent.com/QuantumBFS/Yao.jl/HEAD/README.md",
+    "https://raw.githubusercontent.com/QuantumBFS/Yao.jl/HEAD/Project.toml",
+    "https://raw.githubusercontent.com/QuantumBFS/Yao.jl/HEAD/CLAUDE.md",
+    "https://raw.githubusercontent.com/QuantumBFS/Yao.jl/HEAD/NEWS.md",
+    "https://raw.githubusercontent.com/QuantumBFS/Yao.jl/HEAD/lib/YaoArrayRegister/Project.toml",
+    "https://raw.githubusercontent.com/QuantumBFS/Yao.jl/HEAD/lib/YaoArrayRegister/src/instruct.jl",
+    "https://raw.githubusercontent.com/QuantumBFS/Yao.jl/HEAD/lib/YaoArrayRegister/src/utils.jl",
+    "https://raw.githubusercontent.com/QuantumBFS/YaoArrayRegister.jl/v0.6.1/src/instruct.jl",
+    "https://raw.githubusercontent.com/QuantumBFS/YaoArrayRegister.jl/v0.6.2/src/instruct.jl",
+    "https://raw.githubusercontent.com/yardstiq/quantum-benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/yardstiq/quantum-benchmarks/HEAD/RESULTS.md",
+    "https://raw.githubusercontent.com/yardstiq/quantum-benchmarks/HEAD/yao/benchmarks.jl",
+    "https://raw.githubusercontent.com/yardstiq/quantum-benchmarks/HEAD/qulacs/benchmarks.py",
+    "https://raw.githubusercontent.com/yardstiq/quantum-benchmarks/HEAD/pyquest/benchmarks.py",
+    "https://raw.githubusercontent.com/yardstiq/quantum-benchmarks/f146574/yao/Manifest.toml"
+  ],
+  "confidence": 0.7
+}
