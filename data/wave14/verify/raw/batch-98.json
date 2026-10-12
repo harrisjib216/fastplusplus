@@ -1,0 +1,96 @@
+[
+  {
+    "id": "paper:c-blake-bu-dups-w14-sys-blogs",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The only evidence is one first-party sentence in doc/dups.md ('~2X faster than jdupes in a fully RAM-cached test case') with no script, file set, machine, versions or flags: a number without methodology is tier C.",
+    "corrections": {
+      "baseline_in_list": true,
+      "workload": "Finding sets of files with identical contents in a fully RAM-cached test case; the file set, file counts, machine, jdupes version and the options used on either side are not stated.",
+      "caveats": "One sentence of prose with no script, file set, machine, jdupes version or flags, and no date. The default work differs: dups (Hash=wy, cmp=false in dups.nim) groups files by size, compares 2-file size groups directly and otherwise trusts a whole-file wyhash over mmap'd files. jdupes by default checks size, then partial and full hashes, then confirms each match byte for byte, and only -Q skips that pass (jdupes man pages, seen as search snippets only). Unless the run used dups -c or jdupes -Q, which the page does not say, the ~2X compares unequal work. The earlier caveat that dups differs by using a non-cryptographic hash was wrong: jdupes hashes non-cryptographically too, and the real difference is the confirmation pass. The cached-only condition removes the I/O bound that the page itself says dominates uncached use. The same author's rr, du and find claims are recorded separately under cligen; fclones (wave 11) is a separate entry that also beats jdupes.",
+      "same_algorithm": false,
+      "why_faster": "From dups.nim: whole files are mmap'd and hashed with wyhash (a source comment puts it at about 6 bytes per cycle), 2-file size groups get one direct comparison instead of two hashes, and by default no byte-for-byte confirmation pass runs (cmp=false), while jdupes runs partial-hash, full-hash and byte-compare stages. This is a difference in work and design, not Nim codegen. dups is single-threaded by default (jobs=1)."
+    },
+    "notes": "Numbers check out: the page really says ~2X versus jdupes, cached only. Shortcomings to record: prose-only claim; default work is unequal (dups trusts its wyhash, jdupes confirms byte for byte unless -Q); the hash caveat is corrected; no Nim-language mechanism. baseline_in_list is set to true for consistency with this wave's C/C++ baseline rule.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/c-blake/bu/HEAD/doc/dups.md",
+      "https://raw.githubusercontent.com/c-blake/bu/HEAD/dups.nim",
+      "https://raw.githubusercontent.com/c-blake/bu/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/c-blake/bu/HEAD/README.md",
+      "https://github.com/c-blake/bu",
+      "https://github.com/c-blake/bu/commits/main"
+    ]
+  },
+  {
+    "id": "https://github.com/dropbox/fast_rsync",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The benchmark code is public (benches/rsync_bench.rs, criterion) and the CPU is named (i7-6820HQ), but the README names no compiler or flags. At measurement time the repo pinned Rust nightly-2020-01-31 and built librsync with the gcc crate, with no C compiler named. These are first-party numbers from a single noisy laptop, so tier C.",
+    "corrections": {
+      "baseline": "librsync (C), legacy MD4 signatures, called through the goffrie/librsync-rs bindings (whole::signature_with_options, whole::delta, whole::patch). The README numbers (commit 'Update README.md with newer benchmarks', 2020-03-01; v0.1.1) used librsync-rs rev ab9c427, which builds mbrt/librsync aed9ab6, a pre-2.0.1 librsync 2.0.x snapshot whose NEWS still lists 2.0.1 as unreleased. That snapshot has search.c and no hashtable.c.",
+      "compiler_and_flags": "Not stated in the README. When the numbers were taken (v0.1.1), rust-toolchain pinned nightly-2020-01-31 with packed_simd. They were run with cargo bench under the default bench profile: opt-level 3, no LTO, no target-cpu, with AVX2 or SSE2 picked at run time. The librsync C sources are compiled by librsync-sys/build.rs through the gcc crate (cc in today's pin), with NDEBUG and no -march. These crates pass the cargo opt-level to the C compiler, so -O3 under the bench profile (inferred from the build scripts; the authors do not state it). C compiler and version not stated.",
+      "claimed_speedup": "Signature of 4 MiB: fast_rsync 1.0696 ms (3.6519 GiB/s) vs librsync 5.8521 ms (683.51 MiB/s), about 5.5x (derived from page data); the README says 6X on this AVX2 CPU and about 3-4X on SSE2-only CPUs. Delta with a 64 KB edit: 7.0596 ms vs 7.4649 ms, about 1.06x (derived from page data). Delta on random data: 38.317 ms vs 42.758 ms, about 1.12x (derived from page data). Pathological delta on 16384 bytes: 6.2550 ms vs 50.185 ms, about 8.0x (derived from page data); the 4 MiB pathological run is listed only for fast_rsync (32.986 ms) because it was too slow for librsync. Apply: 284.20 us vs 400.30 us, about 1.41x (derived from page data).",
+      "workload": "Criterion benchmarks in benches/rsync_bench.rs on random data. Signature: 4 MiB buffer, block_size 4096, strong hash truncated to 8 bytes. Delta: a 4 MiB buffer with a 64 KiB random edit, a fully random 4 MiB buffer, and a pathological case (old data all 0x00, new data all 0x80; 16 KiB for both libraries, 4 MiB for fast_rsync only). Each delta iteration rebuilds the signature index on both sides. Apply: applying the 64 KiB-edit delta to a 4 MiB buffer.",
+      "caveats": "Stale baseline: the README numbers date from 2020-03-01 and were measured against a pre-2.0.1 librsync snapshot (mbrt/librsync aed9ab6). librsync 2.0.1 (2017-10-17) added an open-addressing hashtable that 'significantly speeds up delta operations' and fixed degenerate behaviour with many duplicate blocks. 2.3.1 added a bloom filter (deltas 20-50% faster) and 2.3.3 made deltas another 5-15% faster (librsync NEWS.md). So the 6% and 12% delta wins may not hold against librsync 2.3.x; this was not measured. The numbers also predate fast_rsync's own 2021 hashmap changes and its 2022 switch from packed_simd to intrinsics, and were not re-run. The pathological rows show different behaviour, not only speed. 4096 bytes of 0x00 and of 0x80 give equal 16-bit rollsum halves (derived), so every offset collides. fast_rsync blacklists a weak checksum after 1024 collisions (MAX_CRC_COLLISIONS in src/diff.rs) and may emit literal data where librsync keeps searching. Only the signature step is a large win; the two realistic delta rows are 6% and 12% and apply is 1.4x. The librsync side also runs through Rust Read/Write stream bindings, which adds a small copy overhead. The win is hand-written SIMD in a library, not a Rust-language effect. Results come from one noisy laptop. No commits since 2024-04-18.",
+      "same_opt_level": true,
+      "why_faster": "From the sources: src/md4/mod.rs (md4_many) hashes 8 signature blocks at once with AVX2, or 4 with SSE2 or NEON, using explicit intrinsics chosen at run time. src/crc.rs rewrites the rollsum update in a closed form that LLVM autovectorizes inside avx2/sse2 target_feature functions. librsync instead hashes one block at a time with scalar mdfour.c and rollsum. The delta rows are bound by single-block MD4 and by hash-map lookups (the README credits Rust's HashMap with a slight edge). The pathological row comes from collision blacklisting. This is hand-written multi-buffer SIMD, not a codegen advantage of Rust."
+    },
+    "notes": "All README numbers match. Main shortcomings to record: a stale pre-2.0.1 librsync baseline (later librsync releases sped up deltas a lot and fixed degenerate cases); delta wins are marginal; the pathological 8x reflects different behaviour; the numbers predate the 2021-2022 code changes; first-party, single laptop. same_opt_level is set true because both sides build at cargo opt-level 3 and the gcc/cc crate passes -O3 to librsync, inferred from the build scripts (compiler versions unknown). same_algorithm stays true for the signature format, since fast_rsync signatures feed librsync delta in the harness.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/dropbox/fast_rsync/master/README.md",
+      "https://raw.githubusercontent.com/dropbox/fast_rsync/master/benches/rsync_bench.rs",
+      "https://raw.githubusercontent.com/dropbox/fast_rsync/master/Cargo.toml",
+      "https://raw.githubusercontent.com/dropbox/fast_rsync/master/rust-toolchain",
+      "https://raw.githubusercontent.com/dropbox/fast_rsync/master/src/md4/mod.rs",
+      "https://raw.githubusercontent.com/dropbox/fast_rsync/master/src/crc.rs",
+      "https://raw.githubusercontent.com/dropbox/fast_rsync/master/src/signature.rs",
+      "https://raw.githubusercontent.com/dropbox/fast_rsync/master/src/diff.rs",
+      "https://raw.githubusercontent.com/dropbox/fast_rsync/v0.1.1/Cargo.toml",
+      "https://raw.githubusercontent.com/dropbox/fast_rsync/v0.1.1/rust-toolchain",
+      "https://github.com/dropbox/fast_rsync",
+      "https://github.com/dropbox/fast_rsync/commits/master",
+      "https://github.com/dropbox/fast_rsync/commits/master/README.md",
+      "https://github.com/dropbox/fast_rsync/pull/6/files",
+      "https://github.com/dropbox/fast_rsync/tree/master/src",
+      "https://raw.githubusercontent.com/goffrie/librsync-rs/e2e4b06022d889e020c439f2dc92ea2fec0e483e/librsync-sys/build.rs",
+      "https://raw.githubusercontent.com/goffrie/librsync-rs/e2e4b06022d889e020c439f2dc92ea2fec0e483e/librsync-sys/Cargo.toml",
+      "https://raw.githubusercontent.com/goffrie/librsync-rs/ab9c427b5b20624fe533ad0247fe0f9c3460245e/librsync-sys/build.rs",
+      "https://github.com/goffrie/librsync-rs/tree/ab9c427b5b20624fe533ad0247fe0f9c3460245e/librsync-sys",
+      "https://raw.githubusercontent.com/mbrt/librsync/aed9ab606bb5127f6b05df6f2c9fbcf48788a467/NEWS.md",
+      "https://raw.githubusercontent.com/mbrt/librsync/aed9ab606bb5127f6b05df6f2c9fbcf48788a467/CMakeLists.txt",
+      "https://raw.githubusercontent.com/librsync/librsync/master/NEWS.md",
+      "https://raw.githubusercontent.com/goffrie/librsync/HEAD/CMakeLists.txt"
+    ]
+  },
+  {
+    "id": "paper:c-blake-bu-mk1-w14-sys-blogs",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "doc/mk1.md has the complete shell benchmark script, its output, the CPU (i7-1270P) and the OS. It gives no Nim compiler or flags for mk1 and no ninja or GNU make versions or builds, and it is the author's own single run, so tier C (not A).",
+    "corrections": {
+      "claimed_speedup": "40,000 up-to-date file pairs on /dev/shm, one timed run each. mk1 0.039390 s wall. ninja second run with .ninja_log ('no work to do') 0.119358 s, about 3.03x (derived from page data); the README says ~3X faster than ninja's best case. Bash while-read loop 0.151993 s, about 3.86x (derived from page data); the README says ~4X. GNU make 1.550844 s, about 39x (derived from page data); the README says ~40X. ninja with the author's ninja-nv plus -t restat hack after removing .ninja_log 0.410272 s, about 10.4x (derived from page data). The 7.777944 s row is ninja's first run with no .ninja_log: it re-ran all 40,000 touch commands at 488% CPU, so it is a rebuild, not a freshness check.",
+      "compiler_and_flags": "Not stated for mk1: no Nim version or flags, and the repo's nim.cfg holds only --path=\".\" while bu.nimble sets no flags. 'Linux 6.2.10 built w/gcc-12' reads as the kernel's build compiler. ninja and GNU make versions and builds are not stated.",
+      "caveats": "Compares a deliberately restricted tool (1-to-1 rules only, no dependency graph, no log) with general build systems on a special case, so same_algorithm is false. mk1 reads a precomputed flat list of path pairs (inp2, made by tmpls outside the timed run; the author's tim puts that at 3.76 ms), while ninja parses a 40,000-statement build.ninja plus .ninja_log. GNU make ran without -r, so its built-in implicit rules were active, on a Makefile that builds the target list with $(shell cat inp). This may inflate make's 1.43 s user time; that is an inference, not measured. Each tool was timed once with ru and no repetitions; mk1's 39 ms is mostly system time (0.034 s sys). Build flags and tool versions are missing, though the script is complete and short enough to rerun. The footnote's 'over 4X faster than ninja' with a custom kernel module under Meltdown/Spectre mitigations has no numbers. First-party measurement by the author on a single machine. The win is less work, not Nim codegen.",
+      "why_faster": "From the page: mk1 only checks freshness for many 1-to-1 pairs from a flat list (about 60 lines of Nim originally, about 150 now, per the footnote), with no build-graph parsing and no log handling. The author attributes make's cost to its general machinery and subshell delegation, and ninja's best case to reusing .ninja_log. This is a difference in scope and work, not a Nim-language codegen advantage."
+    },
+    "notes": "All timings match the page. Shortcomings to record: a special-case tool against general build systems (unequal work, no Nim mechanism); no mk1 build flags or tool versions; single unrepeated runs; the 7.78 s ninja row is a full rebuild, not a check; GNU make ran without -r (possible handicap, not measured). Repo: MIT, 77 stars, last commit 2026-10-09, active.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/c-blake/bu/HEAD/doc/mk1.md",
+      "https://raw.githubusercontent.com/c-blake/bu/HEAD/nim.cfg",
+      "https://raw.githubusercontent.com/c-blake/bu/HEAD/bu.nimble",
+      "https://raw.githubusercontent.com/c-blake/bu/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/c-blake/bu/HEAD/README.md",
+      "https://github.com/c-blake/bu",
+      "https://github.com/c-blake/bu/commits/main"
+    ]
+  }
+]
