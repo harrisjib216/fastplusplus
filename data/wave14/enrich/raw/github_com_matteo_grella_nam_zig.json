@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/matteo-grella/nam-zig",
+  "one_liner": "Zig port of Neural Amp Modeler (play, train, export .nam) on Fucina; no timing against NeuralAmpModelerCore C++.",
+  "what_it_does": "nam-zig reimplements the Neural Amp Modeler ecosystem as one standalone program: it loads .nam amp profiles (WaveNet including gated, blended, grouped and FiLM variants, LSTM, ConvNet, Linear, SlimmableContainer) and plays them live through the normal audio devices, renders files offline, trains new profiles from a capture pair, and exports .nam v0.7.0 files that upstream NeuralAmpModelerCore loads. It is driven from a window or a terminal (gui, live, profile, train, render, bench, export-gguf), not from a C++ API, so it replaces the NAM plugin and trainer workflow rather than the core library's interface.",
+  "how_it_is_fast": "Every WaveNet causal convolution is a Fucina groupedCausalConv1dStreaming over its own ring-buffer state, which in inference runs as one fused kernel call (conv, bias, state carry); the per-layer accumulations are done in place and the block path is allocation-free once Fucina's buffer pool is warm. Fucina selects NEON/dotprod or AVX2/AVX-VNNI kernels at compile time for the host CPU (as if -march=native), and macOS builds link Accelerate by default; whether the conv kernels actually call BLAS is not documented. Exact tanh is the default, with a fast-tanh option.",
+  "when_to_use": [
+    "Playing .nam profiles standalone on macOS, Linux or Windows without a DAW or plugin host, with cabinet IRs and multi-stage chains",
+    "Training NAM profiles on a CPU without a PyTorch install, then using the exported .nam in any upstream-compatible player",
+    "Small standard-size WaveNet profiles at 64-frame blocks, where the README reports 72 us per block on one M1 Max core (about 5% of the 1333 us budget)",
+    "Zig projects that want a NAM inference engine with output matching upstream tools/render (max |diff| 2.3e-6, RMS 6.5e-8 on the standard example)"
+  ],
+  "when_not_to_use": [
+    "When you need evidence that it beats NeuralAmpModelerCore: no upstream timing is reported anywhere, only absolute per-block costs",
+    "Inside a DAW: the README describes a standalone app and documents no VST3, AU or CLAP plugin",
+    "Slimmable WaveNet submodels or non-WaveNet condition_dsp engines in the trainable path: they fail with a named error",
+    "Older x86 CPUs with the prebuilt binaries: x86-64 releases are built with -Dcpu=x86_64_v3 (AVX2 required); the Linux aarch64 release is built for the baseline CPU and so lacks the tuned kernels",
+    "Production rigs that need a track record: created 2026-09-09, 0 stars, one author, live audio on Linux and Windows exercised by users rather than CI"
+  ],
+  "integration": {
+    "form": "application binary (CLI plus window) built with zig build; no library API documented",
+    "dependencies": "Fucina v0.5.1 (fetched by the Zig package manager, pinned by tag and hash), vendored miniaudio; optional system BLAS (Accelerate on macOS by default, -Dblas=none to drop it); GTK 3 and WebKitGTK on Linux for the window, else the browser",
+    "min_toolchain": "Zig 0.16.0",
+    "platforms": "macOS arm64 and x86_64, Linux x86_64 and aarch64, Windows x86_64; developed and tested on Apple Silicon; prebuilt x86-64 binaries need x86-64-v3 (AVX2, FMA)",
+    "thread_safety": "README says the audio callback is allocation-free and lock-free with chains preloaded and prewarmed; nothing documented for use as a library",
+    "drop_in_for_baseline": "partial — reads and writes the same .nam files and matches upstream render output, but it is a separate program with no C++ API, so it cannot replace NeuralAmpModelerCore inside a plugin"
+  },
+  "gotchas": [
+    "The bench command reports the mean per-block time over about 5 s of repeatedly processing one fixed 64-sample sine block after 64 warm-up blocks (src/main.zig); it gives no worst-case or percentile figure, so the 18x real-time headroom is an average, not a deadline guarantee, and 'bench standard' uses synthetic weights.",
+    "Builds are tuned to the compiling host: a cross-compile without -Dcpu silently loses the fast kernels (Fucina README), and Debug builds are about 20x slower and will not keep up in real time.",
+    "The README says the timing ran on one core, but Fucina has a bounded worker pool and macOS builds link Accelerate; the thread count used by bench is not stated, and no upstream benchmodel run on the same machine is given.",
+    "The parity render builds upstream as RelWithDebInfo with NAM_ENABLE_A2_FAST=OFF; that build is for correctness only and says nothing about upstream speed."
+  ],
+  "pick_this_over_siblings_when": "No audio-model siblings are catalogued in numerics-and-arrays; next to the Zig and Mojo LLM-inference entries (llama2.zig, llama2.mojo) it is the pick only for NAM guitar-amp profiles, and its Fucina engine is the same library whose llama.cpp comparison is catalogued separately.",
+  "verified_claims_summary": "Only absolute costs are published: standard WaveNet (13,802 weights) 72 us per 64-frame block and 480 us per 512-frame block at 48 kHz, and a 23-layer 8-channel Tone3000 profile at 57 us per 64-frame block, ReleaseFast on an Apple M1 Max (2026-09-09 snapshot); no NeuralAmpModelerCore timing was taken, so there is no ratio, only output parity with upstream render (max |diff| 2.3e-6).",
+  "status_note": "Active (v0.4.0 on 2026-09-19, 15 commits since 2026-09-09) and MIT-licensed with prebuilt releases, but a one-month-old single-author project with no baseline measurement, so it stays a usable NAM runtime rather than a demonstrated speedup over the C++ core.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/matteo-grella/nam-zig/HEAD/README.md",
+    "https://github.com/matteo-grella/nam-zig",
+    "https://github.com/matteo-grella/nam-zig/tree/main/src",
+    "https://github.com/matteo-grella/nam-zig/commits",
+    "https://raw.githubusercontent.com/matteo-grella/nam-zig/HEAD/src/main.zig",
+    "https://raw.githubusercontent.com/matteo-grella/nam-zig/HEAD/src/wavenet.zig",
+    "https://raw.githubusercontent.com/matteo-grella/nam-zig/HEAD/src/engine.zig",
+    "https://raw.githubusercontent.com/matteo-grella/nam-zig/HEAD/build.zig",
+    "https://raw.githubusercontent.com/matteo-grella/nam-zig/HEAD/build.zig.zon",
+    "https://github.com/matteo-grella/nam-zig/tree/main/.github/workflows",
+    "https://raw.githubusercontent.com/matteo-grella/nam-zig/HEAD/.github/workflows/release.yml",
+    "https://raw.githubusercontent.com/matteo-grella/nam-zig/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/matteo-grella/fucina/v0.5.1/README.md",
+    "https://raw.githubusercontent.com/matteo-grella/fucina/v0.5.1/src/streamconv.zig",
+    "https://crates.io/api/v1/crates/NeuralAmpModeler-rs",
+    "https://raw.githubusercontent.com/fabiohl/NeuralAmpModeler-rs/HEAD/docs/benchmarks.md"
+  ],
+  "confidence": 0.8
+}

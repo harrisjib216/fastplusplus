@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/line/armeria",
+  "one_liner": "JVM microservice framework (Netty-based) whose gRPC server out-served the stock gRPC C++ async server at 2-4 CPUs in one grpc_bench run.",
+  "what_it_does": "Armeria is a Java/Kotlin server and client framework from LINE, built on Netty, that serves gRPC, Thrift, REST, gRPC-Web and Protobuf-JSON from one port and one Server object. A gRPC service is the ordinary grpc-java generated ImplBase class registered through GrpcService.builder().addService(...) on Server.builder(); existing grpc-java service code moves over with only the bootstrap changed. It is not a C++ library: the catalog entry exists because a Java service on it beat a C++ gRPC server in an independent benchmark.",
+  "how_it_is_fast": "Armeria's GrpcService runs its own gRPC framing on Armeria's Netty HTTP/2 stack (the grpc module depends on grpc-core, grpc-stub and grpc-protobuf but not grpc-netty), and, unlike upstream grpc-java, it runs service logic directly on the event-loop thread rather than handing each call to a separate executor (documented under 'Blocking service implementation'). No source attributes the grpc_bench margin over C++ to a mechanism. In run #559 Armeria's CPU per request stayed at 17.9-23.6 us from 1 to 4 CPUs while the C++ server's rose from 18.0 to 47.4 us (derived from page data), so the gap comes from the C++ server not scaling on that build, not from Armeria being cheaper per request.",
+  "when_to_use": [
+    "JVM shops that already run grpc-java and want one server for gRPC, gRPC-Web, Protobuf-JSON, Thrift and REST on a single port, with throughput at or slightly above plain grpc-java (run #559: 0.98-1.06x the grpc-java G1GC row).",
+    "Small unary RPCs with non-blocking handlers on 2-4 cores, where the event-loop-inline execution avoids a thread hop.",
+    "Teams that need an off-the-shelf gRPC server with gRPC-Web for browsers, unframed JSON access and server reflection, without an Envoy sidecar for gRPC-Web translation.",
+    "Services where heap memory of hundreds of MiB is acceptable and JIT warm-up can be absorbed before traffic."
+  ],
+  "when_not_to_use": [
+    "Memory-constrained deployments: run #559 shows 570-679 MiB average for Armeria against 21-32 MiB for the C++ server (about 20-28x).",
+    "Tail-latency-sensitive single-core services: at 1 CPU Armeria matched the C++ throughput but its p90 was 58.18 ms against 19.93 ms and p99 65.14 ms against 21.81 ms; at 2 CPUs its p99 was still worse (46.85 vs 39.43 ms) despite 1.28x the throughput.",
+    "Handlers that block (JDBC, file I/O, synchronous HTTP): service code runs on the event loop by default, so blocking stalls every connection on that loop unless @Blocking or useBlockingTaskExecutor(true) is used.",
+    "Large or complex request messages: issue #5152 (open since 2023-08) reports p95 rising from about 100 ms on raw grpc-java to about 300 ms on Armeria for ~500 KB requests at 10-12K QPS, traced to deserialization on the I/O thread.",
+    "When the fastest JVM gRPC server is the goal: in the same run Vert.x gRPC served 1.78x Armeria's req/s at 1 CPU and Pekko gRPC 1.29x."
+  ],
+  "integration": {
+    "form": "Maven/Gradle JAR modules (com.linecorp.armeria:armeria plus armeria-grpc)",
+    "dependencies": "Netty, grpc-java core/stub/protobuf/services, protobuf-java (HEAD pins Netty 4.2.18.Final, grpc-java 1.84.0, protobuf 3.25.9); grpc-kotlin optional",
+    "min_toolchain": "Java 8 or later for users (README); the benchmark image used Temurin JDK 23",
+    "platforms": "any platform with a supported JVM",
+    "thread_safety": "Service methods run on Netty event-loop threads by default; blocking work must be moved to ServiceRequestContext.blockingTaskExecutor(), the @Blocking annotation or GrpcServiceBuilder.useBlockingTaskExecutor(true) (docs).",
+    "drop_in_for_baseline": "partial — not a replacement for the C++ gRPC library; for grpc-java service implementations it reuses the generated ImplBase stubs, so only the server bootstrap changes"
+  },
+  "gotchas": [
+    "The C++ baseline collapses with core count rather than Armeria pulling ahead: cpp_grpc_mt went from 57,403 req/s at 1 CPU to only 85,485 at 4 CPUs (1.49x) while its CPU per request rose from 18.0 to 47.4 us (derived from page data); at 1 CPU, where both burn one core, the two servers tie. The C++ server pre-posts a single CallData per completion queue on the legacy async API and links the unpinned Debian libgrpc++ of the gcc:15.2.0 image, so the 1.28-1.65x margin measures that build and pattern on this host, not C++ codegen.",
+    "Armeria is not special among the JVM rows of the same run: the plain grpc-java 1.58 Netty server (java_hotspot_grpc_g1gc, same JVM flags minus the Armeria header switches) was 1.7% ahead at 1 CPU and 1.0% ahead at 2 CPUs, and Armeria led it by about 6% at 3-4 CPUs; any JVM gRPC server here beats cpp_grpc_mt at 2+ CPUs.",
+    "At 3-4 CPUs the top rows (Vert.x 149-153k, Pekko 141-142k, Quarkus 140-142k req/s) cluster with idle server CPU (Vert.x 225-230%, Pekko 261-271%), and Armeria used 330.65% of 400% at 4 CPUs, which points to the 11-CPU ghz client capping the run near 150k req/s; the 4-CPU ratio is client-bound and not a server ceiling.",
+    "The benchmark server is tuned (Date and Server headers off, -Dcom.linecorp.armeria.validateHeaders=false, PROTO-only serialization, 70% heap) and pins armeria 1.20.3 (2022) with grpc-java 1.58.0, still the pins at grpc_bench HEAD, while Armeria is at 1.42.0 (2026-10-06)."
+  ],
+  "pick_this_over_siblings_when": "Pick Armeria over Vert.x gRPC or Pekko gRPC when you want grpc-java's own service API plus gRPC-Web, JSON transcoding and Thrift on one server; pick Vert.x gRPC or Pekko gRPC when raw unary throughput per core matters, since both beat Armeria at every CPU count in run #559, and tonic or grpc-go when memory footprint matters.",
+  "verified_claims_summary": "In grpc_bench run #559 (maintainer, commit c4c93b3, 2026-04-23, Xeon Gold 6548N, server Docker-capped at 1-4 CPUs and 4 GiB, ghz 0.114.0 client on 11 CPUs, 50 connections and 1000 concurrent complex_proto unary echoes, 120 s after a 30 s warm-up, one run per setting), Armeria 1.20.3 on Temurin 23 with G1GC served 0.98x, 1.28x, 1.65x and 1.64x the req/s of cpp_grpc_mt (g++ 15.2.0 -O3 -flto glue over Debian-packaged libgrpc++) at 1, 2, 3 and 4 CPUs. Three other published runs (#441, #475, #547) have Armeria at 0.03-1.02x of the same C++ server, so the win is specific to this run's C++ build and host.",
+  "status_note": "Actively developed by LINE (release 1.42.0 on 2026-10-06, 5,257 commits, 5.1k stars, 621 open issues), Apache-2.0 and copyable as Maven artifacts; the benchmarked 1.20.3 build is about four years and 22 minor releases old.",
+  "sources_read": [
+    "https://github.com/line/armeria",
+    "https://raw.githubusercontent.com/line/armeria/HEAD/README.md",
+    "https://raw.githubusercontent.com/line/armeria/HEAD/site/src/content/docs/server/grpc.mdx",
+    "https://raw.githubusercontent.com/line/armeria/HEAD/grpc/build.gradle",
+    "https://raw.githubusercontent.com/line/armeria/HEAD/dependencies.toml",
+    "https://github.com/line/armeria/tree/main/site",
+    "https://github.com/line/armeria/releases",
+    "https://github.com/line/armeria/issues?q=is%3Aissue+grpc+performance",
+    "https://github.com/line/armeria/issues/5152",
+    "https://github.com/line/armeria/issues/799",
+    "https://github.com/LesnyRumcajs/grpc_bench/discussions/559",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/java_armeria_bench/src/main/java/com/linecorp/armeria/examples/helloworld/HelloWorldServer.java",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/java_armeria_bench/build.gradle",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/java_armeria_bench/Dockerfile",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/HEAD/java_armeria_bench/build.gradle",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/HEAD/java_armeria_bench/Dockerfile",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/cpp_grpc_mt_bench/main.cpp",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/cpp_asio_grpc_bench/main.cpp",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/bench.sh",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/java_hotspot_grpc_g1gc_bench/Dockerfile",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/java_hotspot_grpc_sgc_bench/build.gradle",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/java_hotspot_grpc_sgc_bench/src/main/java/io/grpc/examples/helloworld/HelloWorldServer.java"
+  ],
+  "confidence": 0.72
+}

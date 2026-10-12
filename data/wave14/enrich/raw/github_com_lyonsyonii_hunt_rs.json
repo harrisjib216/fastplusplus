@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/lyonsyonii/hunt-rs",
+  "one_liner": "Multithreaded Rust file-name finder (CLI); the author's warm-cache README runs show it 5.5-12x faster than GNU find.",
+  "what_it_does": "hunt is a command-line tool, not a library: `hunt [OPTIONS] [NAME] [DIRS]...` walks the given directories (the current directory if none are given) and reports entries whose name contains NAME, printed in two sorted groups, 'Exact' and 'Contains'. Matching is case-insensitive unless the query contains an uppercase letter or -C is set. Filters are limited to --exact, --starts, --ends, --type f|d, --hidden, --ignore and --first, plus interactive --select/--multiselect. There are no regexes, no find expressions (-mtime, -size, -exec, -prune) and no NUL-separated output.",
+  "how_it_is_fast": "Parallel directory traversal. search_dir() opens a rayon scope per directory and spawns every subdirectory as a work-stealing task with no depth limit by default (the HUNT_MAX_DEPTH environment variable switches deeper levels to serial recursion), so readdir calls for many directories run on all cores at once while GNU find walks one directory at a time. Per entry it takes the file type from the directory entry, does the substring test with a prebuilt memchr::memmem::Finder, allocates through mimalloc (the author reports about 15% from mimalloc in issue #8) and sends hits over a bounded crossbeam channel; --first calls process::exit on the first received hit. The README's own CPU columns show the win is wall-clock parallelism, not less work: about 1.54 s of user+system CPU for hunt against 1.58 s for find in the first-match case, and 5.38 s against 2.84 s in the all-matches case (derived from page data).",
+  "when_to_use": [
+    "Interactive 'where did I put that file' lookups by name fragment over a large home directory or whole disk on a many-core machine with a warm dentry and inode cache.",
+    "Quick substring or exact-name searches where grouped, sorted output (exact matches listed separately) is more useful than find's stream.",
+    "Finding the first copy of a uniquely named file deep in a tree, where a parallel walk reaches deep branches sooner than find's depth-first order.",
+    "Picking a result interactively (--select, --multiselect) in a shell session."
+  ],
+  "when_not_to_use": [
+    "Scripts that need find semantics: no -mtime/-size/-perm/-exec/-prune, no regex or glob patterns, different option syntax, and output is buffered, grouped and sorted unless -ss is passed.",
+    "Paths that must be piped safely: there is no -print0 option, paths are converted with to_string_lossy (non-UTF-8 names come out with U+FFFD), and the README's own `hunt -s -e SomeFile | xargs rm -r` example splits names containing spaces.",
+    "Machines with few cores, cold caches, spinning disks or network filesystems: hunt spent equal or more total CPU than find in the README runs, so the margin rests on idle cores and on concurrent metadata I/O being fast; no cold-cache or low-core numbers exist.",
+    "Reproducible first-match results: with several matching files the parallel walk returns whichever is found first, which can differ between runs.",
+    "Long-lived tooling: last commit 2025-07-06, last release 3.0.0 (2024-11-13), single maintainer."
+  ],
+  "integration": {
+    "form": "binary crate (CLI; cargo install hunt, cargo binstall, or prebuilt release binaries)",
+    "dependencies": "clap, colored, rayon, crossbeam-channel, mimalloc (C allocator built from source), thin_str, memchr, inquire, profi; rustix on Linux, winapi-util on Windows",
+    "min_toolchain": "crates.io 3.0.0 declares rust-version 1.74.1; the HEAD Cargo.toml uses edition 2024 (Rust 1.85 or newer)",
+    "platforms": "prebuilt for x86_64 Linux, x86_64 and aarch64 macOS, x86_64 Windows (cargo-dist targets); Unix and Windows code paths in source",
+    "thread_safety": "not applicable (CLI); uses rayon's global pool on all cores and offers no thread-count option",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The README numbers describe old builds, measured 16 months apart: the all-matches-from-/ rows (633.6 ms vs 3.473 s) were added in commit 060b8f4 on 2022-01-15, the hunt 1.5.x era when it still used jetscii and aho-corasick, and the first-match rows (180.2 ms vs 2.219 s) in commit aab3011 with the 2.0.0 release on 2023-05-26. Neither covers 3.0.0 or HEAD. The two cases also name different home directories (/home/user and /home/lyon). The shipped benchmarks/run script cannot regenerate them: it has no find row for the / case, passes fd --unrestricted instead of the README's fd flags, and runs hyperfine with --warmup 1 --ignore-failure, so every timing is warm-cache. The README points to a benchmarks.sh file that does not exist.",
+    "The README says --first searches [current_dir, home_dir, root] and that `hunt -f -e SomeFile` searches the whole system. At HEAD, search.rs walks only '.' when no directory is given.",
+    "Passing --ignore makes is_result() call canonicalize() (a realpath walk) on every entry visited, a large per-entry cost, and an entry whose canonicalize fails, such as a dangling symlink, is silently dropped from the results.",
+    "Case-insensitive mode lowercases file names with to_ascii_lowercase while the automatic case-sensitivity switch checks Unicode uppercase, so non-ASCII letters match only in the same case. Directories given twice (one nested in another) are walked twice (documented; dedup request #6 is open). Read errors are skipped silently unless -v is set."
+  ],
+  "pick_this_over_siblings_when": "Pick hunt over fd (catalogued under systems-and-safety) only for plain name-fragment lookups where its grouped exact/contains output helps. fd has regex and glob patterns, .gitignore handling and -x/-X exec, and hunt's README win over fd (5.07x first match, 2.29x all matches) was measured on 2022-2023 builds. Use the walkdir or ignore crates (bench_walk) to embed a directory walker in Rust code, and uutils findutils when you need find-compatible syntax.",
+  "verified_claims_summary": "The author's own hyperfine runs on one undescribed machine (about 2.76 million files including a network and an external drive; CPU, kernel, filesystem, GNU find version and cache state not stated, and the script warms up once): finding a deeply nested hidden file under ~/ took 180.2 ms with the hunt build of May 2023 against 2.219 s for `find ~/ -name SomeFile -print -quit` (12.3x), and listing every name containing 'SomeFile' from / took 633.6 ms with the January 2022 build against 3.473 s for `find / -name \"*SomeFile*\"` (5.5x). In the second case hunt used about 1.9x find's total CPU time, so the speedup comes from running the walk on many cores.",
+  "status_note": "Stale: last commit 2025-07-06 (dependency, edition and flake updates) and last release 3.0.0 on 2024-11-13; MIT-licensed, about 42k crates.io downloads and 104 stars; installable from crates.io or prebuilt binaries, but the published speed numbers predate 3.0.0.",
+  "sources_read": [
+    "https://github.com/LyonSyonII/hunt-rs",
+    "https://raw.githubusercontent.com/LyonSyonII/hunt-rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/LyonSyonII/hunt-rs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/LyonSyonII/hunt-rs/HEAD/benchmarks/run",
+    "https://github.com/LyonSyonII/hunt-rs/tree/main/src",
+    "https://raw.githubusercontent.com/LyonSyonII/hunt-rs/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/LyonSyonII/hunt-rs/HEAD/src/search.rs",
+    "https://raw.githubusercontent.com/LyonSyonII/hunt-rs/HEAD/src/structs.rs",
+    "https://raw.githubusercontent.com/LyonSyonII/hunt-rs/HEAD/src/print.rs",
+    "https://raw.githubusercontent.com/LyonSyonII/hunt-rs/HEAD/src/searchresult.rs",
+    "https://github.com/LyonSyonII/hunt-rs/commits/main/README.md",
+    "https://github.com/LyonSyonII/hunt-rs/commit/aab3011",
+    "https://github.com/LyonSyonII/hunt-rs/commit/060b8f4",
+    "https://github.com/LyonSyonII/hunt-rs/commits/main",
+    "https://github.com/LyonSyonII/hunt-rs/issues?q=is%3Aissue",
+    "https://github.com/LyonSyonII/hunt-rs/issues/8",
+    "https://crates.io/api/v1/crates/hunt"
+  ],
+  "confidence": 0.75
+}
