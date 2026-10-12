@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/cerjones/dg2d",
+  "one_liner": "Single-threaded SSE2 analytic-coverage 2D path rasterizer in D; claims speed but publishes no comparison with Cairo or Blend2D.",
+  "what_it_does": "dg2d fills paths built from lines, quadratic and cubic curves into a 32-bit ARGB pixel buffer, with solid colour and linear, radial, angular and biradial gradient paints under non-zero or even-odd winding. The API is a D Canvas class (fill, draw(path, paint, windingRule), viewport and clip state) over a Rasterizer class that hands each finished scanline to a blitter delegate. It also rips glyph outlines from TrueType files into one path. It is not a drop-in for Cairo or Blend2D: there is no stroking, no image or pattern fill and no Porter-Duff blend modes.",
+  "how_it_is_fast": "The rasterizer computes exact-area (analytic) anti-aliased coverage in 24:8 fixed point and stores it per scanline in differentiated (delta) form, so long spans with constant coverage need no per-pixel work. A bitmask with one bit per 4 pixels marks cells where an edge touches the scanline; the blitters bit-scan that mask to skip empty spans or write opaque spans with plain aligned 16-byte stores, an idea the source credits to Blend2D. Blitters integrate the deltas and blend 4 pixels at a time with SSE2 intrinsics (intel-intrinsics), and edges crossing the left or right clip edge are folded into per-row clip accumulation buffers instead of being tested per pixel.",
+  "when_to_use": [
+    "A D program that needs anti-aliased solid or gradient path fills into its own 32 bpp buffer on x86 without linking a C or C++ graphics library.",
+    "Studying a compact (about 1,000-line) delta-coverage scanline rasterizer with a span bitmask before reading Blend2D's much larger code base.",
+    "UI or plugin rendering in D where the maintained Dplug fork (dplug:canvas, nothrow @nogc, no alignment requirement) is the real target and dg2d is the upstream reference.",
+    "Filling many small shapes or glyph outlines per frame on one core, which is what the demo panels exercise."
+  ],
+  "when_not_to_use": [
+    "You need evidence that it beats Cairo or Blend2D: no benchmark, timing table or baseline exists in the repository or its issues, and the demo's FPS readout compares against nothing.",
+    "You need stroking, images, pattern fills, transforms on paints, compositing operators or multi-threaded rendering; the README lists all of these as not yet done.",
+    "Non-x86 targets or straight-alpha pixel formats: the README requires SSE2, 32 bpp with alpha in the high byte and 16-byte aligned scanlines; the maintainer said ARM testing would need a Linux port that he never did (issue #6).",
+    "Production code that needs maintenance: library code last changed on 2020-11-14 (the 2022 commits touch only the demo's X11/XWayland window), the API is declared unstable, and a 2025 angular-gradient bug report is unanswered.",
+    "@nogc or betterC code: the Rasterizer and Canvas are GC-allocated classes and the rasterizer's scanline, mask, bucket and clip buffers are GC dynamic arrays."
+  ],
+  "integration": {
+    "form": "dub package (library target) or source-drop of source/dg2d/*.d",
+    "dependencies": "intel-intrinsics ~>1.0 (AuburnSounds); D runtime with GC",
+    "min_toolchain": "Not documented; any D compiler with intel-intrinsics 1.x, LDC recommended with link-time optimization or cross-module inlining so the intrinsics inline",
+    "platforms": "x86 and x86-64 with SSE2; demo windowing on Win32 and X11; ARM untested",
+    "thread_safety": "not documented; rendering is single-threaded and each Canvas and Rasterizer holds mutable per-instance state",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The 16-byte buffer alignment and stride-multiple-of-4 rules are checked only by assert; release builds drop the checks and the blitters use aligned SSE loads and stores (_mm_load_si128/_mm_store_si128), so an external misaligned buffer can fault. Canvas allocates its own pixels with C realloc, which gives 16-byte alignment on common 64-bit allocators but is not guaranteed everywhere.",
+    "Angular gradients with RepeatMode.Pad never select one quadrant (fixupQuadrant can produce positions down to about -0.25), so part of the gradient is missing; p0nce posted a one-line SSE fix in issue #13 (2025-04-11) that is not merged.",
+    "Coincident edges after clipping once left zero spans in the delta buffer that made blitters skip or solid-fill wrongly (horizontal-line artifacts, issue #2, fixed in dff0979 on 2020-06-03); the delta-integration design means one bad cell corrupts the rest of the scanline. Copying a Font struct double-freed its data (issue #7); the maintainer's fix was to disable copying.",
+    "The demo's FPS figure is the best of 5 timed paints per timer tick, maxed over the last 25 ticks (effectively best of 125), with the canvas clear outside the timed region; it is an optimistic single-core number with no baseline and is not a benchmark."
+  ],
+  "pick_this_over_siblings_when": "No rasterizer is catalogued in this category (the siblings are sorters, file tools, allocators and codecs); among catalogued rasterizers Blend2D (wave 10, tier B) and tiny-skia (tier A) have measured numbers and more features, so pick dg2d only for a D-native, dependency-light fill rasterizer, and prefer its maintained Dplug fork for real use.",
+  "verified_claims_summary": "Nothing was measured: the README says only 'Very fast, high performance rasterizer with SIMD support' and that LDC with LTO or cross-module inlining performs best, the lead's 'about 2x Cairo' appears nowhere, and issue #8 discusses glyph speed against GDI without timings while the maintainer estimates a possible 4x glyph speedup from caching.",
+  "status_note": "Abandoned (library code unchanged since 2020-11-14, last commit 2022-05-06 on the demo, 21 stars) but BSL-1.0 and small enough to vendor; its rasterizer lives on, reworked as nothrow @nogc without alignment requirements, in Dplug's dplug:canvas, which is the better-maintained copy.",
+  "sources_read": [
+    "https://github.com/cerjones/dg2d",
+    "https://raw.githubusercontent.com/cerjones/dg2d/HEAD/readme.md",
+    "https://raw.githubusercontent.com/cerjones/dg2d/HEAD/dub.json",
+    "https://github.com/cerjones/dg2d/tree/master/source/dg2d",
+    "https://raw.githubusercontent.com/cerjones/dg2d/HEAD/source/dg2d/rasterizer.d",
+    "https://raw.githubusercontent.com/cerjones/dg2d/HEAD/source/dg2d/colorblit.d",
+    "https://raw.githubusercontent.com/cerjones/dg2d/HEAD/source/dg2d/canvas.d",
+    "https://raw.githubusercontent.com/cerjones/dg2d/HEAD/source/dg2d/blend.d",
+    "https://raw.githubusercontent.com/cerjones/dg2d/HEAD/source/dg2d/misc.d",
+    "https://github.com/cerjones/dg2d/tree/master/demo/source",
+    "https://raw.githubusercontent.com/cerjones/dg2d/HEAD/demo/source/app.d",
+    "https://raw.githubusercontent.com/cerjones/dg2d/HEAD/demo/source/panels.d",
+    "https://github.com/cerjones/dg2d/issues?q=is%3Aissue",
+    "https://github.com/cerjones/dg2d/issues/2",
+    "https://github.com/cerjones/dg2d/issues/6",
+    "https://github.com/cerjones/dg2d/issues/7",
+    "https://github.com/cerjones/dg2d/issues/13",
+    "https://github.com/cerjones/dg2d/commits/master",
+    "https://raw.githubusercontent.com/AuburnSounds/Dplug/HEAD/canvas/dplug/canvas/package.d",
+    "https://raw.githubusercontent.com/AuburnSounds/Dplug/HEAD/canvas/dplug/canvas/rasterizer.d"
+  ],
+  "confidence": 0.85
+}

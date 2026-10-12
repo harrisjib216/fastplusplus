@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/technicolor-research/faiss-quickeradc",
+  "one_liner": "2018 FAISS fork that scans PQ codes with quantized in-register lookup tables; about 4-5x faster than FAISS PQ ADC at equal recall.",
+  "what_it_does": "Adds 'vectorized product quantization' indexes to a mid-2018 FAISS: IndexVPQ_<variant> for exhaustive search (used like IndexPQ) and IndexIVFVPQ_<variant> for IVF search (used like IndexIVFPQ), plus factory strings such as IMI2x12,VPQ_12x6.6.4_AVX512 and SWIG Python bindings. Variants are compile-time templates named by code layout (m x {4,4}, {6,6,4}, {6,5,5}, {5,5,5}, {8,8}, {8}) and instruction set (SSE, AVX2, AVX-512), each with scalar reference forms for debugging. L2 distance only and no OnDiskInvertedList support.",
+  "how_it_is_fast": "Per query it computes the float distance tables, scans the first 4k codes with them to seed the top-k heap, then quantizes the tables to 8-bit (4-bit sub-codes) or 16-bit entries between the per-subquantizer minimum and the current k-th distance. Codes are stored in transposed groups so one shuffle looks up many codes at once: pshufb (_mm_shuffle_epi8 / _mm256_shuffle_epi8) for 16-entry tables and AVX-512 BW 16-bit permutes (_mm512_permutexvar_epi16, _mm512_permutex2var_epi16 with mask blends) for the 6-bit and 8-bit sub-codes of the irregular quantizers. Saturating adds accumulate the distances, a SIMD compare against the quantized heap bound plus movemask selects the few candidates that touch the heap.",
+  "when_to_use": [
+    "Reproducing or extending the Quicker ADC paper (arXiv 1812.09162, IEEE TPAMI) on x86-64 with AVX-512 BW.",
+    "Billion-scale IVF, Inverted Multi-Index or HNSW-IVF search with 64-bit or 128-bit PQ codes where per-query scan time dominates and the {8,8} layout keeps PQ-level recall.",
+    "Latency-bound single-thread exhaustive PQ scans over about 1M codes where about 1.2 ms per query (vs 5.5 ms for 2018 FAISS PQ at 64 bits) matters.",
+    "As a source of the {6,6,4} and {8,8} AVX-512 scan kernels to port into a current ANN library."
+  ],
+  "when_not_to_use": [
+    "New projects on current FAISS: upstream now ships IndexPQFastScan and IndexIVFPQFastScan (4-bit codes with 8-bit tables in registers, credited to Andre et al.), maintained and with AVX2 support (FAISS wiki and API docs, seen as search snippets only).",
+    "Inner-product or cosine search: only L2 is implemented.",
+    "Non-x86 or pre-AVX2 hardware: the build always adds -mf16c and the kernels use x86 intrinsics; without AVX-512 the fast {6,6,4} and {8,8} variants fall back to scalar code.",
+    "When you need exact PQ distances or the best recall from the faster layouts: {4,4} and {6,6,4} lose recall versus 8-bit PQ (64-bit codes: R@100 0.807 and 0.859 vs 0.918).",
+    "Production use needing maintenance or a patent licence: abandoned since 2019-01-03, Python 2 benchmark scripts, Clear BSD code with no patent grant on top of FAISS's old BSD+PATENTS terms."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "BLAS, LAPACK, OpenMP, Boost (Boost.Align aligned_allocator); SWIG, numpy and Python 2 for the Python interface and benchmark scripts",
+    "min_toolchain": "C++11 (configure.ac requires it), autoconf ./configure; built and benchmarked with 2018-era compilers, newer toolchains not documented",
+    "platforms": "x86-64 only: AVX2 for the 4-bit AVX2 variants, AVX-512 BW for the {4,4} AVX-512, {6,6,4}, {6,5,5}, {5,5,5} and {8,8} variants; the {8} AVX-512 VBMI variant was never timed",
+    "thread_safety": "Same model as 2018 FAISS: search is const and OpenMP-parallel over queries (#pragma omp parallel for); concurrent add during search is not documented",
+    "drop_in_for_baseline": "partial — same FAISS Index train/add/search API as IndexPQ and IndexIVFPQ, but only inside this fork, with new class or factory names, L2 only and approximate (dequantized) result distances"
+  },
+  "gotchas": [
+    "Result distances are dequantized 8-bit or 16-bit sums (heap entries come from unquantize_sum), with no float re-ranking, so ties and near-ties can order differently from FAISS PQ.",
+    "The AVX-512 classes are wrapped in #ifdef __AVX512F__ and otherwise silently alias the scalar NoVec/NoVecTable classes under the same names, so a build on a machine without AVX-512 runs the slow path without warning.",
+    "Reproducibility gap: the committed benchs/bench_vpq_sift1m.py (identical at the pinned commit d11c5af and at HEAD) evaluates neither the {8,8} AVX-512 variants (2vc/4vc) nor the 64-bit {4,4} AVX-512 one (2W4 is commented out), and benchs/bench_polysemous_sift1m.py runs only the 128-bit IndexPQ(d,16,8) with k=1 and reports R@1, so the headline {8,8} rows, the 64-bit FAISS PQ row and every baseline R@100 value come from runs not in the repo. The README's reproduce command names benchs/bench_vpq_sift1000m.py, which does not exist (404), with 'pyton' and PYTHON_PATH typos. Timing is one time.time() pair around a single 10,000-query batch, single-threaded on both sides, no warm-up or repeats.",
+    "The signed VecProductQuantizer_4_AVX256 class shown in the README sums its two lanes with an unsigned saturating add (_mm_adds_epu8) and then a signed compare (_mm_cmplt_epi8), so far codes whose lane sums exceed 127 wrap negative and would enter the heap with a too-small distance; it is not registered in VPQ_Impl.h (the _AVX2 names map to the _unsigned classes), so the published numbers are unaffected, but do not instantiate it directly."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Quick ADC (the standalone 4-bit SSE predecessor) or PQ Fast Scan when you want the work inside FAISS with IVF, IMI and HNSW-IVF indexes and the AVX-512 {6,6,4} or {8,8} layouts that keep 8-bit-PQ recall; bolt targets learned encoders against Eigen matmul, a different trade-off.",
+  "verified_claims_summary": "The paper's SIFT1M exhaustive-search table (README image; single-threaded per the committed scripts; AVX-512 BW CPU, model and compiler unstated) shows m x {8,8} AVX-512 at 1.18 ms per query vs 5.50 ms for mid-2018 FAISS PQ ADC with 64-bit codes at equal R@100 (0.918), and 2.36 vs 9.51 ms with 128-bit codes (about 4-5x, derived from page data); the 9.5-12x rows use lower-recall {6,6,4} or {4,4} layouts, and against polysemous codes the gain ranges from a tie to about 2x.",
+  "status_note": "Abandoned since 2019-01-03 on a mid-2018 FAISS base with Python 2 scripts and a Clear BSD licence without patent grant, so treat it as a reference implementation of the paper's kernels rather than a library to deploy; upstream FAISS fast-scan covers the 4-bit case.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/technicolor-research/faiss-quickeradc/HEAD/README.md",
+    "https://raw.githubusercontent.com/technicolor-research/faiss-quickeradc/HEAD/benchs/bench_vpq_sift1m.py",
+    "https://raw.githubusercontent.com/technicolor-research/faiss-quickeradc/HEAD/benchs/bench_vpq_sift1000m.py",
+    "https://raw.githubusercontent.com/technicolor-research/faiss-quickeradc/d11c5af/benchs/bench_vpq_sift1m.py",
+    "https://raw.githubusercontent.com/technicolor-research/faiss-quickeradc/HEAD/benchs/bench_polysemous_sift1m.py",
+    "https://raw.githubusercontent.com/technicolor-research/faiss-quickeradc/HEAD/VecProductQuantizer.h",
+    "https://raw.githubusercontent.com/technicolor-research/faiss-quickeradc/HEAD/VPQ_Impl.h",
+    "https://raw.githubusercontent.com/technicolor-research/faiss-quickeradc/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/technicolor-research/faiss-quickeradc/HEAD/makefile.inc.in",
+    "https://github.com/technicolor-research/faiss-quickeradc/issues",
+    "https://github.com/facebookresearch/faiss/wiki/Implementation-notes/Getting-started (search snippet only)",
+    "https://faiss.ai/cpp_api/struct/structfaiss_1_1IndexPQFastScan.html (search snippet only)"
+  ],
+  "confidence": 0.75
+}

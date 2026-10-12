@@ -1,0 +1,47 @@
+{
+  "id": "lang:hare/nordlow/compiler-benchmark#compile-throughput",
+  "one_liner": "Hare 0.26 toolchain (harec plus QBE) builds a generated 40,000-function program 2.6-3.0x faster than gcc -O0; clang wins.",
+  "what_it_does": "Hare is a small systems language with manual memory management, a minimal runtime and no libc by default. 'hare build' drives harec (front end, emits QBE IL), qbe (back end, emits assembly) and then as and ld. This entry records how fast that toolchain builds the benchmark's synthetic program in default (debug) mode; it is not a library or a runtime-speed claim, and Hare does not accept C sources.",
+  "how_it_is_fast": "The benchmark gives no Hare-specific reason. Inference, not measured: harec lowers straight to QBE's SSA IL, and QBE runs a short fixed pass list with no optimization levels, while GCC at -O0 still lowers through GENERIC, GIMPLE and RTL. The default build caches compiled standard-library modules (rt, os and the debug:: runtime that debug mode imports) in HARECACHE, and the reported minimum is over two repetitions, so the faster run probably reused modules compiled by the first, much as a C build links a prebuilt libc.",
+  "when_to_use": [
+    "You already write Hare and want default debug builds of large generated files to stay cheaper than GCC -O0 builds: 150 us per function against 303 to 486 for the gcc and g++ rows.",
+    "Static, libc-free binaries on Linux or FreeBSD (x86-64, aarch64, riscv64 per the 2022 announcement; the current platform list could not be checked) where a small toolchain is preferred.",
+    "Toolchain comparisons: Hare lands next to Odin (147) and C3 (153) on this Total column."
+  ],
+  "when_not_to_use": [
+    "When clang is available: clang C built the same program faster (118 us/f Total, 77.9 object-only), and so did clang++ on the templated variant (107).",
+    "On memory-limited build hosts: the sampled peak RSS, summed over the process tree, was 110.8 kB per function, about 4.4 GB for this file (derived from page data), against 17.2 to 17.6 kB/f for the gcc builds and 6.8 for clang.",
+    "On Windows or macOS: the project has no official support for non-free platforms (2022 announcement); only a community macOS port exists.",
+    "For optimized-build or code-quality comparisons: only the default debug mode was measured (no -R), and QBE output was not compared with gcc -O2.",
+    "To predict real project builds: the workload is one synthetic file of 40,000 i64 add-chain functions."
+  ],
+  "integration": {
+    "form": "compiler toolchain (the 'hare' build driver plus harec, qbe and binutils; distribution packages such as Arch's hare 0.26.0.1 per search snippets, or a source build)",
+    "dependencies": "harec, qbe, an assembler and linker (as, ld); no libc by default",
+    "min_toolchain": "hare 0.26.0.1 as measured (0.26.0 announced on the Hare blog 2026-02-13 per search results)",
+    "platforms": "Linux and FreeBSD on x86-64, aarch64 and riscv64 per the 2022 announcement (later BSD ports not confirmed); no official Windows or macOS; measured only on x86-64 Arch Linux",
+    "thread_safety": "not applicable (command-line compiler); 'hare build' builds modules in parallel with -j defaulting to os::cpucount(), which counts the sched_getaffinity mask (source of a GitHub mirror), so under the harness's one-CPU pin it builds serially",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness: Hare's Check cell is a second full build. bm_Hare's 'check' runs 'hare build -o <tmp>', the same command as 'build' apart from the output path, so Check (135.9 us/f) against Build (150) shows about 10% noise between identical commands, and the two RSS cells match (110.8). Hare has no link-free Compile number. Taken conservatively, Hare's full build including the link (150) against GCC's object-only compiles is about 1.3x faster than gcc 15 (193.8), 1.8x than g++ 15 (269.6) and 2.7x than gcc 16.2.1 (400.1), while clang++ object-only (82.4) is 1.8x faster than Hare (derived from page data).",
+    "Cache and repetitions: HARECACHE is wiped once per operation, not per repetition. Every repetition compiles byte-identical source (cbench draws its random-constant pool once per process and restarts the index for each file) under a new file name, and builds of about 6 s keep the minimum of only 2 runs. The 6 s minimum shows the main module was rebuilt, but the standard-library modules compiled by the first run were probably reused.",
+    "Unequal work, mostly against Hare: default (non -R) mode imports the debug:: runtime-support module (hare-build man page per search snippets) and QBE always runs its passes, while the C side builds at -O0 with only -Wall -Wextra added. The 222 B/f output size includes that debug runtime.",
+    "One noisy run: tasks run concurrently, one pinned worker per core on a hybrid Zen 5 and Zen 5c part, and nothing checks the program's output. The 1.6x lead over clang++ rests on clang++'s untemplated Total (236), which is 2.9x its own Compile (82.4), while its templated Total is 107. The README summary now quotes the table's figures (clang 118), so the record's note about it citing clang 87 is out of date, but its section 3 still quotes GCC compile figures (226.7 to 382.6 us/f) that differ from the table (193.8 to 400.1)."
+  ],
+  "pick_this_over_siblings_when": "On this Total column Hare (150) ties Odin (147) and C3 (153) and trails Zig (110), Free Pascal (138, 103.6 object-only) and dmd (13), while using about 3x Odin's and 13x Zig's build memory per function (derived from page data). Pick Hare for a small, libc-free toolchain, not for the fastest builds.",
+  "verified_claims_summary": "In one run of nordlow/compiler-benchmark (tables updated 2026-10-09) on an AMD Ryzen AI 7 350 under Arch Linux, hare 0.26.0.1 in default debug mode built a generated program of 200 x 200 i64 add-chain functions, link included, in 150 us per function. The same C program at -O0 with -Wall -Wextra took 392 us/f with gcc 15.3.0 (193.8 object-only) and 454 with gcc 16.2.1. The C++ version took 303 with g++ 15.3.0, 486 with g++ 16.2.1 and 236 with clang++ (untemplated). clang 23.1.1 C was faster than Hare at 118.",
+  "status_note": "Hare is actively released (0.26.0 on 2026-02-13 per search results, and 0.26.0.1 is packaged by Arch and Alpine per search snippets), but git.sr.ht, harelang.org and the distro package pages are unreachable from this sandbox. The licence split (GPL-3.0-only for hare and harec, MPL-2.0 for the standard library) is taken from a GitHub mirror's README, and the last commit is unverified. The evidence is one single-machine run of a public harness in which Hare's Check column is just a second full build.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/cbench",
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/process_timer.py",
+    "https://github.com/nordlow/compiler-benchmark/commits",
+    "https://github.com/nordlow/compiler-benchmark/issues?q=is%3Aissue+pascal+OR+fpc+OR+hare",
+    "https://github.com/Angluca/hare",
+    "https://raw.githubusercontent.com/Angluca/hare/HEAD/README.md",
+    "https://raw.githubusercontent.com/Angluca/hare/HEAD/cmd/hare/build.ha",
+    "https://raw.githubusercontent.com/Angluca/hare/HEAD/os/+linux/platform_environ.ha"
+  ],
+  "confidence": 0.55
+}

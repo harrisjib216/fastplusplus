@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/smarco/wfa2-lib",
+  "one_liner": "Exact wavefront (WFA/BiWFA) pairwise aligner in C; about 7x faster than unbanded KSW2 on long, similar reads.",
+  "what_it_does": "C library for pairwise sequence alignment under indel, edit, gap-linear, gap-affine and dual-cost gap-affine scoring, returning a score or a full CIGAR, end-to-end or ends-free (semi-global, overlap, extension). You configure a wavefront_aligner_attr_t, create one wavefront_aligner_t, and call wavefront_align(aligner, pattern, len, text, len) on plain ASCII strings; C++ bindings (WFAlignerGapAffine and friends) and bindgen-based Rust bindings wrap the same object. It is not a drop-in for ksw2's call signature: no query profile, no 0-3 encoding, no zdrop/band arguments in the same form.",
+  "how_it_is_fast": "The wavefront alignment algorithm only computes the furthest-reaching diagonal offsets for each score, so its time is O(ns+s^2) in alignment score s rather than O(n^2) DP cells; on similar sequences most of the work is the 'extend' step, which compares 8 bytes at a time with 64-bit XOR plus count-trailing-zeros. The per-score 'compute' loops are written to be auto-vectorised by the compiler (PRAGMA_LOOP_VECTORIZE, -O3 -march=native) instead of using ISA intrinsics. BiWFA (memory mode ultralow) runs the wavefronts from both ends and recurses at the meeting point, cutting memory to O(s) while keeping O(ns) time.",
+  "when_to_use": [
+    "Exact gap-affine global or ends-free alignment with CIGAR of long, similar sequences (ONT/PacBio reads against a reference region, assembly contigs, haplotypes) where full DP is O(n^2).",
+    "Pipelines that currently call ksw2 without banding and want the optimal alignment faster: the BiWFA artifact shows about 7x total-time gains at 0,4,6,2 penalties on long human ONT data.",
+    "Very long pairs (100 kbp to Mbp) where O(s^2) or O(n^2) memory is a problem: use the ultralow (BiWFA) mode for O(s) memory.",
+    "Portable builds that must run on x86, ARM or other ISAs without per-ISA SIMD code paths."
+  ],
+  "when_not_to_use": [
+    "Highly divergent pairs or pairs with very different lengths: cost grows with score s, and issue #13 (labelled bug) reports slow runs when lengths differ greatly; banded SIMD DP (ksw2, parasail) can win there.",
+    "Local (Smith-Waterman) alignment: not supported (open feature request #61); use SSW or parasail.",
+    "Edit distance only: in the same artifact edlib was faster than every WFA2 mode.",
+    "Ends-free alignment with a nonzero match score: open issue #102 reports suboptimal results, with no maintainer reply.",
+    "Short reads in bulk with the default high-memory mode and per-pair aligner creation: issue #97 reports out-of-memory and segfaults after millions of alignments."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none for the C library (libm; optional OpenMP); C++ bindings ship as libwfacpp; Rust bindings generated with bindgen",
+    "min_toolchain": "C compiler with GNU builtins (__builtin_ctzl, __builtin_expect), i.e. GCC or Clang; CMake 3.16+ or the plain Makefile; no minimum version documented",
+    "platforms": "any 64-bit target the compiler auto-vectorises for (README names SSE, AVX2, AVX-512, NEON, SVE, POWER, RISC-V); Release builds use -march=native",
+    "thread_safety": "not documented; an aligner object holds mutable buffers, so use one wavefront_aligner_t per thread (single-threaded by default; -DOPENMP enables intra-alignment parallelism via max_num_threads)",
+    "drop_in_for_baseline": "partial — same alignment problem and penalties as ksw2 extz2 (scores matched on all 3,317 artifact pairs), but a different API, ASCII input instead of encoded bases, and different banding/zdrop controls"
+  },
+  "gotchas": [
+    "The default attributes (wavefront_aligner_attr_default, also used by the C++ WFAligner constructors) enable the wf-adaptive heuristic (min_wavefront_length 10, max_distance_threshold 50), so out-of-the-box results are not guaranteed optimal despite the README's 'exact' framing; set heuristic.strategy = wf_heuristic_none (or setHeuristicNone()) for exact results. The BiWFA-paper benchmark used align_benchmark's own default wf_heuristic_none, so the measured numbers are exact-mode numbers.",
+    "Create the aligner once and reuse it; per-pair create/delete has significant overhead and is implicated in the memory blow-ups of issue #97.",
+    "CIGARs describe pattern-to-text; swap arguments to get SAM-convention I/D, and ultralow (BiWFA) breaks score ties differently from the other modes.",
+    "The measured numbers come from a 2022 BiWFA-paper snapshot (commit d5532da), not the current main, on long low-divergence ONT reads; CPU model unstated."
+  ],
+  "pick_this_over_siblings_when": "Pick WFA2-lib over ksw2 when you need the exact gap-affine CIGAR of long, similar sequences without tuning a band; pick ksw2 or parasail for banded or divergent alignments and their SIMD striped kernels, and SSW or parasail when you need local alignment.",
+  "verified_claims_summary": "In the BiWFA paper artifact (smarco/BiWFA-paper, gcc 10.2.0, -O3 -march=native, BSC AMD cluster nodes with unnamed CPU), WFA2 high-memory mode in exact mode took 7.26x and 7.51x less total time than unbanded ksw2_extz2_sse on 1,326 ONT-region pairs and 1,991 ultra-long MinION pairs (penalties 0,4,6,2, CIGAR output; ratios derived from the per-pair rows), BiWFA about 9.8-10x, with identical scores; edlib (edit distance only) was faster still.",
+  "status_note": "Active (commits through 2026-09-30, README and CI fixes in September 2026), MIT-licensed and easy to vendor as a static C library, but 17 open issues include an unanswered suboptimal-result bug in ends-free mode (#102) and memory problems at scale (#97).",
+  "sources_read": [
+    "https://raw.githubusercontent.com/smarco/WFA2-lib/HEAD/README.md",
+    "https://raw.githubusercontent.com/smarco/WFA2-lib/HEAD/wavefront/wavefront_attributes.c",
+    "https://raw.githubusercontent.com/smarco/WFA2-lib/HEAD/bindings/cpp/WFAligner.cpp",
+    "https://raw.githubusercontent.com/smarco/WFA2-lib/HEAD/Makefile",
+    "https://raw.githubusercontent.com/smarco/WFA2-lib/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/smarco/WFA2-lib/HEAD/wavefront/wavefront_extend_kernels.c",
+    "https://raw.githubusercontent.com/smarco/WFA2-lib/HEAD/wavefront/wavefront_compute_affine.c",
+    "https://raw.githubusercontent.com/smarco/BiWFA-paper/main/evaluation/1_RealData.md",
+    "https://raw.githubusercontent.com/smarco/BiWFA-paper/d5532da3b861d545d5c34ea4ef314ec439591d05/tools/align_benchmark/align_benchmark.c",
+    "https://github.com/smarco/WFA2-lib",
+    "https://github.com/smarco/WFA2-lib/issues",
+    "https://github.com/smarco/WFA2-lib/issues/102",
+    "https://github.com/smarco/WFA2-lib/issues/97",
+    "https://github.com/smarco/WFA2-lib/commits"
+  ],
+  "confidence": 0.8
+}

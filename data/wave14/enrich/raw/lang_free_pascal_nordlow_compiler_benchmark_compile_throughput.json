@@ -1,0 +1,49 @@
+{
+  "id": "lang:free-pascal/nordlow/compiler-benchmark#compile-throughput",
+  "one_liner": "Free Pascal 3.2.2 compiles a generated 40,000-function file 1.9-3.9x faster than GCC at -O0; clang still wins.",
+  "what_it_does": "Free Pascal (fpc) is a self-hosted, multi-target Pascal and Object Pascal compiler with its own runtime library; on x86-64 Linux it writes ELF objects itself and links with GNU ld, without libc. This entry is not a library: it records that fpc compiles a Pascal translation of the benchmark's synthetic C file faster than GCC compiles the C. Adopting it means writing Pascal; it does not accept C or C++ sources.",
+  "how_it_is_fast": "The benchmark gives no Pascal-specific reason. The FPC 3.2.2 source shows that x86-64 Linux defaults to the internal ELF64 object writer (assem: as_x86_64_elf64 in compiler/systems/i_linux.pas), so the link-free Compile step ('fpc -Cn -O-') skips the textual-assembly round trip through GNU as that 'gcc -c' always pays. Inference, not measured: fpc reads precompiled units (.ppu) instead of preprocessed headers and at -O- does far less intermediate-representation work than GCC, whose GIMPLE and RTL pipeline still runs at -O0.",
+  "when_to_use": [
+    "You already write Pascal (Free Pascal or Lazarus code) and care about debug-build turnaround: on this file fpc's object-only compile (103.6 us per function) is about 1.9x faster than gcc 15 (193.8) and 2.6x faster than g++ 15 (269.6).",
+    "Large generated sources such as tables or state machines, where an unoptimized GCC build dominates the edit-compile loop and clang is not an option.",
+    "Projects that want one self-contained compiler and runtime with no libc dependency, across Linux, Windows, macOS and the BSDs.",
+    "As a reference point when comparing toolchains: on this workload fpc sits between clang (faster) and every GCC row (slower)."
+  ],
+  "when_not_to_use": [
+    "When clang is available: clang C compiled the same file faster (77.9 against 103.6 us/f object-only, 118 against 138 Total), and clang++ was faster object-only (82.4).",
+    "For release builds: only -O- was measured, so there is no number for fpc -O2 or -O3 against gcc -O2.",
+    "To predict real project builds: the workload is one synthetic file of 40,000 Int64 add-chain functions that uses only the System unit and no headers.",
+    "When you need to compile existing C or C++: fpc is a different language, and interop goes through external declarations.",
+    "When the exact compiler version matters: 3.2.2 is the 2021 stable release (tag release_3_2_2, 2021-05-15); 3.2.4-rc2 (2026-08-26) and the 3.3.1 main branch were not measured."
+  ],
+  "integration": {
+    "form": "compiler toolchain (command-line compiler 'fpc'; distribution packages or a source build)",
+    "dependencies": "GNU ld on Linux (linkextern ld_linux in i_linux.pas); GNU as only when -Aas is passed, as in this benchmark's build step; no libc by default",
+    "min_toolchain": "fpc 3.2.2 as measured (stable release, tagged 2021-05-15)",
+    "platforms": "x86-64 targets in 3.2.2 include Linux, Win64, Darwin, FreeBSD, NetBSD, OpenBSD, DragonFly, Solaris, AROS and embedded (option list in compiler/msg/errore.msg); measured only on x86-64 Arch Linux",
+    "thread_safety": "not applicable (command-line compiler); the compiler's own threading is not documented in what was read",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness: fpc's Check and Compile cells run the same command. bm_Pascal in cbench passes '-Cn -O-' for both 'check' and 'compile', so the 98.7 us/f Check cell is a full object compile, not a syntax check, and its 5% gap to the 103.6 Compile cell is run-to-run noise between identical commands. Each fpc step takes 4 to 5.5 s, so the adaptive rule keeps the minimum of only 2 runs.",
+    "Inside fpc's own row the two columns use different assemblers: Compile uses fpc's default internal ELF writer, while Build adds -Aas and pushes a textual .s file through GNU as before GNU ld, so the 33 us/f gap between Build (137) and Compile (103.6) is extra assembling plus linking, which works against fpc in the Total column. Conversely, the Compile column sets fpc's internal object writer against 'gcc -c', which emits assembly and runs GNU as (clang uses an integrated assembler). Even taken conservatively, fpc's full build with GNU as and ld (137) is still about 1.4x faster than gcc 15's object-only compile (193.8) (derived from page data).",
+    "The '68.8 B/f, most compact machine code' figure is probably not like for like. The stock fpc.cfg template (utils/fpcmkcfg/fpc.cft in 3.2.2) adds -Xs (strip all symbols) whenever DEBUG is not defined, and cbench passes no strip flag to gcc or clang, so on a stock install the Pascal binary is stripped while the C binaries keep symbol tables for 40,000 functions. The benchmark machine's fpc.cfg was not published. The same template also turns on -Sgic, -l and -viwn.",
+    "Noise and baselines: tasks run concurrently, one pinned worker per core on a hybrid Zen 5 and Zen 5c part, and nothing checks the built program's output or exit code. Sibling enrichers found gcc 15's Total (392) at twice its own Compile (193.8). The 3.3x to 3.9x ratios against gcc 16.2.1 rest on a GCC 15-to-16 slowdown that the README itself flags as a regression, and the README's section 3 quotes different figures (226.7 to 382.6 us/f) from its table (193.8 to 400.1). The gcc 15 Compile column (about 1.9x) is the safer comparison."
+  ],
+  "pick_this_over_siblings_when": "Among the nordlow/compiler-benchmark siblings, dmd (13 us/f Total) and Zig (110) build faster, while Odin (147), Hare (150), C3 (153) and rustc (187) are close or slower. fpc has a link-free Compile figure (103.6) below every GCC row and the smallest binaries in the table (probably helped by stripping). Pick it when you already use Pascal; for raw compile speed dmd or clang win.",
+  "verified_claims_summary": "In one run of nordlow/compiler-benchmark (tables updated 2026-10-09) on an AMD Ryzen AI 7 350 under Arch Linux, the harness compiled a generated program of 200 x 200 Int64 add-chain functions. fpc 3.2.2 at -O- built it (GNU as plus ld) in 137 us per function and compiled it to an object in 103.6. The same C program at default -O0 with -Wall -Wextra took 392 Total and 193.8 object-only with gcc 15.3.0, 454 and 400.1 with gcc 16.2.1, and 303 and 269.6 with g++ 15.3.0. clang 23.1.1 was faster than fpc (118 Total, 77.9 object-only).",
+  "status_note": "Free Pascal is actively developed: GitLab main had commits on 2026-10-12, 3.2.4-rc2 was tagged 2026-08-26, and the compiler is GPL-2.0-or-later per the verification record. The measured 3.2.2 is the 2021 stable release, and the evidence is one single-machine run of a public MIT harness whose fpc Check cell repeats the Compile command and whose size column probably compares a stripped Pascal binary with unstripped C binaries.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/cbench",
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/process_timer.py",
+    "https://github.com/nordlow/compiler-benchmark/commits",
+    "https://github.com/nordlow/compiler-benchmark/issues?q=is%3Aissue+pascal+OR+fpc+OR+hare",
+    "https://gitlab.com/freepascal.org/fpc/source/-/raw/release_3_2_2/compiler/systems/i_linux.pas",
+    "https://gitlab.com/freepascal.org/fpc/source/-/raw/release_3_2_2/compiler/msg/errore.msg",
+    "https://gitlab.com/freepascal.org/fpc/source/-/raw/release_3_2_2/utils/fpcmkcfg/fpc.cft",
+    "https://gitlab.com/api/v4/projects/freepascal.org%2Ffpc%2Fsource/repository/tags?per_page=15",
+    "https://gitlab.com/api/v4/projects/freepascal.org%2Ffpc%2Fsource/repository/commits?per_page=3"
+  ],
+  "confidence": 0.6
+}

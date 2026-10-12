@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/daniel-liu-c0deb0t/block-aligner",
+  "one_liner": "Rust SIMD adaptive-block heuristic aligner (affine gaps, profiles); about 2-3x faster than Edlib, 1.5-2x than banded ksw2, approximate.",
+  "what_it_does": "block-aligner computes global or X-drop pairwise alignments with affine gap penalties for DNA, protein or arbitrary byte strings, and can align a sequence to a position-specific scoring matrix (profile with per-position gap open costs). The API is its own: pad both sequences into PaddedBytes, allocate a reusable Block<TRACE, X_DROP> sized for the longest inputs and the maximum block size, call align with a substitution matrix, Gaps and a min..=max block-size range, then read the score and optionally a CIGAR from the traceback. A C API (cbindgen) is included; it is not a drop-in for parasail, ksw2, Edlib or WFA2.",
+  "how_it_is_fast": "Instead of filling the whole DP matrix or a fixed band, it computes only a small square block that greedily shifts right or down depending on which edge holds the larger scores, grows from a saved checkpoint when the scores stall (large gaps, hard regions) and shrinks when a large block is not needed. Each block is filled with SIMD (SSE2, AVX2, Neon or WASM SIMD) using 16-bit score lanes plus 32-bit per-block offsets and a prefix-scan formulation of the gap recurrences, so the computed area stays close to the alignment path. The cost is that the result is heuristic: the block can leave the optimal path and return a suboptimal score.",
+  "when_to_use": [
+    "Global alignment with traceback of noisy long reads (Nanopore, roughly 1-50 kbp at 5-15% error) where an exact aligner's time grows with divergence; the author's notebook shows 2.1-3.4x over Edlib and 1.5-2.1x over 1%-banded ksw2.",
+    "Protein alignment with BLOSUM-style matrices or sequence-to-profile (PSSM) alignment, where WFA-family and bit-parallel edit-distance aligners do not apply; the notebook shows 4-9x over parasail on Uniclust30 and SCOP pairs.",
+    "Batches of alignments in one thread that can reuse one Block allocation sized for the longest pair, on x86-64 (AVX2 or SSE2), aarch64 (Neon) or WebAssembly SIMD.",
+    "X-drop extension around seeds when an approximate score and end position are acceptable."
+  ],
+  "when_not_to_use": [
+    "You need the guaranteed optimal score: the block placement is heuristic, the README says it trades some accuracy for speed, and the maintainer notes repeats and large gaps can mislead it unless the block is made larger.",
+    "Short, low-divergence reads: in the same notebook exact WFA2 was about 8.4x faster on Illumina reads, and in a third-party benchmark (rchikhi/rust-alignbench, 1 kbp random DNA) WFA2 was about 3x faster at 1% divergence.",
+    "Unit-cost edit distance on long DNA, where exact bit-parallel tools (A*PA2, Edlib) or, on the 25 kbp Nanopore set, libgaba and the Suzuki-Kasahara difference-recurrence codes (about 2x faster in the notebook, separate harness) are competitive.",
+    "Very long sequences with traceback on limited memory: the trace arrays hold (max_block/16) x (n+m+2+2*max_block) 32-bit words twice with AVX2, which is about 477 MB for a 50 kbp pair at max block 8192 (derived from Trace::new).",
+    "Large scores: lanes are 16-bit, so very large blocks or scores saturate (README: use a smaller block size); gap penalties are i8 and open must be strictly larger in magnitude than extend."
+  ],
+  "integration": {
+    "form": "crate (block-aligner on crates.io, 0.5.1); C API built from c/ as a static library",
+    "dependencies": "none at runtime (parasailors, rust-wfa2, edlib_rs, ksw2-sys and bio are dev-dependencies for benchmarks only)",
+    "min_toolchain": "Stable Rust, edition 2018 with const generics (no rust-version declared); nightly Rust and Linux or macOS for tests and benchmarks",
+    "platforms": "x86-64 (SSE2 or AVX2), aarch64 (Neon), wasm32 (SIMD128); selected by Cargo feature at compile time, no runtime detection",
+    "thread_safety": "not documented; each Block owns its scratch and trace buffers, so use one instance per thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaws in examples/nanopore_bench_global.rs (behind the DNA numbers): the ksw2 scoring matrix is a zeroed 5x5 array with only mat[0]=2 and mat[1]=-4 set, so ksw_extz2_sse scores A:A=+2, A:C=-4 and every other pair 0 and solves a different problem from block-aligner's +2/-4 matrix (fixed-band fill time is probably little affected, but its scores and paths are meaningless); WFA2 runs with penalties mismatch 4, open 4, extend 2, while the WFA equivalent of the shared +2/-4, gap -6/-2 scheme is mismatch 6, open 4, extend 3, so WFA2 solves an easier lower-penalty problem that likely flatters WFA2.",
+    "Parasail is timed score-only (no traceback, which favours parasail) through parasail_nw_striped_profile_sat, the dispatcher that runs the 8-bit kernel first and recomputes at 16 and 32 bits on overflow; kilobase global scores overflow 8 bits, so parasail's times likely include a discarded pass. Timer placement also differs: in the DNA bench Block::new is outside the timer while Edlib and ksw2 allocate inside it; in uc_bench block-aligner's per-pair allocation is inside the timer and only block-aligner gets warm-up runs.",
+    "No runtime CPU dispatch: building without a SIMD feature hits compile_error, the no_simd feature compiles none of the aligner modules, an AVX2 build crashes on CPUs without AVX2, and two SIMD features enabled at once (possible through Cargo feature unification) would re-export L twice (inferred from lib.rs). Block sizes must be powers of two, at least 32 recommended and at most 16384.",
+    "Open bugs with no maintainer reply: #33 returns an empty CIGAR for 1-2 bp sequences when FREE_QUERY_END_GAPS is set, #34 panics with 'Traceback cigar end position must be in bounds!' on a repetitive query containing an N run with free query gaps, and #15 (open since 2022) says traceback became much slower after a gap-traceback correctness fix."
+  ],
+  "pick_this_over_siblings_when": "Pick block-aligner over A*PA2, bitdp or Sassy when you need affine gaps with substitution matrices or profiles (proteins, PSSMs) or traceback on noisy long reads and can accept an approximate score; pick A*PA2 for exact unit-cost long-read alignment, Sassy for pattern search in text, and note that the same author's triple_accel covers only Hamming and Levenshtein and has no measured claim.",
+  "verified_claims_summary": "In the author's executed notebook (AVX2 build, Rust nightly, CPU not stated, likely an x86-64 Mac), global alignment with traceback at a 1% block took 0.33-29.6 s per dataset versus 2.1-3.4x longer for Edlib, 1.5-2.1x for 1%-banded ksw2 and 5.7-29x for score-only parasail, while exact WFA2 was 8.4x faster on Illumina reads; proteins were 4-9x faster than parasail. A third-party Criterion chart (rchikhi/rust-alignbench, 1 kbp random DNA, block-aligner score-only at a fixed block of 16, no CPU stated) shows block-aligner flat at about 55-57 MB/s from 1% to 10% divergence against WFA2 falling from about 167 to 7.5 MB/s, parasail about 2 MB/s and unbanded ksw2_extz2_sse about 1 MB/s (read from the chart).",
+  "status_note": "Stale: last release 0.5.1 and last commit 2024-06-23, with 2024-2025 bug reports unanswered, but MIT-licensed, dependency-free and on stable Rust, so usable as a crate if you pin the SIMD feature per target and validate scores on your data.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/block-aligner/HEAD/README.md",
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/block-aligner/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/block-aligner/HEAD/examples/nanopore_bench_global.rs",
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/block-aligner/HEAD/examples/uc_bench.rs",
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/block-aligner/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/block-aligner/HEAD/src/scan_block.rs",
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/block-aligner/HEAD/src/avx2.rs",
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/block-aligner/HEAD/src/scores.rs",
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/block-aligner/HEAD/vis/block_aligner_bench_vis.ipynb",
+    "https://github.com/Daniel-Liu-c0deb0t/block-aligner/issues?q=is%3Aissue",
+    "https://github.com/Daniel-Liu-c0deb0t/block-aligner/issues/13",
+    "https://github.com/Daniel-Liu-c0deb0t/block-aligner/issues/15",
+    "https://github.com/Daniel-Liu-c0deb0t/block-aligner/issues/33",
+    "https://github.com/Daniel-Liu-c0deb0t/block-aligner/issues/34",
+    "https://crates.io/api/v1/crates/block-aligner",
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/parasailors-new/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/parasailors-new/HEAD/src/align.rs",
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/parasailors-new/HEAD/src/profile.rs",
+    "https://raw.githubusercontent.com/pairwise-alignment/rust-wfa2/HEAD/src/aligner.rs",
+    "https://github.com/rchikhi/rust-alignbench",
+    "https://raw.githubusercontent.com/rchikhi/rust-alignbench/HEAD/README.md",
+    "https://raw.githubusercontent.com/rchikhi/rust-alignbench/HEAD/analysis/out.png",
+    "https://github.com/rchikhi/rust-alignbench/tree/master/benches",
+    "https://raw.githubusercontent.com/rchikhi/rust-alignbench/HEAD/benches/bench.rs"
+  ],
+  "confidence": 0.85
+}
