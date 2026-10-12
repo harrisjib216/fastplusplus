@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/zaeleus/noodles",
+  "one_liner": "Rust bioinformatics format libraries; noodles-fasta builds samtools-compatible .fai indexes about 6x faster than samtools faidx.",
+  "what_it_does": "noodles is a family of Rust crates for BAM, CRAM, SAM, VCF/BCF, BGZF, FASTA, FASTQ, GFF/GTF, tabix and related formats, usable one by one or through the noodles meta crate with per-format features. The catalogued claim is noodles-fasta's indexer: fasta::fs::index(path) returns an fai::Index, and fai::fs::write writes the same five-column .fai that samtools faidx produces; the io::Indexer type works over any BufRead. It is a library, not a CLI: the benchmarked binary is a small wrapper written by the z-fasta author that calls those two functions.",
+  "how_it_is_fast": "The indexer reads through a BufReader and finds line ends with memchr (SIMD-accelerated byte search) on each buffered chunk, counting a whole line's bases at once and only checking the first byte of each line for '>'. HTSlib 1.24's fai_build_core, which samtools faidx uses, instead pulls every byte through bgzf_getc into a per-character state machine that also tests each byte with isgraph/isspace and inserts names into a hash table to reject duplicates. The samtools build in the comparison is the upstream default -O2 with a shared libhts, and the scaling table suggests roughly 15 ms of fixed samtools startup against about 3.5 ms for the noodles wrapper (derived from page data).",
+  "when_to_use": [
+    "Rust pipelines that need to build or read .fai indexes of large, uniformly wrapped FASTA (genomes, transcriptomes) without shelling out to samtools.",
+    "Batch indexing of many reference or assembly files where samtools' per-file start-up and byte-at-a-time scan dominate (about 2.2 GB/s against 0.37 GB/s on GRCh38, warm cache).",
+    "Projects that already use noodles for BAM, CRAM or VCF and want one consistent, MIT-licensed Rust dependency for reference handling.",
+    "Low-memory environments: peak RSS was 3.6 MiB on the genome against 9.3 MiB for samtools."
+  ],
+  "when_not_to_use": [
+    "FASTA with ragged line widths, trailing whitespace or mixed LF/CRLF endings: the indexer rejects them (as samtools does); a lenient tool such as z-fasta's .zfi mode is needed.",
+    "bgzip-compressed FASTA: fs::index opens the file as plain text and writes no .gzi, while samtools faidx indexes BGZF FASTA directly; region queries on bgzipped FASTA were also far slower than samtools in issue #146 (12.8 s against 0.024 s before PR #147 in 2023, still about 10x slower after it).",
+    "You need a command-line tool: noodles ships examples, not a supported faidx binary, and its README calls the API experimental.",
+    "Maximum indexing speed: in the same benchmark the Zig z-fasta indexer is about 3.6x faster than noodles on the genome."
+  ],
+  "integration": {
+    "form": "crate (noodles-fasta 0.67.0, or the noodles meta crate with the fasta feature)",
+    "dependencies": "bstr, memchr, noodles-bgzf, noodles-core; tokio only with the async feature",
+    "min_toolchain": "Rust 1.91.0 (workspace rust-version), edition 2024",
+    "platforms": "any platform Rust supports (pure Rust; memchr picks SIMD paths at run time)",
+    "thread_safety": "not documented; the Indexer owns its reader and is used from one thread",
+    "drop_in_for_baseline": "partial — writes a samtools-compatible .fai for well-formed uncompressed FASTA, but it is a library call, not the samtools faidx CLI, and does not handle bgzipped input or .gzi files"
+  },
+  "gotchas": [
+    "Output parity with samtools was never checked for noodles: the z-fasta report's byte comparison of .fai files covers only z-fasta, and its messy-FASTA table records exit codes, not output.",
+    "Semantics differ at the edges: HTSlib counts only isgraph characters as bases, warns and keeps the first of duplicate sequence names, and skips whitespace after '>'; noodles counts every byte of a line except a trailing CR and has no duplicate-name check in the indexer code read.",
+    "The small-file ratios are mostly process start-up (1 MiB: 3.7 ms against 17.5 ms); the asymptotic gap is about 7x per MiB.",
+    "noodles' API is versioned 0.x and changes often (fasta 0.66.0 was measured, 0.67.0 is current), so pin versions."
+  ],
+  "pick_this_over_siblings_when": "Among the bioinformatics siblings (mosdepth for depth, sambamba and mako against samtools view/sort, rasusa for subsampling), noodles is the one to pick when you need a Rust library rather than a finished command-line tool, here for FASTA indexing; pick z-fasta instead when raw indexing speed or tolerance of messy FASTA matters more than a broad format library.",
+  "verified_claims_summary": "An independent benchmark in the z-fasta repository (zebrac v0.6.2, 5 samples after 3 warmups, warm cache, AMD Ryzen 9 3950X per the z-fasta README) timed 'rm -f x.fai; tool index x' for a noodles-fasta 0.66.0 wrapper (cargo release profile, rustc version not stated) and samtools 1.24 faidx (HTSlib 1.24, default -O2, compiler not stated): GRCh38 primary assembly 1.364 s against 8.161 s (about 6.0x), GENCODE v46 transcripts 0.411 s against 1.711 s (about 4.2x), UniProt human proteome 0.018 s against 0.065 s (about 3.7x).",
+  "status_note": "Actively maintained (last commit 2026-10-08), MIT-licensed and widely used (727 stars, about 485k noodles-fasta downloads), but still a 0.x API that its author calls experimental.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/eneskemalergin/z-fasta/HEAD/bench/index/REPORT.md",
+    "https://raw.githubusercontent.com/eneskemalergin/z-fasta/HEAD/bench/index/run.sh",
+    "https://raw.githubusercontent.com/eneskemalergin/z-fasta/HEAD/tools/noodles_wrapper/src/main.rs",
+    "https://raw.githubusercontent.com/zaeleus/noodles/master/README.md",
+    "https://raw.githubusercontent.com/zaeleus/noodles/master/Cargo.toml",
+    "https://raw.githubusercontent.com/zaeleus/noodles/master/noodles-fasta/Cargo.toml",
+    "https://raw.githubusercontent.com/zaeleus/noodles/master/noodles-fasta/src/fs/index.rs",
+    "https://raw.githubusercontent.com/zaeleus/noodles/master/noodles-fasta/src/io/indexer.rs",
+    "https://raw.githubusercontent.com/samtools/htslib/1.24/faidx.c",
+    "https://github.com/zaeleus/noodles/issues?q=is%3Aissue+fasta+index",
+    "https://github.com/zaeleus/noodles/issues/146"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/victoriametrics/victorialogs",
+  "one_liner": "Go Kubernetes log collector for VictoriaLogs; about 4x less CPU than Fluent Bit per log at 10k logs/s in a vendor-run benchmark.",
+  "what_it_does": "vlagent is a DaemonSet agent shipped inside the VictoriaLogs repository (app/vlagent, deployed by the victoria-logs-collector Helm chart). With -kubernetesCollector it discovers Pods on its node, tails the CRI log files under /var/log/containers and /var/log/pods, parses JSON log lines into fields, attaches Pod and node metadata, and ships the rows to one or more -remoteWrite.url targets in the native VictoriaLogs protocol or as zstd-compressed JSON lines. It also accepts logs over the VictoriaLogs HTTP ingestion protocols on port 9429, tails plain files via a file collector, replicates to several destinations and buffers to disk when a destination is down. It is not a drop-in Fluent Bit replacement: configuration is command-line flags and Helm values, not Fluent Bit pipelines, and the output side targets VictoriaLogs or jsonline-over-HTTP receivers.",
+  "how_it_is_fast": "The repo and docs give no explanation; the source shows a narrow, purpose-built pipeline: a hand-written CRI line parser with a fast path for unsplit lines (partial lines are joined only on the slow path, capped at 2 MiB), JSON parsing with VictoriaLogs' pooled logstorage JSON parser and valyala/fastjson, zero-copy byte-to-string conversion (bytesutil.ToUnsafeString), sync.Pool-recycled buffers and parsers, and Pod metadata computed once per log file as common fields instead of per record. Output batches are compressed with zstd in jsonline mode, while the Fluent Bit config in the same benchmark compresses with gzip, so part of the CPU gap is the codec. values/vlagent.yml says the native VictoriaLogs format would cut CPU by about another 20%.",
+  "when_to_use": [
+    "Collecting Kubernetes container logs into VictoriaLogs where per-node collector CPU and memory matter (about 0.05 cores and 32 MiB average RSS at 10k JSON lines per second in the vendor run).",
+    "Log volumes per node in the tens to low hundreds of thousands of JSON lines per second on a 1-CPU budget (about 178k logs/s peak in the vendor throughput case).",
+    "You need replication to several VictoriaLogs instances with on-disk buffering during outages, without adding a separate aggregation tier.",
+    "Mostly JSON or klog-formatted container output, which vlagent parses and maps to _msg and _time automatically."
+  ],
+  "when_not_to_use": [
+    "You need Fluent Bit's breadth: many inputs, filters, Lua or WASM processing, and outputs to Elasticsearch, Kafka, S3, Loki and so on; vlagent only writes VictoriaLogs native or jsonline over HTTP.",
+    "Log files rotated with copytruncate or compressed .gz files: the docs say copytruncate is not fully supported and .gz files are not read.",
+    "Syslog or CEF over TCP ingestion: open issues #1697 (CEF messages corrupted when several arrive in one TCP read) and #1365 (embedded newlines split into fragments).",
+    "Non-Kubernetes edge or embedded hosts where a small C binary with a mature plugin ecosystem is the requirement; vlagent is young (bug-fix panics were still being closed in October 2026)."
+  ],
+  "integration": {
+    "form": "Go binary (vlagent-prod in the vlutils release archive; Docker images victoriametrics/vlagent; Helm chart vm/victoria-logs-collector)",
+    "dependencies": "none at runtime beyond the Kubernetes API for Pod discovery; built from the VictoriaLogs Go module (VictoriaMetrics lib, valyala/fastjson)",
+    "min_toolchain": "Go toolchain of the VictoriaLogs repo to build from source (version not documented in the files read); prebuilt binaries and images need none",
+    "platforms": "Linux amd64 and arm64 images (multiarch build directory); the file collector also runs outside Kubernetes",
+    "thread_safety": "not applicable (standalone agent process)",
+    "drop_in_for_baseline": "partial — replaces the Fluent Bit DaemonSet role for Kubernetes Pod logs bound for VictoriaLogs or a jsonline HTTP receiver, but uses its own flags and Helm values and has no Fluent Bit plugin compatibility"
+  },
+  "gotchas": [
+    "Harness detail the record misreads: AvgCPUUsage in the throughput case is avg_over_time of the CPU rate across the whole ramp (bench start through saturation, then one idle minute), not CPU at the peak. Scaling the resources-case cost per log (about 4.5 microseconds of CPU for vlagent, 18.7 for Fluent Bit, derived from page data) puts vlagent near 0.8 cores at its 178k logs/s peak and Fluent Bit near 0.77 cores when it was OOM-killed at 41k, so both were approaching the 1-CPU limit; a Fluent Bit run that did not OOM would top out near 53k logs/s at 1 core by the same arithmetic, making the throughput gap closer to 3.3x than 4.3x (rough estimate, not a measurement).",
+    "Throughput is max_over_time of a 1-minute receive rate sampled every 10 s, a peak rather than a sustained rate, and each case is one run on one c2d-highcpu-8 node (8 vCPUs) shared with the 50 generator Pods, log-verifier, VictoriaMetrics and Grafana; vlagent's nearly identical ceiling in all three rounds (176.7k to 178.3k) may partly reflect the node rather than the agent.",
+    "The Fluent Bit throughput figure in all committed rounds is an OOM failure point: values/fluent-bit.yml gained Mem_Buf_Limit 512MB only after the results were produced, and no post-fix results are committed (results/ holds only 2026-08-12, 2026-09-16 and 2026-09-17). The Fluent Bit config also runs the docker and cri multiline parsers and gzip, versus zstd for vlagent.",
+    "Panics on a deleted collected file ending without a newline (#1552) and on unreadable files during rotated-file lookup (#1796) were closed on 2026-10-01, after the benchmarked v1.52.0; use a later release."
+  ],
+  "pick_this_over_siblings_when": "Against the Vector-versus-Fluent-Bit sibling: pick vlagent when the sink is VictoriaLogs and node CPU is the constraint; in this same VictoriaMetrics harness on 2026-09-17, Vector v0.58.0 used 0.288 cores and 106 MiB average RSS at 10k logs/s and peaked at 32k logs/s, worse than Fluent Bit, so the Rust collector's win in its own harness does not carry over here. Pick Vector when you need its transform language and many sinks.",
+  "verified_claims_summary": "In VictoriaMetrics' own log-collectors-benchmark (kind cluster on a c2d-highcpu-8 GCP VM per the results-page template, each collector capped at 1 CPU and 1 GiB, prebuilt Helm images), vlagent v1.52.0 shipping 10 Pods x 1000 JSON lines/s for one hour averaged 0.048 cores and 31.6 MiB RSS against Fluent Bit v5.0.9's 0.204 cores and 53.5 MiB with zero versus 3 lost lines; in the ramp-to-saturation case vlagent peaked at about 178k logs/s while Fluent Bit was OOM-killed at about 41k logs/s with a later-fixed buffer config.",
+  "status_note": "Actively developed inside the Apache-2.0 VictoriaLogs repo (last commit 2026-10-09, 2.4k stars) with releases every few weeks and a steady flow of closed bug reports; the benchmark is first-party, single-run and vendor-published, so treat the 4x CPU figure as indicative and re-run the harness (go run ./bench-runner, about 10 hours) with your own Fluent Bit tuning before relying on it.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/VictoriaMetrics/log-collectors-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/VictoriaMetrics/log-collectors-benchmark/HEAD/values/fluent-bit.yml",
+    "https://raw.githubusercontent.com/VictoriaMetrics/log-collectors-benchmark/HEAD/values/vlagent.yml",
+    "https://raw.githubusercontent.com/VictoriaMetrics/log-collectors-benchmark/HEAD/results/2026-09-17/vlagent-throughput.json",
+    "https://raw.githubusercontent.com/VictoriaMetrics/log-collectors-benchmark/HEAD/results/2026-09-17/fluent-bit-throughput.json",
+    "https://raw.githubusercontent.com/VictoriaMetrics/log-collectors-benchmark/HEAD/results/2026-09-17/vlagent-resources.json",
+    "https://raw.githubusercontent.com/VictoriaMetrics/log-collectors-benchmark/HEAD/results/2026-09-17/fluent-bit-resources.json",
+    "https://raw.githubusercontent.com/VictoriaMetrics/log-collectors-benchmark/HEAD/results/2026-09-17/vector-throughput.json",
+    "https://raw.githubusercontent.com/VictoriaMetrics/log-collectors-benchmark/HEAD/results/2026-09-17/vector-resources.json",
+    "https://github.com/VictoriaMetrics/log-collectors-benchmark/tree/main/bench-runner",
+    "https://raw.githubusercontent.com/VictoriaMetrics/log-collectors-benchmark/HEAD/bench-runner/main.go",
+    "https://raw.githubusercontent.com/VictoriaMetrics/log-collectors-benchmark/HEAD/bench-runner/report.go",
+    "https://raw.githubusercontent.com/VictoriaMetrics/log-collectors-benchmark/HEAD/bench-runner/exec.go",
+    "https://raw.githubusercontent.com/VictoriaMetrics/log-collectors-benchmark/HEAD/bench-runner/index.go",
+    "https://raw.githubusercontent.com/VictoriaMetrics/log-collectors-benchmark/HEAD/bench-runner/index.gohtml",
+    "https://github.com/VictoriaMetrics/log-collectors-benchmark/tree/master/results",
+    "https://github.com/VictoriaMetrics/VictoriaLogs/tree/master/app/vlagent",
+    "https://github.com/VictoriaMetrics/VictoriaLogs/tree/master/app/vlagent/kubernetescollector",
+    "https://raw.githubusercontent.com/VictoriaMetrics/VictoriaLogs/HEAD/app/vlagent/kubernetescollector/processor.go",
+    "https://raw.githubusercontent.com/VictoriaMetrics/VictoriaLogs/HEAD/app/vlagent/kubernetescollector/README.md",
+    "https://raw.githubusercontent.com/VictoriaMetrics/VictoriaLogs/HEAD/docs/victorialogs/vlagent.md",
+    "https://github.com/VictoriaMetrics/VictoriaLogs/issues?q=is%3Aissue+vlagent+label%3Abug"
+  ],
+  "confidence": 0.7
+}
