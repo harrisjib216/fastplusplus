@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/schell/mogwai",
+  "one_liner": "Rust/Wasm browser GUI crate without a virtual DOM; its 2023 benchmark build beats React 19.2 hooks, but not vanilla JS.",
+  "what_it_does": "mogwai builds browser (and server-side rendered) user interfaces in Rust compiled to WebAssembly. Views are declared with an rsx! macro, widgets are plain Rust structs generic over a View trait, events are awaited as futures instead of registered as callbacks, and Proxy values rewrite only the DOM nodes bound to them. It is a framework, not a drop-in for React: you write the whole UI in Rust and compile with wasm-bindgen/trunk.",
+  "how_it_is_fast": "There is no virtual DOM diff: views create real DOM nodes through web-sys once, and updates go straight to the bound text or attribute (fine-grained reactivity). In the measured 0.6.5/mogwai-dom 0.2 build, lists are a ListPatchModel whose remove, replace and insert patches move existing DOM nodes, which is why swapping two of 1,000 rows costs 13.0 ms against 89.7 ms for React's keyed reconciliation. The benchmark app also uses two app-level tricks: one delegated click handler on the container that reads a 'key' attribute, and a pool that keeps cleared or removed Row objects with their DOM nodes and reuses them for new rows.",
+  "when_to_use": [
+    "A Rust-only team building an interactive browser UI that wants no JavaScript framework and no virtual DOM.",
+    "Lists that are reordered or patched in place (swaps, single-row inserts and removals), where direct DOM patching beats React's keyed diff by a wide margin.",
+    "Code that should render both in the browser and on the server from the same widget types (the ssr feature).",
+    "Small to medium apps where an async, futures-based event model fits better than callback closures."
+  ],
+  "when_not_to_use": [
+    "You need the fastest DOM code: vanilla JavaScript is faster on all nine CPU benchmarks (about 1.31x less time on geometric mean), and other Rust/Wasm entries in the same run (spair 0.662x, Leptos 0.684x, Dioxus 0.698x, Sycamore 0.711x of React's time) edge out mogwai's 0.719x.",
+    "Startup, memory or download size matter: the measured build paints first at 306 ms against 227 ms for React, uses 9.65 MB against 4.37 MB after running, and ships 66.3 against 51.4 compressed units.",
+    "Large appends: appending 1,000 rows to 1,000 takes 37.8 ms against 29.3 ms for React.",
+    "You want benchmark numbers that describe the current crate: the suite measures mogwai 0.6.5 from 2023, and 0.8.0 (2026) has a different API that has not been submitted.",
+    "Projects that need a mature ecosystem: three open issues, a small user base (about 427 stars) and a single main author."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "wasm-bindgen, wasm-bindgen-futures and web-sys (web feature), async-channel (ssr feature), futures-core, mogwai-macros",
+    "min_toolchain": "Rust edition 2024 (rustc 1.85+) for mogwai 0.8.0, wasm32-unknown-unknown target, wasm-bindgen; trunk recommended",
+    "platforms": "browsers through wasm32-unknown-unknown; native targets for server-side rendering",
+    "thread_safety": "not documented; browser code runs on the single JS thread via wasm_bindgen_futures::spawn_local",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The measured keyed entry recycles DOM rows: mogwai-js-framework-benchmark 0.1.0 (src/lib.rs, the App the suite builds) moves cleared and removed Row objects with their captured <tr> nodes into an 11,000-slot cache and dequeue() reuses them for new ids and labels. The suite warms up 'create rows' with run and clear, and 'replace all rows' with repeated runs, so the timed create and replace reattach 1,000 recycled rows instead of building new ones (1,000 of 10,000 in 'create many rows'). The suite's keyed check only counts added and removed <tr> mutations, so it passes, yet this breaks the 1:1 data-item-to-DOM-node rule that defines keyed mode. Dropping those three benchmarks still leaves mogwai at 0.635x React's time, so the React claim survives, but the replace-all win (26.3 vs 30.2 ms) rests on the recycling.",
+    "The same app uses manual event delegation (one click handler on #main matching #run, .lbl and .remove and parsing a 'key' attribute) and keeps selection state on each row model, which the suite flags for other entries as notes #801 and #800; the mogwai entry carries only note #1139 (strict CSP).",
+    "The benchmark app in the current repository (crates/mogwai-js-framework-benchmark 0.2.0, mogwai 0.8) is non-keyed: its swap copies ids and labels between rows 1 and 998, and clear empties the tbody with set_text_content; it also logs at Trace level on every click. If submitted, it belongs in the non-keyed table.",
+    "No LICENSE file at the repository root; the MIT licence comes from Cargo.toml metadata (the benchmark app crate is MIT OR Apache-2.0)."
+  ],
+  "pick_this_over_siblings_when": "Against spair, the only Rust/Wasm UI sibling catalogued here, mogwai is slightly slower on the same suite run (0.719x against 0.662x of React's time) but has a newer release (0.8.0, September 2026) and server-side rendering; pick it for its futures-based event model, not for speed.",
+  "verified_claims_summary": "In krausest/js-framework-benchmark (MacBook Pro 14 M4, Chrome 154, development snapshot), the keyed mogwai 0.6.5 entry has a median total duration geometric mean of 0.719x React 19.2 hooks over the nine CPU benchmarks (recomputed here from results.ts), driven by swap rows (13.0 vs 89.7 ms), select (3.3 vs 5.4 ms) and update every 10th row (11.5 vs 14.7 ms), and is 1.31x slower than vanillajs-keyed. Create and replace-all timings benefit from the app's DOM row pool, and the prebuilt wasm bundle's toolchain is not recorded.",
+  "status_note": "Actively developed (0.8.0 released 2026-09-26, three open issues), MIT-licensed per crates.io metadata, but the only public speed data describe the 2023 0.6.5 release built with an app that recycles rows and delegates events by hand.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/schell/mogwai/HEAD/README.md",
+    "https://raw.githubusercontent.com/schell/mogwai/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/schell/mogwai/HEAD/crates/mogwai/Cargo.toml",
+    "https://raw.githubusercontent.com/schell/mogwai/HEAD/crates/mogwai-benches/Cargo.toml",
+    "https://raw.githubusercontent.com/schell/mogwai/HEAD/crates/mogwai-js-framework-benchmark/Cargo.toml",
+    "https://raw.githubusercontent.com/schell/mogwai/HEAD/crates/mogwai-js-framework-benchmark/src/lib.rs",
+    "https://raw.githubusercontent.com/schell/mogwai/HEAD/crates/mogwai-js-framework-benchmark/src/app.rs",
+    "https://github.com/schell/mogwai/issues",
+    "https://crates.io/api/v1/crates/mogwai-js-framework-benchmark/versions",
+    "https://static.crates.io/crates/mogwai-js-framework-benchmark/mogwai-js-framework-benchmark-0.1.0.crate",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/mogwai/Cargo.toml",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/mogwai/package.json",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/mogwai/index.html",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/mogwai/src/lib.rs",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/webdriver-ts/src/isKeyed.ts",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/webdriver-ts/src/benchmarksPuppeteer.ts",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/webdriver-ts-results/src/results.ts",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/webdriver-ts-results/src/Common.ts",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/webdriver-ts-results/src/helpers/issues.ts"
+  ],
+  "confidence": 0.8
+}

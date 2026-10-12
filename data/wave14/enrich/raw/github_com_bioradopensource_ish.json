@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/bioradopensource/ish",
+  "one_liner": "Mojo grep-like CLI that filters lines or FASTA/FASTQ records by striped-SIMD alignment score; slightly beats parasail_aligner at matched costs.",
+  "what_it_does": "ish takes a pattern plus files or directories and prints every line (line mode, like grep) or every FASTA/FASTQ record (fastx mode) whose best alignment score, divided by the pattern's optimal score, reaches --score (default 0.8). It offers striped semi-global alignment with configurable free ends (default: target ends free) and striped local (Smith-Waterman) alignment with affine gaps and ascii, actgn, actgn0 or blosum62 scoring, multithreaded batches, and an optional GPU path for semi-global. It is a command-line filter, not a drop-in for parasail's C API; the ishlib Mojo package can be built but is not documented as a library.",
+  "how_it_is_fast": "The kernels are Farrar's striped SIMD alignment (query profile laid out in striped segments, SWPS3-style lazy-F correction loop), refined as in SSW and modelled on parasail, written with Mojo SIMD types and LLVM saturating add/subtract intrinsics. The CLI's semi-global path runs a 16-bit (int16) profile with saturation checks compiled out, and runs the reverse pass that locates the match start only when the forward score clears the cutoff. Vector width is a compile-time choice (ISH_SIMD_TARGET sse, avx256, avx512, or native); the lazy-F loop runs up to one pass per lane, so narrow SSE vectors suit short patterns. Both sides of the parasail comparison run the same algorithm, and no source read explains where ish's small edge comes from.",
+  "when_to_use": [
+    "Shell pipelines that need a fuzzy grep by affine-gap alignment score, e.g. finding a primer, barcode or guide sequence with mismatches and indels in reads or assemblies (actgn matrix, fastx mode).",
+    "Protein queries scored with BLOSUM62 against FASTA databases, filtering records by local or semi-global score rather than computing full alignments.",
+    "Single-pattern CPU scans at small gap penalties (open 3, extend 1), where Sassy's evals measured ish's SSE build at 69 s against 81-198 s for parasail_aligner's striped sg_dx variants at the same costs.",
+    "Many target records on a machine with a Mojo-supported GPU; the author says the GPU path pays off with many reference sequences (e.g. a protein database), not for one query against one genome."
+  ],
+  "when_not_to_use": [
+    "Pure edit-distance pattern search in whole genomes: in issue #54 Sassy took 2 s wall for a 23 bp pattern with up to 4 errors where ish took about 60 s wall (200 s CPU) on the same 3 Gbp genome.",
+    "You need every hit: the CLI reports only the single best match per line or record, so a chromosome-sized FASTA record yields at most one hit.",
+    "Multicore scaling matters: Mojo's parallelize runtime caps ish at about half the cores (300% CPU on a 6-core machine, issue #54, still open, blocked on upstream Mojo).",
+    "You can use parasail at its default costs (match 1, mismatch 0, open 10, extend 1): it took 53-69 s there, as fast as or faster than ish's 69 s best.",
+    "You need a C/C++ library, a stable toolchain or releases: ish requires pixi or conda with a pinned Mojo (0.25.6 at HEAD), has no tagged releases, and its ish-aligner benchmark tool is marked development-only."
+  ],
+  "integration": {
+    "form": "CLI binary built from Mojo source (pixi run build) or a conda package from the modular-community channel; ishlib can be packaged as a Mojo module",
+    "dependencies": "Mojo compiler (pinned =0.25.6 at v1.4.0), extramojo 0.18.0, pixi or conda; parasail, autotools and the UniProt 2015_11 data only for the benchmark tasks",
+    "min_toolchain": "Mojo 0.25.6 at HEAD (v1.2.0 to v1.3.x used Mojo 25.4); Linux x86-64 per the issue reports; the README recommends building from source over the conda package for speed",
+    "platforms": "x86-64 with SSE, AVX2 or AVX-512 (width chosen at build time; Mojo emulates wider vectors if the CPU lacks them); GPU path needs a Mojo-supported GPU; macOS and aarch64 not documented",
+    "thread_safety": "not documented; the CLI parallelizes over record batches with --threads (default: physical cores) and --batch-size",
+    "drop_in_for_baseline": "partial — same striped semi-global and local algorithms and scoring options as parasail, but exposed as a grep-style filter that returns matching records, not parasail's C API or parasail_aligner's pairwise score output"
+  },
+  "gotchas": [
+    "Build width matters more than expected: the default 'pixi run build' uses the native width (AVX-512 where present), yet Sassy measured the AVX2 build at 110 s against 69 s for -D ISH_SIMD_TARGET=sse on a 23 bp pattern; a native-width build also segfaulted with the actgn matrix on an AVX-512 Xeon Gold 6240 until a June 2025 fix (issue #50).",
+    "Output is not byte-identical to input: matched records are printed after an encoding round-trip, so under actgn lowercase soft-masked bases come out uppercase and letters outside ACGTU come out as N; each FASTA sequence is written on one line, and the match is highlighted with ANSI colour codes only when stdout is a terminal.",
+    "The CLI semi-global path uses only the int16 profile with do_saturation_check=False and no 8-bit or 32-bit fallback, so very long patterns could clamp silently near the int16 limit (inferred from the code, not tested).",
+    "Harness flaw in the repo's own benchmark (benchmarking/bench_scripts/bench.py, which the paper's GCUPS comparison presumably used): parasail_aligner is called with non-profile function names, so its 'alignment time' rebuilds the query profile for every target pair and includes result output, while ish-aligner builds profiles before its timer, flushes output after it, and reports the mean of 3 iterations against parasail's single run; no results or hardware are stored, so the paper's 'meets or exceeds parasail' GCUPS claim cannot be checked from the repo."
+  ],
+  "pick_this_over_siblings_when": "None of the numerics-and-arrays siblings is a sequence aligner; the Mojo siblings (llama2.mojo, llm.mojo, mojo-analyze) share only the toolchain, so pick ish when the job is score-thresholded alignment filtering. The catalogued Sassy entry (wave 14) is orders of magnitude faster for edit-distance search of short patterns, so pick ish only when you need affine gaps, scoring matrices such as BLOSUM62 or local alignment.",
+  "verified_claims_summary": "In the Sassy paper's evals README, Sassy's authors timed one 23 bp DNA pattern searched single-threaded across T2T CHM13 v2.0: ish (commit 92f4fad, 16-bit striped semi-global, match 2, mismatch -2, gap open 3, extend 1) took 69 s with an SSE build and 110 s with AVX2, against 81-198 s for parasail_aligner's four sg_dx striped variants (SSE4.1 and AVX2, 8- and 16-bit) at the same costs (best against best 1.17x, derived from page data) and 53-69 s at parasail's default costs. Wall times come from 'time' and include FASTA parsing for both tools; CPU model, compiler flags, repetition count and the per-variant split of the parasail range are not given, and the ish paper's own GCUPS numbers were not reachable.",
+  "status_note": "Apache-2.0 and single-author (Bio-Rad), last commit 2025-10-31 (v1.4.0, Mojo 0.25.6) with one open issue and no releases, so it is maintained but tied to a fast-moving pinned Mojo toolchain; usable as a CLI, not as a library to vendor into C++.",
+  "sources_read": [
+    "https://github.com/BioRadOpenSource/ish",
+    "https://github.com/BioRadOpenSource/ish/commits/main",
+    "https://github.com/BioRadOpenSource/ish/issues?q=is%3Aissue",
+    "https://github.com/BioRadOpenSource/ish/issues/54",
+    "https://github.com/BioRadOpenSource/ish/issues/50",
+    "https://github.com/BioRadOpenSource/ish/tree/main/ishlib",
+    "https://github.com/BioRadOpenSource/ish/tree/main/ishlib/matcher",
+    "https://github.com/BioRadOpenSource/ish/tree/main/ishlib/matcher/alignment",
+    "https://github.com/BioRadOpenSource/ish/tree/main/benchmarking",
+    "https://raw.githubusercontent.com/BioRadOpenSource/ish/HEAD/README.md",
+    "https://raw.githubusercontent.com/BioRadOpenSource/ish/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/BioRadOpenSource/ish/HEAD/pixi.toml",
+    "https://raw.githubusercontent.com/BioRadOpenSource/ish/HEAD/BENCHMARKING.md",
+    "https://raw.githubusercontent.com/BioRadOpenSource/ish/HEAD/benchmarking/bench_scripts/bench.py",
+    "https://raw.githubusercontent.com/BioRadOpenSource/ish/HEAD/benchmarking/ish_bench_aligner.mojo",
+    "https://raw.githubusercontent.com/BioRadOpenSource/ish/HEAD/ishlib/matcher/striped_semi_global_matcher.mojo",
+    "https://raw.githubusercontent.com/BioRadOpenSource/ish/HEAD/ishlib/matcher/alignment/semi_global_aln/striped.mojo",
+    "https://raw.githubusercontent.com/BioRadOpenSource/ish/HEAD/ishlib/matcher/alignment/scoring_matrix.mojo",
+    "https://raw.githubusercontent.com/BioRadOpenSource/ish/HEAD/ishlib/matcher/__init__.mojo",
+    "https://raw.githubusercontent.com/BioRadOpenSource/ish/HEAD/ishlib/fastx_search_runner.mojo",
+    "https://raw.githubusercontent.com/RagnarGrootKoerkamp/sassy/HEAD/evals/README.md",
+    "https://raw.githubusercontent.com/jeffdaily/parasail/HEAD/apps/parasail_aligner.cpp",
+    "WebSearch snippet: Ish: SIMD and GPU accelerated local and semi-global alignment as a CLI filtering tool (Bioinformatics Advances, PMC12930471; full text unreachable)"
+  ],
+  "confidence": 0.65
+}

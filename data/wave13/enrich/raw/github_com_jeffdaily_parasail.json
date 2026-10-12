@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/jeffdaily/parasail",
+  "one_liner": "C99 SIMD library of local, global and semi-global pairwise sequence alignment kernels; beats SSW on protein database search.",
+  "what_it_does": "Computes Smith-Waterman, Needleman-Wunsch and 13 semi-global variants for pairs of DNA or protein sequences, with score-only, statistics (matches, similarities, length), DP-table, last-row/column and traceback (SAM CIGAR) flavours. Functions are named by algorithm, vector strategy (striped, scan, diagonal, blocked), instruction set and integer width, e.g. parasail_sw_striped_profile_avx2_256_16; names without an instruction set dispatch at runtime. Query profiles can be built once and reused across many targets, and parasail_ssw/parasail_ssw_profile emulate SSW's result struct (minus the secondary score). It is not a drop-in for SSW: the API, result type and gap-penalty convention differ.",
+  "how_it_is_fast": "Intra-sequence (query-parallel) vectorization: Farrar's striped layout (2007), the author's prefix-scan formulation (Daily 2015), anti-diagonal (Wozniak 1997) and blocked (Rognes and Seeberg 2000) kernels, each written for SSE2, SSE4.1, AVX2, AltiVec and NEON with 8, 16, 32 and 64-bit lanes. A reusable query profile removes per-target substitution lookups, and the 'sat' variants run 8-bit lanes first (32 lanes on AVX2) and redo the alignment at 16 bits only when the score overflows. The benchmarked win over SSW comes mostly from 256-bit AVX2 lanes and from skipping the 8-bit first pass on long queries.",
+  "when_to_use": [
+    "Protein or DNA database search where one query is aligned against many targets: build a profile once and call the striped profile functions per target.",
+    "You need several alignment modes (local, global, semi-global with free end gaps on either sequence) from one library with one calling convention.",
+    "x86-64 hosts with AVX2 where queries are a few hundred residues or longer: the AVX2 16-bit striped kernel was 2.1x to 2.4x faster than SSW at 195-513 residues on Haswell.",
+    "You want to compare vectorization strategies (striped vs scan vs diagonal) for your own sequence-length mix; parasail ships all of them behind the same API.",
+    "Python, Java or Rust callers who want a maintained binding (parasail-python, parasail-java, parasailors) to the same kernels."
+  ],
+  "when_not_to_use": [
+    "Pure many-target protein database search on SSSE3-class hardware: SWIPE (inter-sequence vectorization) was faster than parasail SSE4.1 16-bit on every query in the MacBook table, and the author's own text says SWIPE remains fastest for that problem.",
+    "Long-read or highly similar DNA alignment: banded or difference-recurrence methods such as ksw2 or wavefront alignment (WFA2-lib) do far less work than a full striped DP.",
+    "Hosts with AVX-512 or modern Apple Silicon expecting tuned kernels: there are no AVX-512 kernels (issue #80 open since 2020) and Apple M1 install problems are open (#85, #89).",
+    "Pipelines that need the SSW secondary (suboptimal) score: parasail's SSW emulation omits it.",
+    "Projects that need an OSI-approved licence: the Battelle BSD-style licence adds a clause that redistributions and publications should cite the 2016 BMC Bioinformatics paper."
+  ],
+  "integration": {
+    "form": "static lib | shared lib (autotools preferred; CMake and contributed Meson builds also provided)",
+    "dependencies": "none for the library; zlib optional (gzipped FASTA/FASTQ parsing), OpenMP optional (multi-threaded parasail_aligner)",
+    "min_toolchain": "C99 compiler; CMakeLists.txt declares CMake 3.2 as minimum (open issue #114 reports that minimum as too old for current CMake); Windows via CMake and Visual Studio 2010-2013 as tested in the README",
+    "platforms": "x86 and x86-64 (SSE2, SSE4.1, AVX2 with runtime CPU dispatch), POWER (AltiVec), ARM and aarch64 (NEON; cross-compilation documented); no AVX-512 kernels",
+    "thread_safety": "not documented in the README; parasail_aligner calls the profile functions concurrently from OpenMP threads on shared read-only profiles, each call allocating its own result",
+    "drop_in_for_baseline": "partial — parasail_ssw and parasail_ssw_profile return an SSW-like struct with CIGAR but no secondary score, under a different API and profile type; the core functions are not SSW-compatible"
+  },
+  "gotchas": [
+    "Width choice is the caller's job: _8 and _16 kernels can saturate, so check parasail_result_is_saturated() or use _sat; open issue #111 (2025) reports parasail_sg_qb_db_diag_avx2_256_16 returning -32757 instead of 21 with the saturated flag at 0, which the maintainer agreed would be a bug.",
+    "Calling an instruction-set-specific function on a CPU that lacks the extension returns NULL with errno ENOSYS rather than faulting; unchecked NULL results crash later. Gap opening applies only the open penalty (README note), which differs from BLAST-style G+kE conventions used by tools such as SWIPE.",
+    "Harness flaw in the SSW baseline: SSW's ssw_test (current src/main.c) starts its clock() timer before the loop that re-opens and parses the whole database FASTA for each query, so database parsing sits inside SSW's timed region although performance.md says read time was not measured (only output suppression is mentioned as a modification). ssw_test also computes SSW's suboptimal score (maskLen = readLen/2) on every target, work parasail skips. Both inflate SSW's times by an unquantified amount.",
+    "Strategy mismatch behind the headline: ssw_test builds its profile with score_size 2 (8-bit first, 16-bit on overflow), which is the same strategy as parasail's 'sat' rows; like for like, parasail SSE4.1 sat is slower than SSW at 390 and 513 residues on Haswell (44.4 vs 41.5 s and 55.2 vs 48.7 s), and the faster parasail rows skip the 8-bit pass entirely."
+  ],
+  "pick_this_over_siblings_when": "Pick parasail over SSW when you want AVX2 kernels, several alignment modes or reusable profiles for database search, and over ksw2 or WFA2-lib when sequences are short-to-medium proteins and you need exact full DP across local, global and semi-global modes; pick ksw2 for global nucleotide alignment with banding (its README measures it ahead of parasail) and WFA2-lib for long similar sequences.",
+  "verified_claims_summary": "On a 2.3 GHz Xeon E5-2670 v3 with Intel ICC 15.0.1 -O3, one thread, BLOSUM50, gap open 3 and extend 1, score-only search of four queries (110-513 residues) against 547,964 Swiss-Prot sequences took 9.3-21.5 s with parasail's AVX2 16-bit striped profile kernel versus 12.0-48.7 s for SSW's SSE2 ssw_test, and 10.8-33.8 s with parasail SSE4.1 16-bit (mean of three runs, 2015). The SSW timer includes database parsing and suboptimal-score work, so part of the gap is harness rather than kernel.",
+  "status_note": "Stale: last version bump v2.6.2 (March 2023; no GitHub releases are published), one fix commit since (2025-08-27) and 33 open issues including an open wrong-score report (#111); usability is reference because the Battelle BSD-style licence carries a citation clause and is not OSI-approved, though the code is permissive enough for most research use.",
+  "sources_read": [
+    "https://github.com/jeffdaily/parasail",
+    "https://raw.githubusercontent.com/jeffdaily/parasail/master/README.md",
+    "https://raw.githubusercontent.com/jeffdaily/parasail/master/performance.md",
+    "https://raw.githubusercontent.com/jeffdaily/parasail/master/apps/parasail_aligner.cpp",
+    "https://raw.githubusercontent.com/jeffdaily/parasail/master/LICENSE.md",
+    "https://raw.githubusercontent.com/jeffdaily/parasail/master/CMakeLists.txt",
+    "https://github.com/jeffdaily/parasail/commits/master",
+    "https://github.com/jeffdaily/parasail/issues",
+    "https://github.com/jeffdaily/parasail/issues?q=is%3Aissue+bug",
+    "https://github.com/jeffdaily/parasail/issues/73",
+    "https://github.com/jeffdaily/parasail/issues/111",
+    "https://raw.githubusercontent.com/mengyao/Complete-Striped-Smith-Waterman-Library/master/src/main.c",
+    "https://raw.githubusercontent.com/mengyao/Complete-Striped-Smith-Waterman-Library/master/src/ssw.h"
+  ],
+  "confidence": 0.8
+}

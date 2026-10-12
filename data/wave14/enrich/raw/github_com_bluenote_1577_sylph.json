@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/bluenote-1577/sylph",
+  "one_liner": "Rust k-mer-sketch metagenome profiler giving species abundances and containment ANI with far less CPU and memory than Kraken2.",
+  "what_it_does": "sylph profiles shotgun metagenomes (short reads, Nanopore or PacBio) against a pre-sketched genome database such as GTDB, reporting which species are present, their sequence and taxonomic abundances, and a coverage-corrected containment ANI per genome. Reads and genomes are first sketched into .sylsp and .syldb files (sylph sketch), then profiled or queried many samples at a time (sylph profile / query). It is a standalone CLI with its own file formats, not a drop-in for Kraken2: it gives no per-read classification and works only at species (genome) level.",
+  "how_it_is_fast": "It replaces per-read classification against a large k-mer hash table with FracMinHash sketching: only k-mers (k=31 by default) whose 64-bit mixed hash falls below u64::MAX/c are kept (c=200, so about 1 in 200), hashed four lanes at a time with AVX2 when the CPU has it; reads are deduplicated through a hash set or scalable cuckoo filter. Abundance and ANI come from containment counts corrected by a zero-inflated Poisson model of low coverage, with winner-take-all k-mer reassignment between similar genomes, so the database and sample sketches stay a few GB. v1.0.0 (September 2026) adds an optional two-stage .syl2db database (a sparse c=3000 screen, then Golomb-Rice-compressed dense blocks loaded on demand) and multithreaded read sketching.",
+  "when_to_use": [
+    "Species-level abundance profiling of many shotgun samples against GTDB-scale databases (100k-200k genomes) on a workstation; the README cites about 5 GB of RAM for GTDB-R232.",
+    "Low-coverage samples where you want containment ANI to reference genomes or your own MAGs (the README claims accurate ANI down to 0.1x coverage).",
+    "Large cohorts where Kraken2's per-sample run with a roughly 70 GB database would dominate: in the authors' artifact time files, 45 paired samples took 78,212 CPU-seconds for Kraken2 against about 3,843 for sylph's sketch plus profile.",
+    "Nanopore or PacBio long-read metagenomes as well as short reads, with custom databases built from your own genomes."
+  ],
+  "when_not_to_use": [
+    "You need per-read classification (binning reads, extracting reads of a taxon, host-read removal): sylph assigns no reads, and Kraken2 or a read mapper is the tool.",
+    "Taxonomic resolution above or below species without reference genomes, or organisms absent from the database: sylph only reports genomes in the sketched database, and unknown fractions are rough estimates (-u option).",
+    "Small genomes or very low-abundance taxa near the detection floor: profiling needs at least 10 sampled k-mers per genome (-M) and 7 contained k-mers by default, so short viral genomes can drop out.",
+    "Pipelines that cannot tolerate format churn: sketch formats changed across versions (.sylqueries/.sylsample, then .syldb/.sylsp, now optional .syl2db readable only by v1.0.0+), and the pseudotax option once required regenerated files."
+  ],
+  "integration": {
+    "form": "CLI binary (Rust crate built with cargo from the GitHub repo; the crates.io name 'sylph' belongs to an unrelated 2016 crate; a conda package is referenced in issue #2)",
+    "dependencies": "needletail 0.5 (FASTA/FASTQ parsing), rayon, crossbeam-channel, boomphf, fxhash, scalable_cuckoo_filter, flate2 with the zlib-ng backend, statrs, nalgebra, bincode, serde; tikv-jemallocator on musl builds",
+    "min_toolchain": "Rust edition 2021 (no rust-version declared in Cargo.toml); release profile uses lto=true and panic=abort",
+    "platforms": "x86-64 Linux primary (AVX2 k-mer hashing chosen at runtime with is_x86_feature_detected and a scalar fallback; static musl target configured in .cargo/config.toml); other targets presumably via the scalar path, not documented here",
+    "thread_safety": "not applicable as a library; the CLI parallelizes over samples and, since v1.0.0, within read sketching (-t threads, default 3; -s samples processed concurrently)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Kraken2 comparison harness is lopsided and unverifiable: the artifact kraken2.time ran ./scripts/kraken2.sh, which is missing from sylph-test (404), and records 599,547,602 minor page faults (about 2.2 TiB of 4 KiB pages) and 204,536,960 file-system output blocks (about 97.5 GiB at 512 bytes per block) with a 73.9 GB peak RSS, which points to the roughly 70 GB database being reloaded per sample and per-read output being written inside Kraken2's timed run, while sylph writes one small TSV (inferred from the time file; the script itself is unseen).",
+    "The artifact sylph timings use the legacy .sylqueries and .sylsample formats (still accepted as old suffixes in src/constants.rs), so they come from an early sylph release; the paper's 30-fold memory figure does not match the 7.7x ratio in these files (73.9 GB against 9.6 GB peak), and the database sketching run (1:31 wall at 1727% CPU) is excluded on the sylph side, as is Kraken2's database build.",
+    "Release builds use panic=abort, so one corrupted FASTQ aborts the whole multi-sample run with a needletail slice-index panic (issue #65, 180 metagenomes against GlobDB); validate inputs first.",
+    "Default thread count is 3 (-t), so throughput figures quoted at -t 20 need the flag; read deduplication with cuckoo filters raised sketching memory 3-4x when it was introduced (CHANGELOG)."
+  ],
+  "pick_this_over_siblings_when": "Among the siblings, skani (same author, same sketching approach) estimates ANI between assembled genomes or MAGs, while sylph profiles raw reads against a whole database; pick sylph for read-level metagenome profiling and skani for genome-to-genome comparison. The other bioinformatics siblings (mosdepth, sambamba, noodles, rasusa, mako) handle alignments, FASTA indexing or subsampling, not taxonomic profiling.",
+  "verified_claims_summary": "The Nature Biotechnology paper (Shaw and Yu) reportedly says sylph took more than 10-fold less CPU time and 30-fold less memory than Kraken2 for multisample profiling (abstract text seen only in search snippets). The authors' artifact repo holds raw /usr/bin/time outputs for 45 paired gut samples: Kraken2 78,212 CPU-seconds, 1:47:10 wall and 73.9 GB peak against sylph sketch plus contain (-t 20) at 3,843 CPU-seconds, 7:48 wall and 9.6 GB peak, about 20x CPU, 13.7x wall and 7.7x memory (derived from page data), on an unstated CPU with unknown Kraken2 version, database and command; the tools produce different outputs, so this is an algorithmic gap, not a Rust-over-C++ one.",
+  "status_note": "Actively developed (v1.0.0 with the two-stage database and multithreaded read sketching in September 2026, last commit 2026-10-10, 325 stars, 7 open issues), MIT-licensed per the LICENSE file (Cargo.toml says MIT OR Apache-2.0); it is a standalone tool to install, not code to vendor into C++.",
+  "sources_read": [
+    "https://github.com/bluenote-1577/sylph",
+    "https://github.com/bluenote-1577/sylph/commits/main",
+    "https://github.com/bluenote-1577/sylph/tree/main/src",
+    "https://github.com/bluenote-1577/sylph/issues?q=is%3Aissue+memory+OR+slow+OR+bug",
+    "https://github.com/bluenote-1577/sylph/issues/65",
+    "https://github.com/bluenote-1577/sylph/issues/41",
+    "https://raw.githubusercontent.com/bluenote-1577/sylph/HEAD/README.md",
+    "https://raw.githubusercontent.com/bluenote-1577/sylph/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/bluenote-1577/sylph/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/bluenote-1577/sylph/HEAD/.cargo/config.toml",
+    "https://raw.githubusercontent.com/bluenote-1577/sylph/HEAD/src/constants.rs",
+    "https://raw.githubusercontent.com/bluenote-1577/sylph/HEAD/src/avx2_seeding.rs",
+    "https://raw.githubusercontent.com/bluenote-1577/sylph/HEAD/src/seeding.rs",
+    "https://raw.githubusercontent.com/bluenote-1577/sylph/HEAD/src/sketch.rs",
+    "https://raw.githubusercontent.com/bluenote-1577/sylph/HEAD/src/contain.rs",
+    "https://raw.githubusercontent.com/bluenote-1577/sylph/HEAD/src/cmdline.rs",
+    "https://raw.githubusercontent.com/bluenote-1577/sylph/HEAD/src/twostage_db.rs",
+    "https://github.com/bluenote-1577/sylph-test/tree/main/times",
+    "https://raw.githubusercontent.com/bluenote-1577/sylph-test/main/README.md",
+    "https://raw.githubusercontent.com/bluenote-1577/sylph-test/main/times/kraken2.time",
+    "https://raw.githubusercontent.com/bluenote-1577/sylph-test/main/times/sylph_contain_gtdb.time",
+    "https://raw.githubusercontent.com/bluenote-1577/sylph-test/main/times/sylph_sketch_reads.time",
+    "https://raw.githubusercontent.com/bluenote-1577/sylph-test/main/times/sylph_sketch_gtdb.time",
+    "https://raw.githubusercontent.com/bluenote-1577/sylph-test/main/times/metaphlan_20_threads_time.time",
+    "https://raw.githubusercontent.com/bluenote-1577/sylph-test/main/times/mash_screen_gtdb.time",
+    "https://crates.io/api/v1/crates/sylph",
+    "WebSearch snippets: Rapid species-level metagenome profiling and containment estimation with sylph (Nature Biotechnology, DOI 10.1038/s41587-024-02412-y; full text unreachable)"
+  ],
+  "confidence": 0.6
+}

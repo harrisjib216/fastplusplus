@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/ko-/aes-armcortexm",
+  "one_liner": "Hand-scheduled Thumb-2 AES-128/192/256 (T-table CTR, bitsliced and masked) for Cortex-M3/M4; about 33 cycles/byte AES-128-CTR.",
+  "what_it_does": "Public-domain assembly for ARMv7-M from the SAC 2016 paper 'All the AES You Need on Cortex-M3 and M4': AES-128/192/256 key expansion, single-block AES-128 encrypt/decrypt, AES-128/192/256 in CTR mode, a constant-time bitsliced AES-128-CTR and a first-order masked bitsliced AES-128-CTR for the Cortex-M4. Each directory is a GNU as .s file plus a small C example that calls it on an STM32 board (e.g. AES_128_keyschedule(key, rk) and AES_128_encrypt_ctr(&param, in, out, len) where param holds the counter, a 12-byte nonce and the round keys). It is not a library and not an API replacement for any C AES; you copy the .s file and adapt the calling convention.",
+  "how_it_is_fast": "The fast variants use a single 1 KB T-table (Te0) and fold the other three table rotations into the barrel shifter of the EOR instructions, with fully unrolled rounds, hand register allocation and instruction scheduling produced by the authors' own scheduler tool (scheduler/). The CTR code adds counter-mode caching (based on Hongjun Wu's eSTREAM implementation, per the maintainer in issue #1): the parts of rounds 1 and 2 that depend only on the nonce and upper counter bytes are computed once per 256 blocks and only the changing low counter byte is processed per block. The constant-time variant uses a bitsliced representation (the SAC slides call it bytesliced) and the masked variant adds first-order masking with randomness from the STM32F407 hardware RNG.",
+  "when_to_use": [
+    "Bulk AES-128/192/256-CTR on Cortex-M3 or M4 where timing side channels are outside the threat model: README measures 531.8 (M3) and 527.9 (M4) cycles per 16-byte block for AES-128-CTR, 651 and 767 cycles for AES-192/256.",
+    "Low-clock MCUs running flash at zero wait states (the README numbers were taken at 16 MHz on an STM32L100C and 24 MHz on an STM32F407), where the measured cycle counts carry over.",
+    "Research or evaluation that needs a first-order masked AES-128-CTR on an STM32F4-class Cortex-M4.",
+    "Firmware that wants public-domain (CC0) AES assembly to vendor without licence obligations, or a reference for counter-mode caching and T-table scheduling on ARMv7-M."
+  ],
+  "when_not_to_use": [
+    "You need output that interoperates with standard AES-CTR or GCM: the counter is the first 32-bit word of the block, incremented little-endian, followed by the nonce, so results differ from NIST SP 800-38A vectors from the second block on (maintainer, issue #1).",
+    "Constant time matters: the T-table variants are explicitly not constant-time, and for constant-time AES on Cortex-M the fixsliced aadomn/aes (84.3 cycles/byte AES-128 on M3) is faster than this repo's bitsliced CTR (1618.6 cycles per block, about 101 cycles/byte, derived from page data).",
+    "Full-speed clocks with flash wait states (e.g. STM32F4 at 168 MHz): the T-table sits in flash next to the code and no measurement at those settings is published; jnk0le/cortexm-AES warns that unrolled code can lose to looped code under STM32F4 ART cache pressure and wait states.",
+    "Cores other than Cortex-M3/M4 (M0/M0+ lack Thumb-2; M7 has caches and different timing), or anyone needing a maintained library with tests and CBC/GCM modes: the repo is abandoned since 2020, while jnk0le/cortexm-AES (derived from this code) offers SP 800-38A-compliant big-endian CTR and GCM.",
+    "Streaming encryption across several calls unless you manage the counter yourself (see gotchas)."
+  ],
+  "integration": {
+    "form": "source-drop (GNU as Thumb-2 .s files with C example harnesses)",
+    "dependencies": "none for the .s files; the example harnesses need libopencm3 (git submodule) and the arm-none-eabi toolchain; the masked variant needs the STM32F407 hardware RNG",
+    "min_toolchain": "arm-none-eabi-gcc/GNU as with unified Thumb-2 syntax (version not documented); Makefiles use -O3 -mthumb -mcpu=cortex-m3 or cortex-m4",
+    "platforms": "ARMv7-M only: Cortex-M3 (measured on STM32L100C) and Cortex-M4 (measured on STM32F407); masked variant M4/STM32F407 only",
+    "thread_safety": "not documented; the routines keep state only in caller-supplied buffers and the stack, but AES_128_encrypt_ctr writes the counter back into the caller's param struct, so a param must not be shared between concurrent calls",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Counter not advanced past the last block: AES_128_encrypt_ctr (prototype says param const *) stores the incremented counter back into param, but exits before incrementing after the final block, so a second call continues with the counter of the previous call's last block and reuses that keystream block; a 16-byte call does not advance it at all. Open PR #6 (2023, unmerged, aes256ctr only) moves the increment before the exit. Set param.ctr = start + number_of_blocks yourself between calls.",
+    "Whole blocks only, word-aligned buffers: the loop always loads and stores 16 bytes with LDM/STM, so a length that is not a multiple of 16 reads past the end of the input and writes up to 15 bytes past the output (the example sizes its output buffer with LEN_ROUNDED), and in/out must be 4-byte aligned on ARMv7-M.",
+    "Benchmark conditions: the README's cycle counts were taken at 16 MHz (STM32L100C) and 24 MHz (STM32F407, PLL chosen 'low to have 0WS') with zero flash wait states, and the T-table lives in flash with the code; at production clocks with wait states and the F4 ART data cache enabled, cycles per block rise and table lookups may become timing-dependent.",
+    "Harness gap: the in-repo examples time one call with a fixed key, nonce and input (cycles read from DWT_CYCCNT) and have their ciphertext printing commented out with no known-answer check; the README's '10000 runs with random inputs, nonces, and keys' averaging loop is not in the repository, so the published averages cannot be re-run from the repo as shipped. Issue #1 (2017) found the bitsliced CTR producing wrong output, fixed in commit 45103cb; issue #3 (2018) found the bitsliced and masked code storing temporaries below the stack pointer (interrupt-unsafe), fixed July 2018, after the 2016 measurements."
+  ],
+  "pick_this_over_siblings_when": "Pick this over aadomn/aes when raw speed matters more than constant time (T-table CTR at about 33 cycles/byte against about 84 cycles/byte for fixsliced AES-128 on M3), and over pqm4-style portable C or CRYPTOGAMS when you are on a Cortex-M3/M4 and want CC0 code; pick aadomn/aes whenever side-channel resistance is required.",
+  "verified_claims_summary": "The repo README reports cycle counts only: AES-128-CTR 531.8 cycles per block on a Cortex-M3 (STM32L100C, 16 MHz, 0 wait states) and 527.9 on a Cortex-M4 (STM32F407, 24 MHz, 0 wait states), single-block AES-128 encryption 637.5/634.7 cycles, built with arm-none-eabi-gcc -O3 and libopencm3, with no baseline on the page. The only baseline comparisons, a RIOT forum post (45/87 us encrypt/decrypt against 74/131 us for RIOT's default C AES on an STM32L151) and the SAC 2016 abstract's 'about twice as fast as existing implementations', were seen as search snippets only.",
+  "status_note": "Abandoned (last commit 2020-07-12; open PRs #5 from 2020 and #6 from 2023 unreviewed) but CC0 and small enough to vendor, so copyable, provided you fix the counter handoff, keep buffers padded and aligned, and accept the non-standard counter layout.",
+  "sources_read": [
+    "https://github.com/Ko-/aes-armcortexm",
+    "https://raw.githubusercontent.com/Ko-/aes-armcortexm/HEAD/README.md",
+    "https://raw.githubusercontent.com/Ko-/aes-armcortexm/HEAD/Makefile",
+    "https://raw.githubusercontent.com/Ko-/aes-armcortexm/HEAD/aes128ctr/Makefile",
+    "https://raw.githubusercontent.com/Ko-/aes-armcortexm/HEAD/aes128ctr/aes_128_ctr.c",
+    "https://raw.githubusercontent.com/Ko-/aes-armcortexm/HEAD/aes128ctr/aes_128_ctr.s",
+    "https://raw.githubusercontent.com/Ko-/aes-armcortexm/HEAD/aes128/aes.c",
+    "https://raw.githubusercontent.com/Ko-/aes-armcortexm/HEAD/common/stm32f4_wrapper.c",
+    "https://raw.githubusercontent.com/Ko-/aes-armcortexm/HEAD/common/stm32l1_wrapper.c",
+    "https://github.com/Ko-/aes-armcortexm/tree/master/aes128ctr",
+    "https://github.com/Ko-/aes-armcortexm/tree/master/common",
+    "https://github.com/Ko-/aes-armcortexm/tree/public/aes128",
+    "https://github.com/Ko-/aes-armcortexm/issues?q=is%3Aissue",
+    "https://github.com/Ko-/aes-armcortexm/issues/1",
+    "https://github.com/Ko-/aes-armcortexm/issues/3",
+    "https://github.com/Ko-/aes-armcortexm/pulls?q=is%3Apr",
+    "https://github.com/Ko-/aes-armcortexm/pull/2",
+    "https://github.com/Ko-/aes-armcortexm/pull/5",
+    "https://github.com/Ko-/aes-armcortexm/pull/6",
+    "https://github.com/Ko-/aes-armcortexm/pull/6/files",
+    "https://raw.githubusercontent.com/jnk0le/cortexm-AES/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}

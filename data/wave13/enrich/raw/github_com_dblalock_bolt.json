@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/dblalock/bolt",
+  "one_liner": "AVX2 vector-quantization library that encodes float vectors into 4-bit codes and computes approximate distances and dot products far faster than PQ or exact float math.",
+  "what_it_does": "Bolt (Blalock and Guttag, KDD 2017) learns a quantizer from training data, compresses each float vector into 8, 16 or 32 bytes of 4-bit codes, and then answers squared-L2 distance, dot-product, k-NN and maximum-inner-product queries directly on the compressed codes. The C++ API is a BoltEncoder class (set_centroids, set_data, dists_sq, dot_prods, knn_l2, knn_mips) plus templated free functions bolt_encode, bolt_lut and bolt_scan; a SWIG Python wrapper exposes bolt.Encoder(reduction='dot'|'l2').fit(X).transform(q). It is not a drop-in GEMM or BLAS replacement: results are approximate, shifted and scaled uint16 values, not floats.",
+  "how_it_is_fast": "Product-quantization style encoding with K = 16 centroids per subspace instead of PQ's 256, so each code is 4 bits and a 16-entry lookup table fits in one 128-bit lane; the scan does table lookups with vpshufb (_mm256_shuffle_epi8) on 32 codes at a time, accumulating with saturating 8-bit or 16-bit adds and writing with non-temporal stores. Query lookup tables are quantized from float to uint8 with a learned per-table offset and scale (quantile-based, so outliers do not blow the range), and codes are stored in 32-row column-major blocks so one 256-bit load feeds 32 rows. Much of the encoding and table-build speedup over PQ is the K = 16 choice itself: for D = 128 and 16 bytes, Bolt evaluates 32 codebooks x 16 centroids x 4 dimensions (2,048 multiply-adds) against PQ's 16 x 256 x 8 (32,768), a 16x reduction in work before any SIMD (derived from the profile constants).",
+  "when_to_use": [
+    "Large collections of mostly dense float vectors (embeddings, descriptors) where approximate L2 distances or dot products are acceptable and memory or scan throughput is the bottleneck: the repo's D = 128, 16-byte run scans about 1.26 billion uint8 distances per second (1e6 codes in 0.79 ms) on one core.",
+    "Batch encoding of many vectors: 10,000 128-dimensional vectors encode to 16-byte codes in 2.29 ms (about 4.4 million vectors/s, about 2.2 GB/s of float input, derived) against 39.8 ms for the repo's own PQ encoder.",
+    "Candidate generation for nearest-neighbour or maximum-inner-product search, followed by exact re-ranking of the top hits, since the slides say Bolt has to retrieve more points than PQ/OPQ for a given compression level.",
+    "Approximate matrix products where one operand is reused many times and the error is tolerable: the square matmul timings run 5.8x faster than single-threaded Eigen at N = 512 and 57x at N = 8192 without re-encoding (3.4x and 38x when the matrix is encoded inside the timed call).",
+    "x86-64 servers or desktops with AVX2 (Haswell, 2013, or later) where you can build C++14 sources directly."
+  ],
+  "when_not_to_use": [
+    "You need exact results or float outputs: Bolt returns quantized uint16 scores, its dot products are 'slightly less accurate than others' per the authors' slides, and 8-bit scans saturate at 255.",
+    "Small problems: below N = 128 the square matmul is slower than Eigen (N = 64: 0.024 ms with encoding vs 0.009 ms), and the speedup needs enough rows to amortize table construction.",
+    "ARM, Apple Silicon or any non-AVX2 target: the kernels are AVX2-only; the README invites ARM contributions (issue #2), issue #23 asking for other vector instruction sets is still open, and issue #25 reports an install failure on an M1 Mac.",
+    "Python-first projects that need a working package: the README says the Python wrapper 'seems to be no longer building' for many people (issues #4, #15, #31, #37), and it is slower than the C++ path.",
+    "You need a maintained library: the last commit is from June 2022, open issues from 2022 to 2025 (#35, #37, #39, #40, #41) have no fix, and FAISS was never benchmarked against it in the repo."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Eigen (vendored in cpp/src/external); SWIG and NumPy for the Python wrapper; Bazel for the provided build (or the Xcode project the author used)",
+    "min_toolchain": "C++14 (Bazel copts: -O3 -march=native -mavx -ffast-math -std=c++14); only tested with Clang on OS X per experiments/README",
+    "platforms": "x86-64 with AVX2 only",
+    "thread_safety": "not documented; all kernels are single-threaded free functions and BoltEncoder holds mutable state (codes, lookup tables), so share one encoder across threads only with external locking",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Layout and size constraints: bolt_encode requires nrows to be a multiple of 32, ncols divisible by 2 x NBytes and a 32-byte-aligned output buffer, and bolt_scan writes with _mm256_stream_si256, so its output must be 32-byte aligned too; issue #35 (open) reports a general protection fault from an aligned _mm256_load_ps in the repo's AVX sgemm helper when given a non-aligned stride.",
+    "The square-matmul speedups grow with N partly because code length is fixed: Bolt's cost is about N^2 x (16 + M) against GEMM's N^3, so at N = 8192 Bolt<8> represents each 8,192-float row with 16 four-bit codes (512 dimensions per codebook). The profile runs on random codes, centroids and offsets and measures speed only, so accuracy at those sizes is never shown.",
+    "Harness weaknesses in cpp/test/quantize/profile_bolt.cpp: _run_bolt_matmul takes the centroid, code, lookup-table and output matrices by value (the ColMatrix codes are even converted to RowMatrix on each call, and the 134 MB uint16 output is copied at N = 8192), so the product is written into a temporary copy while the anti-dead-code check prevent_optimizing_away_dists reads the caller's untouched out matrix; nothing proves the scan ran, although times rising with code length (231, 252 and 306 ms for 8, 16 and 32 bytes at N = 8192) suggest it did. The 'bolt scan uint16 safe' row is written bolt_scan<(M, true)>(...), a comma expression that sets NBytes to 1, so in the current source that row times a 1-byte scan (it is not one of the catalogued numbers).",
+    "Correctness bug in an unbenchmarked path: in the uint16 bolt_scan with SignedLUTs = true, the even-indexed lanes are computed as _mm256_srai_epi16(_mm256_srai_epi16(x, 8), 8), which yields the sign of the odd byte instead of the sign-extended low byte (_mm256_srai_epi16(_mm256_slli_epi16(x, 8), 8)), so half of the rows get wrong scores with signed lookup tables; the matmul and scan timings use unsigned tables and are unaffected."
+  ],
+  "pick_this_over_siblings_when": "Pick Bolt over PQ Fast Scan or Quick ADC (technicolor-research) when encoding speed and approximate dot products or matrix products matter as much as scan speed, since Bolt also vectorizes encoding and quantizes its lookup tables with learned offsets; pick PQ Fast Scan when you must return exactly the same results as a standard PQ scan, which Bolt's 4-bit codes and 8-bit tables do not.",
+  "verified_claims_summary": "First-party Catch timing dumps (best of 5, 10 repetitions; the paper snippet names one thread on a 2013 MacBook Pro with a 2.6 GHz Core i7-4960HQ and Clang/Xcode builds) show Bolt with 8-byte codes computing an approximate uint16 N x N product 1.4x (N = 128) to 57x (N = 8192) faster than an exact float32 Eigen GEMM, and encoding 10,000 128-dimensional vectors in 2.29 ms against 39.8 ms for the repo's own PQ; Eigen's 13.19 s at N = 8192 is about 83 GFLOP/s, consistent with one AVX2/FMA core (derived from page data).",
+  "status_note": "Abandoned research code since June 2022 (the MADDNESS successor 'mithral' lives in the same repo) but MPL-2.0 and small enough to vendor as C++14 source for AVX2 machines; the Python package is not reliably buildable.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/dblalock/bolt/HEAD/README.md",
+    "https://raw.githubusercontent.com/dblalock/bolt/HEAD/experiments/README.md",
+    "https://raw.githubusercontent.com/dblalock/bolt/HEAD/experiments/results/matmul/square_matmul_results.txt",
+    "https://raw.githubusercontent.com/dblalock/bolt/HEAD/experiments/results/timing/mcq_D%3D128_M%3D16.txt",
+    "https://raw.githubusercontent.com/dblalock/bolt/HEAD/cpp/test/quantize/profile_bolt.cpp",
+    "https://raw.githubusercontent.com/dblalock/bolt/HEAD/cpp/test/testing_utils/testing_utils.hpp",
+    "https://raw.githubusercontent.com/dblalock/bolt/HEAD/cpp/src/utils/timing_utils.hpp",
+    "https://raw.githubusercontent.com/dblalock/bolt/HEAD/cpp/src/quantize/bolt.hpp",
+    "https://raw.githubusercontent.com/dblalock/bolt/HEAD/cpp/src/include/public.hpp",
+    "https://raw.githubusercontent.com/dblalock/bolt/HEAD/cpp/BUILD",
+    "https://raw.githubusercontent.com/dblalock/bolt/HEAD/assets/bolt-slides.pdf",
+    "https://github.com/dblalock/bolt/tree/master/assets",
+    "https://github.com/dblalock/bolt/tree/master/cpp/src",
+    "https://github.com/dblalock/bolt/tree/master/cpp/src/external",
+    "https://github.com/dblalock/bolt/issues?q=is%3Aissue",
+    "https://github.com/dblalock/bolt/issues/35",
+    "WebSearch snippet of arXiv 1706.10283 (experimental setup: single thread, 2013 MacBook Pro, Core i7-4960HQ, best of 5 averaged over 10 trials)"
+  ],
+  "confidence": 0.8
+}

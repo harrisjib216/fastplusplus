@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/pq-code-package/mlkem-native",
+  "one_liner": "Formally verified C90 ML-KEM (FIPS 203) with AArch64 Neon and x86-64 AVX2 assembly, about 2-3x faster than its portable C.",
+  "what_it_does": "A fork of the pq-crystals Kyber reference code that implements ML-KEM-512/768/1024 key generation, encapsulation and decapsulation, plus public and secret key checks. The API is the familiar keypair/enc/dec shape (with deterministic _derand variants), namespaced by a configurable prefix and selected at compile time by MLK_CONFIG_PARAMETER_SET; several parameter sets can be linked together through a 'multi-level build'. You import the mlkem/ source tree into your own build; the repository Makefile is for development only.",
+  "how_it_is_fast": "A fixed C frontend calls two swappable backends: arithmetic (NTT, inverse NTT, base multiplication with cached Montgomery products, rejection sampling, (de)compression, (de)serialisation) and FIPS-202/Keccak, including a 4-way batched Keccak-f1600 used for matrix generation. The AArch64 Neon assembly is written as clean code and then scheduled by the SLOTHY constraint-solving superoptimiser; the x86-64 backend is AVX2 assembly, including keccak_f1600_x4_avx2_asm.S. The measured speedup over the C backend comes from both backends together, since the no-opt build turns off native arithmetic and native Keccak at once.",
+  "when_to_use": [
+    "Adding ML-KEM (or hybrid X25519MLKEM768 key exchange) to a C or C++ TLS, VPN or KEM stack on x86-64 with AVX2 or on AArch64 servers and phones.",
+    "You need assurance beyond tests: HOL-Light proofs of functional correctness, memory safety and constant-time behaviour for the AArch64 and x86-64 assembly, and CBMC memory and type-safety proofs for the C code.",
+    "Handshake-heavy servers where tens of thousands of cycles per encaps/decaps matter: CI shows ML-KEM-768 decaps at about 26k cycles on Sapphire Rapids versus about 68k for the C backend.",
+    "Embedded or freestanding builds that need a C90 code base with stack-only allocation by default, optional custom allocator, zeroize, randombytes, memcpy and memset hooks.",
+    "You already depend on liboqs (0.13.0+) or AWS-LC (v1.50.0+), which ship this code, and want to vendor the same implementation directly."
+  ],
+  "when_not_to_use": [
+    "You need ML-DSA or other post-quantum schemes: this repository is ML-KEM only.",
+    "Microcontrollers such as Cortex-M4: the Armv8.1-M Helium backend is experimental and disabled by default, and pqm4 has dedicated Cortex-M4 assembly.",
+    "Threat models with power, EM, fault-injection or speculative-execution attackers: the project states it only targets timing side channels.",
+    "Generic distribution binaries built for baseline x86-64 or Armv8.0 without a capability hook: backends are chosen at compile time by default, so without -mavx2 or MLK_CONFIG_CUSTOM_CAPABILITY_FUNC you get only the C backend.",
+    "Stack-constrained targets: issue #1338 (open) reports stack usage much higher than mlkem-c-embedded."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (ships its own FIPS-202; you can plug in your own FIPS-202 or randombytes)",
+    "min_toolchain": "C90 plus stdint.h and 64-bit unsigned long long; native backends need GNU-style assembler support (GCC or Clang) and the matching -march flags",
+    "platforms": "any for the C backend; native backends for AArch64 (Neon, optional SHA-3 extension Keccak), x86-64 (AVX2), RISC-V 64 (RVV), ppc64le (VSX, POWER8+); Armv8.1-M MVE experimental",
+    "thread_safety": "not documented; the API has no global mutable state visible in the header and allocates on the stack by default",
+    "drop_in_for_baseline": "partial — same keypair/enc/dec structure and byte formats as FIPS 203, but symbol names are namespaced and return codes must be checked (warn_unused_result); the C-only build is the baseline itself"
+  },
+  "gotchas": [
+    "Native backends are off in the shipped mlkem_native_config.h: you must set MLK_CONFIG_USE_NATIVE_BACKEND_ARITH and MLK_CONFIG_USE_NATIVE_BACKEND_FIPS202 (or pass them in CFLAGS) to get the measured speed, and set MLK_CONFIG_CUSTOM_CAPABILITY_FUNC when the build machine differs from the run machine.",
+    "The x86-64 AVX2 assembly does not issue vzeroupper on return (issue #1772, open); maintainers call this deliberate and unmeasured, but callers that run legacy SSE code afterwards on older Intel cores may pay AVX-SSE transition costs.",
+    "Including mlkem_native.h before the sources in a single-unit build silently dropped build-only config options (issue #1919, fixed September 2026); check your build if you vendored an earlier version.",
+    "Benchmark data are rolling CI points: issue #429 showed up to about 18% run-level variance on virtualised x86 EC2 instances, fixed only for c7i by moving it to bare metal; the other EC2 rows (c6i.large, c7a.medium, c6a.large, t4g.small burstable, c7g/c8g/c9g.medium) are still small VMs, although opt and no-opt run back to back on the same instance in one job."
+  ],
+  "pick_this_over_siblings_when": "Pick it over neon-ntt or PQRV when you want a complete, maintained, formally verified ML-KEM rather than research kernels for one ISA, and over pqm4 when the target is an application-class CPU rather than a Cortex-M4.",
+  "verified_claims_summary": "The project's CI benchmark (test/bench/bench_mlkem.c: 500 samples of 300 iterations after 50 warm-up calls, median cycles, shared-secret equality checked) runs the same tree with native backends on and off, built with the same GCC from nixpkgs nixos-26.05 at -O3 -flto and per-CPU -march flags; for ML-KEM-768 at commit aad9b74 the native build takes 1.9x to 3.0x fewer cycles than the C backend across eight AWS EC2 instance types (for example decaps 67,682 to 26,122 cycles on Sapphire Rapids c7i.metal, 134,838 to 68,518 on Graviton2). The harness itself looks sound; the limitation is that the baseline is the project's own optimised C, not the unmodified reference code or another library.",
+  "status_note": "Very actively maintained under the Linux Foundation's PQCA (last commit 2026-10-12 per the verified record, tested against the ACVP and Wycheproof ML-KEM vectors), triple-licensed Apache-2.0, ISC or MIT, and shipped as the default ML-KEM in liboqs and in AWS-LC.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/pq-code-package/mlkem-native/main/README.md",
+    "https://raw.githubusercontent.com/pq-code-package/mlkem-native/main/test/bench/bench_mlkem.c",
+    "https://raw.githubusercontent.com/pq-code-package/mlkem-native/main/mlkem/mlkem_native.h",
+    "https://raw.githubusercontent.com/pq-code-package/mlkem-native/main/mlkem/mlkem_native_config.h",
+    "https://raw.githubusercontent.com/pq-code-package/mlkem-native/main/SECURITY.md",
+    "https://raw.githubusercontent.com/pq-code-package/mlkem-native/main/BIBLIOGRAPHY.md",
+    "https://raw.githubusercontent.com/pq-code-package/mlkem-native/main/API-CONVENTIONS.md",
+    "https://raw.githubusercontent.com/pq-code-package/mlkem-native/main/test/mk/config.mk",
+    "https://raw.githubusercontent.com/pq-code-package/mlkem-native/main/test/mk/components.mk",
+    "https://raw.githubusercontent.com/pq-code-package/mlkem-native/main/mlkem/src/native/x86_64/meta.h",
+    "https://raw.githubusercontent.com/pq-code-package/mlkem-native/main/.github/workflows/bench.yml",
+    "https://raw.githubusercontent.com/pq-code-package/mlkem-native/main/.github/workflows/bench_ec2_reusable.yml",
+    "https://raw.githubusercontent.com/pq-code-package/mlkem-native/main/.github/actions/bench/action.yml",
+    "https://github.com/pq-code-package/mlkem-native/tree/main/mlkem/src/fips202/native/x86_64/src",
+    "https://github.com/pq-code-package/mlkem-native/issues?q=is%3Aissue+label%3Abug",
+    "https://github.com/pq-code-package/mlkem-native/issues?q=is%3Aissue+performance",
+    "https://github.com/pq-code-package/mlkem-native/issues/1772",
+    "https://github.com/pq-code-package/mlkem-native/issues/429"
+  ],
+  "confidence": 0.85
+}
