@@ -1,0 +1,49 @@
+{
+  "id": "lang:go/yosssi/4d719cccdf185259ea1d#http-vs-nginx",
+  "one_liner": "2014 loopback wrk transcript: a Go net/http empty handler beats nginx 1.96x, but no row shows Go serving the same file faster.",
+  "what_it_does": "A gist (go-nginx.md, nine revisions, all dated 2014-06-23) with six wrk -t12 -c400 -d2s runs against 127.0.0.1:8080: nginx serving the site root, then Go net/http programs with GOMAXPROCS=2 that return an empty response, return 'Hello', serve /Users/.../www through http.FileServer, and serve the same directory through two versions of the author's yosssi/go-fileserver cache. There is no library to adopt; each Go server is a 10-20 line main.go.",
+  "how_it_is_fast": "The gist gives no explanation, and the fast Go rows do less work than nginx. Dividing each run's 'MB read' by its request count (derived from page data) gives 294 bytes per nginx response (a body of roughly 59 bytes plus nginx's headers) against 116 bytes for the Go empty handler, which is exactly a 2014 Go header-only 200 response; the Hello run comes out at 121 bytes, 5 more, which confirms the arithmetic. The two cached go-fileserver rows (59,517 and 25,581 req/s) are fast because they send no file at all (see gotchas).",
+  "when_to_use": [
+    "As a historical anecdote that Go's net/http could already answer about 60k empty requests per second on two cores of a 2014 Mac over loopback.",
+    "As a worked example for auditing server benchmarks: divide Transfer/sec by Requests/sec and check every row returns the same bytes before comparing throughput.",
+    "Not as a basis for picking Go over nginx for static files or proxying; use a current, configured comparison instead."
+  ],
+  "when_not_to_use": [
+    "Static file serving: the only valid file-serving row, Go http.FileServer at 16,088 req/s, is about half of nginx's 31,781 req/s (0.51x, derived from page data).",
+    "Do not use yosssi/go-fileserver: its cache stores an empty copy of every file (bug described in gotchas), and handlers write the shared cache map without a lock, which is a data race under concurrent requests.",
+    "Any version- or tuning-sensitive decision: Go version, nginx version, nginx.conf (worker_processes, sendfile, keep-alive), served file and CPU are all unstated, and each run lasted 2 seconds with wrk on the same machine.",
+    "Modern stacks: the code and numbers are from June 2014 and have not been rerun."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Go standard library net/http; the cached rows also import github.com/yosssi/go-fileserver (MIT, 7 commits, last commit 2014-06-24)",
+    "min_toolchain": "Not stated; 2014-era Go, version not given in the gist",
+    "platforms": "macOS inferred from the 'mac:~' shell prompt and /Users/... paths; the Go code itself is portable",
+    "thread_safety": "net/http runs each connection in its own goroutine; go-fileserver reads and writes its cache map from those goroutines with no lock (data race)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw that invalidates the record's 'closest like-for-like' 1.87x row: go-fileserver (commits 3966915 'Add files' with io.Copy and 21d1e12 with http.ServeContent, both 2014-06-23, matching gist sections 6 and 5) serves a cache miss with http.ServeContent(w, r, ..., f), which reads f to EOF, and only then runs io.Copy(&buf, f) to fill the cache, so the cached data is always empty. Every later request gets an empty body: section 6 averages 116.1 bytes per response, the same as the empty handler's 116, and section 5 averages 183.1 bytes, exactly a header-only ServeContent reply with Content-Length: 0 and Content-Type text/html (derived from page data), while http.FileServer (242.8 bytes) and nginx (294.0 bytes) each sent a body of about 59 bytes. The current HEAD (73806fe, 2014-06-24) keeps the bug and also never stores the file size, so Content-Length stays 0.",
+    "The gist's section 6 shows the same code as section 5 (commenter Azareal, 2016-12-03); the io.Copy version exists only in the go-fileserver history. Section 3's first run is a byte-for-byte copy of section 2's output; its second run (60,837.67 req/s) is the real Hello result.",
+    "Effective concurrency differs: nginx and Go sections 2-4 report 'connect 155' socket errors (about 245 of 400 connections opened, consistent with a default 256 open-file limit on macOS, inference), while sections 5 and 6 report connect 0. nginx's worker count is unknown; the stock nginx.conf runs 1 worker against GOMAXPROCS=2 for Go.",
+    "A commenter asked for the nginx version and configuration in 2018 and got no answer; the gist has no licence, so its code is reference only."
+  ],
+  "pick_this_over_siblings_when": "Never as evidence: kawipiko (a Go static server) documents its NGINX config and measures matched Hello World serving, and the HttpArena entries (raw tokio, Kestrel, ioxide) compare against a known nginx 1.31.4 -O3 build doing the same endpoints. This gist is only a 2014 anecdote, and its one valid file-serving row favours nginx.",
+  "verified_claims_summary": "On an unspecified 2014 Mac over loopback (wrk -t12 -c400 -d2s), nginx (unknown version and config) served about 31,781 req/s of a small file; Go net/http with GOMAXPROCS=2 reached 62,315 req/s with an empty handler that sends no file (1.96x, derived), 16,088 req/s with http.FileServer (0.51x, derived), and 59,517 and 25,581 req/s for the two go-fileserver cache variants, which this check finds returned empty bodies, so no measured row shows Go serving the same content faster than nginx.",
+  "status_note": "Abandoned since 2014-06-23, no licence (reference only), and the evidence for the record's file-serving win is invalid (the cached server sent empty responses, as in the stb-zip and Pipa precedents), so the record should be rejected or at least moved to tier D with the claim corrected to 'Go slower than nginx on the only valid file-serving row'.",
+  "sources_read": [
+    "https://gist.github.com/yosssi/4d719cccdf185259ea1d",
+    "https://github.com/yosssi/go-fileserver",
+    "https://github.com/yosssi/go-fileserver/commits/master",
+    "https://raw.githubusercontent.com/yosssi/go-fileserver/HEAD/file_server.go",
+    "https://raw.githubusercontent.com/yosssi/go-fileserver/HEAD/file.go",
+    "https://raw.githubusercontent.com/yosssi/go-fileserver/HEAD/options.go",
+    "https://raw.githubusercontent.com/yosssi/go-fileserver/HEAD/consts.go",
+    "https://raw.githubusercontent.com/yosssi/go-fileserver/HEAD/README.md",
+    "https://raw.githubusercontent.com/yosssi/go-fileserver/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/yosssi/go-fileserver/3966915/file_server.go",
+    "https://raw.githubusercontent.com/yosssi/go-fileserver/21d1e12/file_server.go",
+    "https://raw.githubusercontent.com/yosssi/go-fileserver/73806fe/file_server.go"
+  ],
+  "confidence": 0.8
+}

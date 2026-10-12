@@ -1,0 +1,70 @@
+{
+  "id": "lang:go/kostya/langarena#distance-ngram",
+  "one_liner": "Go's built-in Swiss-table map counting 4-grams, 1.36x faster than the best C/C++ build in LangArena Distance::NGram.",
+  "what_it_does": "A LangArena task, not a library: for 10 fixed string pairs over the letters a-j (1,382 to 19,121 characters each), pack every 4-byte window into a uint32, count the first string's grams in one map and the second string's in another while counting the overlap, and score intersection / (distinct1 + distinct2). The Go side is NGram.ngram in golang/distance.go, about 40 lines using make(map[uint32]int, len(s)) for both maps. Nothing here links into a C++ program; the useful takeaway for C++ users is which container lost.",
+  "how_it_is_fast": "The gap is the hash table, not code generation. Go 1.27's built-in map is a Swiss table (internal/runtime/maps): 8-slot groups with a control word of 7-bit hash tags that AMD64 matches with SIMD intrinsics, slots stored inline so a new key costs no allocation, and tables capped at 1,024 slots that split as the map grows. libstdc++'s std::unordered_map<uint32_t,int> is a chained, node-based table: the identity std::hash, a bucket index taken as hash % prime bucket count (a 64-bit division), no cached hash for integer keys so the modulo is recomputed while walking a chain, and one heap node per distinct key, which is 122,691 node allocations and frees per iteration here (about 12.3 million in the timed loop, from a replay of the generator). Go wins while doing more work (a []byte copy of each string and three map operations per second-string gram against two in C++), and Rust, Zig, C#, Julia and Nim/NLVM rows also beat every C++ row, which points at the container rather than the compiler.",
+  "when_to_use": [
+    "You are choosing a language for histogram or counting code keyed by small integers (here at most 8,647 distinct uint32 keys per map, rebuilt on every call) and want GC-managed code that beats default-STL C++.",
+    "Many short-lived integer-keyed maps where per-key node allocation in std::unordered_map would dominate.",
+    "As a data point when arguing to replace std::unordered_map<uint32_t,...> in a C++ hot loop with an open-addressing table: this row shows the size of the gap the container alone can cause.",
+    "Code that is already Go on Linux x86-64: the built-in map needs no dependency and no tuning to get this result."
+  ],
+  "when_not_to_use": [
+    "Inside a C++ codebase: you cannot link this; swap the container instead (an open-addressing map such as absl::flat_hash_map or boost::unordered_flat_map was never measured by the suite, so the expected gain is an inference).",
+    "When you want the fastest safe-default row: Zig 0.52 s, C#/JIT 0.516 s and Rust 0.533 s beat Go's 0.603 s on the same task, and Zig/Unchecked reaches 0.325 s.",
+    "Memory-tight jobs: Go peaked at 12.0 MB RSS against 6.6-7.1 MB for the C++ rows, about 4 MB for C and 3.4 MB for Zig, and its len(s) size hints allocate about 0.5 MB of map groups for each of the larger strings.",
+    "Latency-sensitive code paths: the suite reports total runtime only, and Go's garbage collector runs during the timed loop.",
+    "Go releases before 1.24 (the go.mod minimum) were not measured; the lead was smaller with Go 1.26.5 (1.16-1.21x) than with 1.27.1 (1.27-1.36x)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (Go built-in map and strings.Builder for input generation)",
+    "min_toolchain": "go.mod declares go 1.24.0; measured with go1.27.1, default 'go build' (GOAMD64=v1, no PGO)",
+    "platforms": "Measured on x86-64 Linux (AMD Ryzen 7 3800X); the Go map uses SIMD group matching on AMD64 and a portable SWAR version elsewhere (group.go)",
+    "thread_safety": "Go maps are not safe for concurrent writes; the runtime aborts with 'concurrent map writes' (internal/runtime/maps/runtime_fast32.go). The benchmark is single-threaded.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Small, cache-resident key space: a 4-gram over 10 letters has only 10,000 values, so no map ever holds more than 8,647 keys. The fasta LCG behind the input has a period of 139,968 draws while the strings need 213,051 characters, so the last third of the data repeats earlier characters. My Python replay reproduces run.js's checksum 397440 as 120 runs (20 warm-up plus 100 timed) of a per-run score of 3,312, so all languages do the same work. It is not a large-key hash-map test.",
+    "The Go code is not tuned and is even handicapped: the len(s) hint (up to 19,121) on a key space of 10,000 makes Go build 32 tables of 1,024 slots for the largest strings, about 6.1 MB of zeroed map memory per iteration and roughly 600 MB over the timed loop (my estimate from the NewMap and newTable sizing code). Each call also copies both strings with []byte(s). Better sizing would probably widen the lead (inference).",
+    "Harness check, no flaw found: both harnesses run 20 untimed warm-up iterations that feed the same checksum, reset the LCG and time 100 iterations with a monotonic clock. Go also calls runtime.GC() before starting the timer, and garbage left at the end is never collected inside the timed window, while the C++ rows free every node inside it. Go's background GC and sweeper can use the 3800X's 15 other hardware threads. Timing is wall-clock with one measurement per configuration.",
+    "Run-to-run drift is about 5-7%: golang/distance.go (2026-04-23) and cpp/src/distance.cpp (2026-04-24) did not change across the five monthly runs, yet Go went from 0.651 s to 0.603 s on the same go1.27.1 between 2026-09-03 and 2026-10-05. The 2026-10-05 notes say the host moved from Ubuntu to Arch Linux, although the GCC version string still names the Ubuntu snapshot package. The C++ code's loop bound s1.size() - 4 would underflow for strings shorter than 4, which this generator never produces; the Go version checks the length first."
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued Distance::NGram rows, Zig (0.52 s, 3.4 MB) and Rust (0.533 s, 4.3 MB) are faster and lighter, so pick the Go row only when your code is already Go or you want a garbage-collected language whose default map still beats default C++. For string-keyed counting, see the Go Etc::Words sibling.",
+  "verified_claims_summary": "In LangArena's 2026-10-05 run on an AMD Ryzen 7 3800X (Linux), Go 1.27.1's default build took 0.603 s for 100 iterations, against 0.822 s for the best of 16 C/C++ configurations (C++/Clang++/PGO, Clang 22.1.8 with libstdc++ std::unordered_map), 0.863 s for C++/G++ at -O2 (GCC 16.0.1 snapshot) and 1.811 s for C/Clang with uthash. That is about 1.36x faster than the best C/C++ row (derived from page data), and Go led in all five monthly runs since 2026-07-14 (1.16x to 1.36x) on unchanged source.",
+  "status_note": "The MIT-licensed suite is active (41 stars, 622 commits, monthly reruns, last commit 2026-10-08 per the verifier); the author treats C++ and Crystal as the reference implementations and asks other languages to use the same containers (issue #1), so this row measures Go's default map against default std::unordered_map, not a component to adopt.",
+  "sources_read": [
+    "https://github.com/kostya/LangArena",
+    "https://github.com/kostya/LangArena/issues?q=is%3Aissue",
+    "https://github.com/kostya/LangArena/issues/1",
+    "https://github.com/kostya/LangArena/commits/master/golang/distance.go",
+    "https://github.com/kostya/LangArena/commits/master/cpp/src/distance.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/run.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/golang/distance.go",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/golang/benchmark.go",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/golang/helper.go",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/golang/go.mod",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/golang/main.go",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/distance.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/distance.hpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/benchmark.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/distance.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-09-18-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-09-03-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-08-14-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-07-14-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/golang/go/go1.27.1/src/internal/runtime/maps/group.go",
+    "https://raw.githubusercontent.com/golang/go/go1.27.1/src/internal/runtime/maps/map.go",
+    "https://raw.githubusercontent.com/golang/go/go1.27.1/src/internal/runtime/maps/table.go",
+    "https://raw.githubusercontent.com/golang/go/go1.27.1/src/internal/runtime/maps/runtime_fast32.go",
+    "https://raw.githubusercontent.com/golang/go/go1.27.1/src/runtime/alg.go",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/master/libstdc++-v3/include/bits/hashtable_policy.h",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/master/libstdc++-v3/include/bits/hashtable.h",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/master/libstdc++-v3/include/bits/functional_hash.h"
+  ],
+  "confidence": 0.75
+}

@@ -2144,5 +2144,72 @@
     "urls_opened": [
       "enricher record data/wave14/enrich/raw/lang_go_boostorg_redis_tcp_echo_direct.json"
     ]
+  },
+  {
+    "id": "lang:haskell/atemerev/skynet#skynet",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; the pthread baseline's 8 kB stacks were never applied and the Haskell Parallel variant uses sparks rather than threads.",
+    "corrections": {
+      "caveats": "boostorg/fiber's skynet_pthread.cpp asks for 8 kB stacks, which glibc rejects (PTHREAD_STACK_MIN 16384) and the error is never thrown, so the pthreads ran default stacks (which fits the pthread row matching std::thread). Parallel.hs uses parMap rpar sparks (bounded 4096-entry deque, unstolen sparks run by the parent), not threads; a possible -O2 CAF float under criterion repeat is unverified. Boost.Fiber matches the Haskell row."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/lang_haskell_atemerev_skynet_skynet.json"
+    ]
+  },
+  {
+    "id": "lang:java/coralblocks/coralbench#intmap",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: D stands; further timer and warm-up asymmetries recorded.",
+    "corrections": {
+      "caveats": "The Java heap is pre-faulted (AlwaysPreTouch) and the buckets are allocated outside the timer while the 2024 C++ run paid malloc plus page faults inside the timer; the 2024 Java GET discarded the get() result while C++ stored to a volatile; the Java run scripts default to a 1,000,000 warm-up while the C++ script uses 0."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/lang_java_coralblocks_coralbench_intmap.json"
+    ]
+  },
+  {
+    "id": "lang:go/kostya/langarena#template-parse",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: A stands; the margin is an allocation-idiom effect measured in wall clock with Go's GC on idle cores, and Zig is 2x faster on the same task.",
+    "corrections": {
+      "caveats": "C, C++ and Go run the same scan and the checksums verify. The margin comes from idioms: C mallocs a key copy per placeholder plus uthash, C++ builds std::string keys (49,000 of 150,001 per iteration go to the heap) plus a node-based unordered_map, Go uses zero-copy slices plus the built-in map. Timing is wall clock while Go's concurrent GC can use idle cores (no CPU-time column). Zig ReleaseFast at 0.374 s is 2x faster than Go; Go peak RSS 75 MB against C's 41 MB."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/lang_go_kostya_langarena_template_parse.json"
+    ]
+  },
+  {
+    "id": "lang:go/yosssi/4d719cccdf185259ea1d#http-vs-nginx",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: the gist's cached file-server rows never served the file (the cache stays empty and the io.Copy and ServeContent rows return 116-183 bytes per response, the same as an empty handler), so the 'like-for-like 1.87x' row is invalid, and the only valid file row has Go at 0.51x nginx. No valid like-for-like win (stb-zip-style wrong work, kept and documented): C to D.",
+    "corrections": {
+      "claimed_speedup": "nginx 31,780.82 req/s (avg latency 7.71 ms) vs a Go empty handler at GOMAXPROCS=2 62,314.54 req/s (not like-for-like). The cached file-server rows (io.Copy 59,517.07 req/s, ServeContent) are invalid: yosssi/go-fileserver's cache is always empty and those rows return 116-183 bytes per response, the same as the empty handler, while nginx (294.0 bytes) and http.FileServer (242.8) carry the file body. The only valid file row is Go http.FileServer 16,088 vs nginx 31,781 req/s (0.51x, derived from page data): not faster.",
+      "caveats": "Harness bug: yosssi/go-fileserver reads the file to EOF via http.ServeContent and then io.Copy fills the cache, so the cache is always empty; bytes per response are 116.1 for the io.Copy row (same as the empty handler's 116) and 183.1 for the ServeContent row (header-only, Content-Length 0). The cache map is written without locking (data race)."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/lang_go_yosssi_4d719cccdf185259ea1d_http_vs_nginx.json"
+    ]
+  },
+  {
+    "id": "lang:go/kostya/langarena#distance-ngram",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: A stands; harness symmetric, win is the container (Go handicapped by an extra map operation and a zeroed map hint).",
+    "corrections": {
+      "caveats": "The harnesses are symmetric (20 warm-ups, LCG reset, monotonic clock) and a replay matches checksum 397440. libstdc++ unordered_map makes 122,691 node mallocs per iteration with a prime modulo against Go's Swiss table; Go does 3 map operations against 2 plus a len(s) hint allocating about 6.1 MB of zeroed map memory per iteration. The key space is only 10,000 grams; drift is about 5-7% between runs. The D/LDC, V/Clang, Nim and C3 rows also beat every C++ row, so the cause is the container, not the compiler."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/lang_go_kostya_langarena_distance_ngram.json"
+    ]
+  },
+  {
+    "id": "lang:go/kostya/langarena#etc-words",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: A stands; no harness flaw, lead is library idioms shared by other non-C++ rows.",
+    "corrections": {
+      "caveats": "A replay matches checksum 1998586832 (18,623 distinct words, unique top word 'tea' x9). The lead is library idioms: strings.Fields zero-copy substrings plus a Swiss map against an istringstream text copy plus a node per word; the D/LDC, V/Clang, Nim and C3 rows also beat every C++ row. The max-word result relies on a unique top count (random Go map order); the C++ generator relies on unspecified operand evaluation order. Stable at 1.34-1.45x over 5 runs."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/lang_go_kostya_langarena_etc_words.json"
+    ]
   }
 ]

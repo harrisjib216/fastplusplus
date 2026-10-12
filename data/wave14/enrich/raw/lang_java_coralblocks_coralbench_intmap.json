@@ -1,0 +1,64 @@
+{
+  "id": "lang:java/coralblocks/coralbench#intmap",
+  "one_liner": "CoralBlocks' paired Java/C++ IntMap latency benchmark; Java's PUT 'win' comes from a C++ map that grew buckets.",
+  "what_it_does": "CoralBench is a small latency-measurement library from CoralBlocks LLC: a Bench class in Java and in C++ with mark()/measure() calls around each operation and percentile output. Its IntMap example implements the same chained integer-keyed hash map in both languages (an array of per-bucket lists, modulo indexing) and times 3,000,000 put, get and remove calls each under HotSpot C2, Graal JVMCI, -Xcomp, GraalVM native-image and clang++. Nothing here is a drop-in component for C++ code; it is a benchmark and harness repository.",
+  "how_it_is_fast": "There is no demonstrated speedup. The only operation where Java looked faster, PUT, benefits from allocation asymmetry: the Java map pre-sizes every bucket ArrayList to 3 entries in its constructor and each put bump-allocates one small Entry object from the thread-local allocation buffer of a 4 GB heap pre-faulted by -XX:+AlwaysPreTouch, while the December 2024 C++ map started each bucket as an empty std::vector, so its three puts per bucket paid malloc, reallocation and element moves (plus first-touch page faults) inside the timer. GET is at parity and DEL is faster in C++.",
+  "when_to_use": [
+    "As a template for paired Java and C++ per-operation latency benchmarks with percentile output (Bench.java and bench.cpp have matching mark/measure/printResults APIs).",
+    "To study how HotSpot C2, Graal JVMCI, -Xcomp and native-image compare on the same small Java loop; the README's other sections show warm-up versus -Xcomp effects on Math, BubbleSort and Sleep examples.",
+    "To reproduce the comparison properly: the current C++ header (pre-sized buckets, 32-bit keys) has never been benchmarked, so a fresh run of both sides on one machine with equal warm-up would be new data."
+  ],
+  "when_not_to_use": [
+    "As evidence that a JIT beats ahead-of-time C++: the only Java win rests on unequal work, the C++ output dates from 2024 and an -Ofast build, the Java JVMCI output from 2026, and the author hid the whole section in an HTML comment.",
+    "As a hash map for production use in either language: IntMap is a teaching example (per-bucket list chaining, modulo indexing, no resizing), not a tuned map.",
+    "When tail latency matters more than mean: the published Java PUT maximum is 211.7 us against 18.4 us for C++ even though the 99.9th-percentile maximum is lower in Java.",
+    "When deletes dominate: published DEL is 36-38 ns in HotSpot against 26 ns for C++, partly because Java remove also returns each Entry to a pool list."
+  ],
+  "integration": {
+    "form": "source-drop (Maven project for the Java Bench class and examples; C++ bench.cpp/bench.hpp plus header-only int_map.hpp)",
+    "dependencies": "Java: CoralDS 1.3.5 (LinkedList and LongMap); JUnit 4.13.1 and Mockito 4.11.0 for tests only. C++: standard library only.",
+    "min_toolchain": "Java 17 (maven.compiler.release 17); C++17 (clang++ -std=c++17 in bin/compileIntMapBenchmarkCpp.sh)",
+    "platforms": "measured on x86-64 Linux (Intel Xeon E-2288G, Ubuntu 18.04.6); the run scripts also handle macOS since August 2026",
+    "thread_safety": "not documented; IntMap and Bench have no synchronisation and are used from one thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness asymmetry behind the PUT numbers: Java buckets (ArrayList plus backing array) are allocated in the constructor outside the timer and the heap is pre-faulted with -XX:+AlwaysPreTouch, while the 2024 C++ IntMap (commit 46103a6) had no reserve and no pre-faulting, so every bucket's malloc, two reallocations and first page touch fell inside the timed puts; the reserve was added on 2026-08-28 (9281b82) but C++ was never re-run.",
+    "The 2024 Java benchmark discarded get()'s return value ('map.get(i);'), while the C++ driver stored it into a volatile; only the 2026 JVMCI output prints 'Values found: 3000000', so the C2, -Xcomp and native-image GET rows still come from a loop whose result was unused.",
+    "Shipped scripts compare different work by default: runIntMapBenchmarkJavaC2.sh and runIntMapBenchmarkJavaJVMCI.sh default to 1,000,000 warm-up iterations (commit 58888dd 'Raise Java benchmark warm-up defaults'), runIntMapBenchmarkCpp.sh defaults to 0; warm-up puts insert keys without being measured and change initialBucketSize, so re-running with defaults gives Java an easier measured set.",
+    "Each 20-50 ns operation is bracketed by two clock reads (steady_clock::now, System.nanoTime), so timer cost is a large share of every sample (published minimums of 15-40 ns), and each sample then updates a 2^22-bucket histogram (std::unordered_map in C++, CoralDS LongMap in Java) that touches cache between operations."
+  ],
+  "pick_this_over_siblings_when": "Do not pick it for evidence: the HotSpot benchLANG binary-trees and LangArena Binarytrees siblings record measured Java wins on allocation-heavy workloads, while this entry records none. Its only edge over them is a matched per-operation latency harness with percentiles in both languages.",
+  "verified_claims_summary": "A section of README.md hidden in an HTML comment shows, on an Intel Xeon E-2288G under Ubuntu 18.04.6, PUT 31.34 ns (Oracle GraalVM 25.0.4.1 JVMCI, 2026 run) and 32.40 ns (HotSpot C2, Java 23.0.1, 2024) against 47.75 ns for C++ (Ubuntu clang 18.1.0 -Ofast -march=native -flto, 2024, standard library not stated); GET 26.92 and 29.13 ns against 25.98 ns; DEL 36.29 and 37.73 ns against 25.93 ns. The PUT gap comes from the C++ map growing bucket vectors inside the timer, so no valid measurement shows Java faster.",
+  "status_note": "Active vendor repository (CoralBlocks LLC, Apache-2.0, 15 stars, 397 commits, last commit 2026-08-30 with release 1.4.3), usable as a harness template, but the Java-versus-C++ comparison is withdrawn into an HTML comment and rests on stale, asymmetric C++ output, so it is tier D.",
+  "sources_read": [
+    "https://github.com/coralblocks/CoralBench",
+    "https://github.com/coralblocks/CoralBench/commits/main",
+    "https://github.com/coralblocks/CoralBench/issues?q=is%3Aissue",
+    "https://github.com/coralblocks/CoralBench/tree/main/bin",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/main/README.md",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/main/pom.xml",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/main/src/main/c/int_map.hpp",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/main/src/main/c/int_map_benchmark.cpp",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/main/src/main/c/bench.cpp",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/main/src/main/c/bench.hpp",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/main/src/main/java/com/coralblocks/coralbench/example/IntMap.java",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/main/src/main/java/com/coralblocks/coralbench/example/IntMapBenchmark.java",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/main/src/main/java/com/coralblocks/coralbench/Bench.java",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/main/bin/int_map.sh",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/main/bin/compileIntMapBenchmarkCpp.sh",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/main/bin/runIntMapBenchmarkCpp.sh",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/main/bin/runIntMapBenchmarkJavaJVMCI.sh",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/main/bin/runIntMapBenchmarkJavaC2.sh",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/46103a6/README.md",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/46103a6/src/main/c/int_map.hpp",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/46103a6/src/main/c/int_map.cpp",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/46103a6/src/main/c/int_map_benchmark.cpp",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/46103a6/src/main/c/bench.cpp",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/46103a6/src/main/c/bench.hpp",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/46103a6/src/main/java/com/coralblocks/coralbench/example/IntMap.java",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/46103a6/src/main/java/com/coralblocks/coralbench/example/IntMapBenchmark.java",
+    "https://raw.githubusercontent.com/coralblocks/CoralBench/46103a6/src/main/java/com/coralblocks/coralbench/Bench.java"
+  ],
+  "confidence": 0.65
+}

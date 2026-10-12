@@ -1,0 +1,68 @@
+{
+  "id": "lang:go/kostya/langarena#etc-words",
+  "one_liner": "Go's strings.Fields plus built-in map word count, 1.41x faster than every C and C++ build in LangArena Etc::Words.",
+  "what_it_does": "A LangArena task, not a library: split a 325,090-byte text of 50,000 generated lowercase words (3 to 8 letters, single spaces) on whitespace, count each word in a hash map, then fold the most frequent word, its count and the vocabulary size into a checksum. The Go side is Words.Run in golang/words.go: make(map[string]int) with no size hint, a range over strings.Fields(w.text) doing frequencies[word]++, and a range over the map to find the maximum. To use it, write the code in Go; nothing links into a C++ program.",
+  "how_it_is_fast": "The win comes from library idioms, not code generation. Go 1.27.1's strings.Fields takes an ASCII fast path that counts fields in one pass, allocates an exactly sized []string, and in a second pass slices substrings that share the text's bytes, so no word is copied; the map keys are those 16-byte string headers stored inline in Swiss-table groups, so a new key costs a slot write rather than an allocation. The C++ baseline copies the whole 325 KB text into a std::istringstream every iteration, extracts each word with operator>> into a std::string, and calls try_emplace on a node-based std::unordered_map<std::string,int> (libstdc++ caches the _Hash_bytes string hash and picks the bucket by modulo over a prime), which allocates a node holding its own string copy for each of the 18,623 distinct words per iteration and frees them all at scope exit. All 16 C and C++ configurations land within 1.59-2.08 s whatever the compiler or flags, while D/LDC (1.294 s), V/Clang (1.299 s), Nim/Clang (1.38 s) and C3 (1.463 s) prod rows also beat every C++ row, which points at istringstream and unordered_map rather than at the C++ compilers (inference from the results file).",
+  "when_to_use": [
+    "Batch word or token counting in Go over ASCII, whitespace-separated text that fits in memory as one string.",
+    "Modest vocabularies (here 18,623 distinct 3-8 letter words, about 37% of tokens seen for the first time in each pass) where zero-copy substring keys avoid one allocation per new word.",
+    "As a data point when reviewing C++ text tooling: a tokenizer built on std::istringstream plus std::unordered_map<std::string,int> leaves about 1.4x against a garbage-collected language's defaults on this shape of input.",
+    "Teams already writing Go who want idiomatic code without hand tuning."
+  ],
+  "when_not_to_use": [
+    "Inside a C++ codebase: fix the C++ instead (string_view tokenizing and an open-addressing map); the suite never measured such a version, so the size of that gain is an inference.",
+    "When you want the fastest row: Crystal 0.88 s, Zig 0.91 s and Rust 1.021 s (prod builds) beat Go's 1.129 s on the same task, and Zig/Unchecked reaches 0.57 s.",
+    "Memory-tight jobs: Go peaked at 11.3 MB RSS against 7.5-7.9 MB for the C++ rows, 5.1-5.5 MB for C and 4.2 MB for Zig; strings.Fields allocates a 50,000-entry []string (about 800 KB) on every call, and the map's keys keep the whole text alive.",
+    "Non-ASCII input: strings.Fields switches to FieldsFunc(s, unicode.IsSpace) as soon as any byte is 0x80 or above (strings.go), a slower path this benchmark never exercises.",
+    "Input larger than memory or arriving as a stream: this code needs the full text as one string, and a streaming tokenizer would likely have to copy words (not measured)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (Go standard library strings package and the built-in map)",
+    "min_toolchain": "go.mod declares go 1.24.0; measured with go1.27.1, default 'go build' (GOAMD64=v1, no PGO)",
+    "platforms": "Measured on x86-64 Linux (AMD Ryzen 7 3800X); nothing platform-specific in the code",
+    "thread_safety": "Go maps are not safe for concurrent writes; the runtime aborts with 'concurrent map writes' (internal/runtime/maps). The benchmark is single-threaded.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Small-vocabulary test: the fasta LCG has a period of 139,968 draws, so the text is an 18,656-word block repeated about 2.7 times. My Python replay gives a 325,090-byte text with 18,623 distinct words and a unique top word ('tea' 9 times, runners-up 6), and reproduces run.js's checksum 1998586832 as 432 runs (72 warm-up plus 360 timed), so every language does the same work. The map stays cache-sized.",
+    "The checksum relies on luck in two places: the max-word loop ranges over a Go map, whose iteration order is randomized (C++ unordered_map order is unspecified), so a tied top count would make the result order-dependent. The C++ generator computes the word length as Helper::next_int(word_len) + Helper::next_int(3) + 3, whose operand evaluation order C++ leaves unspecified (Go guarantees left to right). The results file does not record checksum status. Neither affects the measured rows as far as the replay shows.",
+    "Harness check, no flaw found: both sides run 72 untimed warm-up iterations, reset the LCG and time 360 iterations with a monotonic clock, and neither pre-sizes its map. Go also calls runtime.GC() before the timer, and garbage left at the end is never collected inside the timed window. Its background GC and sweeper can use the 3800X's 15 other hardware threads while C++ frees every node on the timed thread. Timing is wall-clock with one measurement per configuration.",
+    "The lead is stable: golang/words.go (2026-04-23) and cpp/src/words.cpp (2026-04-24) did not change across the five monthly runs, and Go beat the best C/C++ row by 1.34x (Go 1.26.5, 2026-07-14), 1.39x, 1.45x (Go 1.27.1), 1.44x and 1.41x (2026-10-05), all derived from the results files."
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued Etc::Words rows, Crystal (0.88 s), Zig (0.91 s, 4.2 MB) and Rust (1.021 s, 5.4 MB) are all faster and lighter, so pick the Go row only when the code is already Go; it is the shortest standard-library-only version among them. Go/Opt (static, stripped) at 1.11 s is the same code.",
+  "verified_claims_summary": "In LangArena's 2026-10-05 run on an AMD Ryzen 7 3800X (Linux), Go 1.27.1's default build took 1.129 s for 360 iterations, against 1.587 s for the best of 16 C/C++ configurations (C++/G++/PGO, GCC 16.0.1 snapshot, libstdc++ istringstream plus unordered_map<std::string,int>), 1.638 s for C++/G++ at -O2, 1.707 s for C++/Clang++ (Clang 22.1.8) and 1.988 s for C/Clang with strtok_r and uthash. That is about 1.41x faster than the best C/C++ row (derived from page data).",
+  "status_note": "The MIT-licensed suite is active (41 stars, 622 commits, monthly reruns, last commit 2026-10-08 per the verifier); the author calls it subjective, treats C++ and Crystal as the reference implementations and asks for the same containers in every language (issue #1), so this row compares default Go idioms with default C++ idioms, not a component to adopt.",
+  "sources_read": [
+    "https://github.com/kostya/LangArena",
+    "https://github.com/kostya/LangArena/issues?q=is%3Aissue",
+    "https://github.com/kostya/LangArena/issues/1",
+    "https://github.com/kostya/LangArena/commits/master/golang/words.go",
+    "https://github.com/kostya/LangArena/commits/master/cpp/src/words.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/run.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/golang/words.go",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/golang/benchmark.go",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/golang/helper.go",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/golang/go.mod",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/words.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/words.hpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/benchmark.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/words.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-09-18-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-09-03-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-08-14-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-07-14-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/golang/go/go1.27.1/src/strings/strings.go",
+    "https://raw.githubusercontent.com/golang/go/go1.27.1/src/internal/runtime/maps/group.go",
+    "https://raw.githubusercontent.com/golang/go/go1.27.1/src/internal/runtime/maps/runtime_fast32.go",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/master/libstdc++-v3/include/bits/basic_string.h",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/master/libstdc++-v3/include/bits/hashtable.h",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/master/libstdc++-v3/include/bits/hashtable_policy.h",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/master/libstdc++-v3/include/bits/functional_hash.h"
+  ],
+  "confidence": 0.75
+}

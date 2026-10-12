@@ -1,0 +1,63 @@
+{
+  "id": "lang:haskell/atemerev/skynet#skynet",
+  "one_liner": "GHC sparks and green threads: skynet spawn cost 0.05-0.06 us per unit versus 52-73 us per C++ OS thread.",
+  "what_it_does": "This entry is a runtime-level claim, not a library: the Glasgow Haskell Compiler's runtime runs Haskell 'threads' (forkIO) and 'sparks' (par/rpar from the parallel package) as heap objects scheduled on a few OS threads ('capabilities', set by +RTS -N in a -threaded build). The skynet benchmark builds a 10-ary tree of 1,000,000 leaves and sums their ordinals; the Boost.Fiber documentation reports GHC's per-unit cost next to C++ ports that create one detached pthread or std::thread per tree node. Using it means writing the program in Haskell; nothing here is callable from C++.",
+  "how_it_is_fast": "A forkIO thread starts with a 1 kB stack that lives on the garbage-collected heap and grows in 32 kB chunks (RTS defaults -ki 1k, -kc 32k), so creating one costs a heap allocation rather than an mmap'd stack plus a clone() system call. The skynet Haskell variant that matches the Boost row's magnitude (Parallel.hs, parMap rpar) does not create threads at all: rpar pushes a pointer to the unevaluated child onto a per-capability work-stealing deque (newSpark in rts/Sparks.c), idle capabilities steal it, and a spark nobody steals is simply evaluated by its parent. That is the same work-stealing idea as Boost.Fiber's work_stealing scheduler, which reaches 0.05-0.09 us per fiber on the same page.",
+  "when_to_use": [
+    "You already write Haskell and have a recursive, pure divide-and-conquer computation: parMap rpar or Control.Parallel.Strategies spreads it over all cores with almost no per-task cost.",
+    "A Haskell server or crawler that wants one forkIO thread per connection or request, with hundreds of thousands alive at once, synchronised through MVar, Chan or STM.",
+    "Comparing language runtimes for massive task counts: GHC's spark and forkIO costs sit with Go, Erlang and Boost.Fiber, not with OS threads.",
+    "Multicore runs where the binary is linked with -threaded and started with +RTS -N (without it the program runs on one capability)."
+  ],
+  "when_not_to_use": [
+    "Your code base is C++: the same Boost page shows Boost.Fiber (work stealing, tcmalloc, 16C/32T) at 0.05-0.09 us per fiber, matching the Haskell row, so the gap is green threads against kernel threads, not Haskell against C++.",
+    "As evidence that Haskell code generation beats C++: the C++ rows create about 11,110 kernel threads and pass every value through a mutex and condition-variable channel, while the likely Haskell variant creates sparks without stacks or channels.",
+    "Hard latency budgets: thread stacks and all data live on a garbage-collected heap, and the measured per-unit numbers say nothing about pause times.",
+    "Work dominated by foreign calls: only calls not marked unsafe let other Haskell threads keep running, and parallel execution needs the -threaded RTS (GHC user guide, using-concurrent).",
+    "Very small tasks via sparks: sparks that are already evaluated, unreferenced or beyond the pool size are discarded, so speedups depend on granularity and are not guaranteed."
+  ],
+  "integration": {
+    "form": "compiler toolchain and runtime (GHC); forkIO and MVar in base, parMap/rpar in the parallel package",
+    "dependencies": "skynet harness: base, async, criterion, parallel, stm, time, unagi-chan 0.4 (haskell/skynet.cabal); the measured technique itself needs only base plus parallel",
+    "min_toolchain": "GHC with -threaded for +RTS -N; skynet's stack.yaml pins resolver lts-5.1 and its README names GHC 7.10.3; the Boost row used stack-1.4.0/ghc-8.0.1",
+    "platforms": "measured on x86-64 Linux (dual Xeon E5-2620 v4); other platforms not checked this session",
+    "thread_safety": "forkIO threads share one heap and synchronise through MVar, Chan or STM; the Parallel variant is pure code and needs no synchronisation",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw in the C++ baseline: boostorg/fiber performance/thread/skynet_pthread.cpp calls pthread_attr_setstacksize(&tattr, 8*1024), which glibc rejects with EINVAL because 8 kB is below PTHREAD_STACK_MIN (16384 on Linux; check_stacksize_attr in nptl), and its error branches construct std::runtime_error without throwing it. The pthreads therefore ran with the default glibc stack, not the 8 kB the page states, which fits the near-identical pthread (54-73 us) and std::thread (52-73 us) rows; neither OS-thread port checks the result (the fiber port does) and the attr is never destroyed.",
+    "Variant and work mismatch: Boost's 0.05-0.06 us times 1,000,000 is 50-60 ms, the order of skynet's Parallel variant (0.017 s on an i7-4930K per Main.hs comments), not the forkIO+MVar variant (1.7 s). Parallel.hs computes a pure tree sum with parMap rpar; newSpark pushes onto a bounded per-capability deque (maxLocalSparks default 4096 in rts/RtsFlags.c, extra sparks counted as overflowed and dropped), and unstolen sparks are evaluated by the parent, so many of the 1,111,111 'units' never become threads.",
+    "Possible measurement artefact (not compiled or run here): in Parallel.hs 'let !result = skynet 6 0' has no free variables, so -O2 full laziness can float it into a top-level constant; criterion's whnfIO then repeats run and only the first iteration would compute the sum. Neither the Boost page nor the repo says which output (criterion mean or the printed 'Result ... in' line) was taken.",
+    "Sizes and divisors differ: the Haskell row averages over 1,000,000 leaves, the OS-thread rows over 10,000 leaves (11,111 threads actually created) because 1,000,000 kernel threads exhausted resources; the Haskell RTS options (-N value) and GHC flags for the Boost run are unstated, and the page's single-threaded fiber row (1.69-1.79 us) shows how much the 32 hardware threads matter."
+  ],
+  "pick_this_over_siblings_when": "Pick this entry when the question is per-task spawn cost at million-task scale for fine-grained pure parallelism in Haskell; the Erlang/OTP and Go thread-ring siblings measure message passing against a 503-pthread Boost.Asio program, and the Tokio 1M-tasks sibling is the fairer C++ comparison because its baselines (Asio C++20 coroutines, concurrencpp) are user-space tasks too.",
+  "verified_claims_summary": "The Boost.Fiber performance page (gcc-6.3.1 release/speed for the C++ side, dual Xeon E5-2620 v4, 16C/32T, Linux, 2017-era toolchains) lists Haskell stack-1.4.0/ghc-8.0.1 at 0.05-0.06 us per unit averaged over 1,000,000 leaves against pthread 54-73 us, std::thread (libstdc++) 52-73 us and std::async 106-122 us per thread averaged over 10,000 leaves, about 870x-1,460x (derived from page data), while Boost.Fiber's work-stealing scheduler shows 0.05-0.09 us. The Haskell build flags, RTS options and variant are unstated, the sizes differ, and the likely Haskell variant creates sparks rather than threads.",
+  "status_note": "GHC is actively developed upstream at gitlab.haskell.org (the github.com/ghc/ghc read-only mirror shows 3.3k stars and 69,753 commits) under a BSD-3-style licence; the skynet Haskell harness (MIT) has not changed since April 2016 and the Boost numbers date from 2017, so the entry is tier C evidence for a runtime property, not a copyable component.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/boostorg/fiber/develop/doc/performance.qbk",
+    "https://raw.githubusercontent.com/boostorg/fiber/develop/performance/thread/skynet_pthread.cpp",
+    "https://raw.githubusercontent.com/boostorg/fiber/develop/performance/thread/skynet_std.cpp",
+    "https://raw.githubusercontent.com/boostorg/fiber/develop/performance/thread/skynet_async.cpp",
+    "https://raw.githubusercontent.com/boostorg/fiber/develop/performance/thread/buffered_channel.hpp",
+    "https://raw.githubusercontent.com/boostorg/fiber/develop/performance/fiber/skynet_stealing_async.cpp",
+    "https://raw.githubusercontent.com/atemerev/skynet/master/README.md",
+    "https://raw.githubusercontent.com/atemerev/skynet/master/haskell/src/Main.hs",
+    "https://raw.githubusercontent.com/atemerev/skynet/master/haskell/src/Parallel.hs",
+    "https://raw.githubusercontent.com/atemerev/skynet/master/haskell/src/MVar.hs",
+    "https://raw.githubusercontent.com/atemerev/skynet/master/haskell/src/Chan.hs",
+    "https://raw.githubusercontent.com/atemerev/skynet/master/haskell/skynet.cabal",
+    "https://raw.githubusercontent.com/atemerev/skynet/master/haskell/stack.yaml",
+    "https://github.com/atemerev/skynet/commits/master/haskell",
+    "https://github.com/ghc/ghc",
+    "https://raw.githubusercontent.com/ghc/ghc/master/docs/users_guide/using-concurrent.rst",
+    "https://raw.githubusercontent.com/ghc/ghc/master/docs/users_guide/runtime_control.rst",
+    "https://raw.githubusercontent.com/ghc/ghc/master/rts/Sparks.c",
+    "https://raw.githubusercontent.com/ghc/ghc/master/rts/RtsFlags.c",
+    "https://raw.githubusercontent.com/bminor/glibc/master/nptl/pthread_attr_setstacksize.c",
+    "https://raw.githubusercontent.com/bminor/glibc/master/nptl/pthread_attr_setstack.c",
+    "https://raw.githubusercontent.com/bminor/glibc/master/sysdeps/nptl/pthreadP.h",
+    "https://raw.githubusercontent.com/bminor/glibc/master/sysdeps/unix/sysv/linux/bits/pthread_stack_min.h",
+    "https://raw.githubusercontent.com/bminor/glibc/master/sysdeps/unix/sysv/linux/bits/local_lim.h"
+  ],
+  "confidence": 0.6
+}

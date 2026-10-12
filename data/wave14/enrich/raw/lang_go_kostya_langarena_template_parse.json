@@ -1,0 +1,56 @@
+{
+  "id": "lang:go/kostya/langarena#template-parse",
+  "one_liner": "Plain Go byte loop with a built-in map for {{ key }} substitution; about 1.18x faster than every C and C++ build in LangArena Template::Parse.",
+  "what_it_does": "A LangArena task, not a library: render a generated 6.0 MB HTML template (50,000 table rows, 150,001 {{ key }} placeholders, single-brace decoys such as {comment} and {balance: N}) to a 4.2 MB output, 50 timed iterations after 10 warm-up ones. The Go side is one 40-line method (golang/template.go, TemplateParse.Run): scan for '{{', find '}}', slice and strings.TrimSpace the key, look it up in a map[string]string and write the value or the byte into a pre-grown strings.Builder. To use the result, write the code in Go; nothing here links into a C++ program.",
+  "how_it_is_fast": "Not code generation: the loop is the same on every side. The Go key is a zero-copy substring of the template, and the lookup goes to Go's built-in map (a Swiss-table design since Go 1.24, with an AES-based string hash on amd64; background knowledge, not checked in the Go sources this session). The C test mallocs and frees a copy of every key (150,001 per iteration) and looks it up in uthash (default Jenkins hash unless HASH_FUNCTION is set, which the sources do not do; chained buckets of separately malloc'd nodes, keys and values); the C++ test builds a std::string per key (49,000 of the 150,001 untrimmed keys exceed libstdc++'s 15-byte small-string buffer and hit the heap) and looks it up in a node-based std::unordered_map. No profile exists, so the split is unknown: the lookups into a 150,001-entry map are cache-miss bound, but the suite's Zig row drops from 0.834 s (ReleaseSafe) to 0.374 s (ReleaseFast) on the same zero-copy code, so the per-byte loop and its checks also weigh heavily (inference from the results and sources).",
+  "when_to_use": [
+    "Choosing a language for a template renderer, log rewriter or other scan-and-substitute tool: idiomatic Go with a built-in map lands at or ahead of naive idiomatic C and C++.",
+    "Workloads dominated by many small string-key lookups (150k keys of 4-15 bytes here) against a map too large for L2, where Go's map and allocation-free slicing help.",
+    "As a reference point when your C++ code copies keys into std::string or uses std::unordered_map on a hot path: this row shows what that costs.",
+    "Linux x86-64 batch jobs where Go's 1.8x higher peak RSS is acceptable."
+  ],
+  "when_not_to_use": [
+    "As evidence that Go beats tuned C or C++: the same scan in Zig ReleaseFast runs 0.374 s, twice as fast as Go, and a C++ version with std::string_view keys and an open-addressing map was never measured.",
+    "Inside an existing C++ codebase: the gain comes from the map and slicing idioms, which C++ can adopt (string_view keys, a flat hash map) without changing language.",
+    "Memory-tight services: Go peaked at 75 MB RSS against 41 MB for C/Gcc and 38.6 MB for C++/G++ on this task.",
+    "Latency-sensitive paths: each iteration allocates a fresh 9 MB output buffer, so the GC runs during the timed loop, and only total runtime is reported."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Go toolchain only (standard library strings package and built-in map); the measured build is go 1.27.1, go.mod says go 1.24.0",
+    "min_toolchain": "Go 1.27.1 measured (Go 1.26.5 in the July and August runs); go.mod declares go 1.24.0",
+    "platforms": "Measured on x86-64 Linux (AMD Ryzen 7 3800X); the code is portable Go",
+    "thread_safety": "Not documented; the task is single-threaded and Go maps are not safe for concurrent writes",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The comparison is between allocation and container idioms, not compilers: C mallocs and frees a key copy per placeholder and uses uthash with strdup'd keys and values; C++ copies keys into std::string and uses std::unordered_map<std::string,std::string>. Rust, which also slices keys without copying but uses the default SipHash HashMap, runs 0.986 s, behind the best C row, so the hash map and hash function matter as much as the copies (inference from the results file).",
+    "Times are wall clock on an 8-core CPU while every implementation is single-threaded: Go's concurrent GC can do its marking on otherwise idle cores, which C and C++ never need, and runtime.GC() runs before the timer starts. No CPU-time column was found in the results file.",
+    "One timing per configuration per monthly run, no variance reported; within the same run C++/Clang++/PGO (1.386 s) is 27% slower than plain C++/Clang++ (1.089 s), so differences of about 10% between rows should not be over-read. The Go lead itself held at 1.10-1.18x in five monthly runs.",
+    "No correctness bug found: all three sides scan identically (same '{{'/'}}' rules and same fallthrough when '}}' is missing), checksums are verified, and Go's Unicode-aware TrimSpace versus the C/C++ space-and-tab trim makes no difference on this input."
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued LangArena rows this is the Go text-substitution data point, next to Go Distance::NGram (0.603 s vs 0.822 s) and Go Etc::Words (1.129 s vs 1.587 s); those two show larger margins over C++ than this 1.18x. If you need the fastest code for this exact task, the suite's own Zig ReleaseFast row (0.374 s) is about twice as fast as Go.",
+  "verified_claims_summary": "In the 2026-10-05 LangArena run on an AMD Ryzen 7 3800X (Linux), Go 1.27.1 rendered the 6.0 MB template 50 times in 0.751 s, against 0.884 s for the best of 16 C/C++ configurations (C/Gcc/Unsafe, GCC 16.0.1 trunk, -O3 -march=native -ffast-math), 0.897 s for C/Gcc at -O2 and 0.973 s for C++/G++ at -O2 with libstdc++: about 1.18x over the best C/C++ row (derived from page data), with a 1.10-1.18x lead in five monthly runs since 2026-07-14.",
+  "status_note": "Active MIT-licensed suite (41 stars, last commit 2026-10-08, monthly reruns, no open or closed issues about this task); the author calls it subjective and says AI tools helped translate the Crystal originals, so treat the row as a language-level data point, not a component to adopt.",
+  "sources_read": [
+    "https://github.com/kostya/LangArena/commits/master",
+    "https://github.com/kostya/LangArena/issues?q=is%3Aissue+template",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/run.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/golang/template.go",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/golang/benchmark.go",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/golang/go.mod",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/template.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/benchmark.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/benchmark.h",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/template.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/template.hpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/benchmark.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/src/template.zig",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/rust/src/benchmarks/template.rs"
+  ],
+  "confidence": 0.7
+}
