@@ -1,0 +1,60 @@
+{
+ "id": "lang:csharp/kostya/benchmarks#brainfuck-bench.b-staged",
+ "one_liner": "Single-file C# Brainfuck runner that turns the program into nested generic types for RyuJIT; 2.9x faster than kostya's C++ interpreter.",
+ "what_it_does": "bf-staged.cs (about 250 lines, MIT, contributed by hez2010 in PR #511) reads a Brainfuck program at run time and builds one closed generic type per instruction sequence: AddPointer<Next>, SubData<Next>, Loop<Body,Next> and so on, all ref structs implementing a static abstract IOp.Run. It then calls Run on the outermost type through a delegate. It is a benchmark program, not a library: there is no API beyond Executable(text).Run(ref printer), and only the suite's Brainfuck subset (no ',' input) is handled.",
+ "how_it_is_fast": "This is first Futamura-style staging (program specialization) done with the .NET type system. Type.MakeGenericType encodes the parsed program as a type, and the JIT compiles a separate specialized method body for each closed instantiation, so instruction dispatch, the switch on op kind and the walk over an op vector disappear; what remains is straight-line code with calls or inlined bodies chained by Next.Run tail calls. Tape access skips bounds checks (Unsafe.Add on a Span<byte>), and the suite-wide Directory.Build.props sets TieredCompilation=false, so every instantiation is compiled once at full optimisation. The C++ baseline pays a switch and a recursive vector<Op> walk for every instruction.",
+ "when_to_use": [
+  "As a reference pattern for runtime specialization in .NET: a small DSL, rule or filter program known only at run time that executes many times (bench.b: 185 instructions run for 0.37 s; mandel.b: 11,451 instructions).",
+  "When you want interpreter-to-native speedups without writing IL, Reflection.Emit or expression trees: the code generator is about 50 lines of MakeGenericType calls.",
+  "Workloads where a few milliseconds of type construction and JIT inside the run are amortized; both suite programs run for 0.37-2.9 s including that cost.",
+  "Teaching or comparing staging across runtimes: the same suite has Scala (Staged) and Racket (Staged) variants of the identical task."
+ ],
+ "when_not_to_use": [
+  "As evidence that C# beats C++ at the same work: the plain C# interpreter in the same table is slower than C++/g++ (bench.b 1.280 vs 1.097 s; mandel.b 15.576 vs 10.143 s), and no C++ JIT or staged variant was benchmarked.",
+  "Memory-tight or start-up-sensitive processes: 36.62 MiB base RSS against 3.38 MiB for the C++ interpreter, plus the .NET runtime start-up that the harness excludes from timing.",
+  "NativeAOT, trimmed or other no-JIT deployments: the whole technique depends on Type.MakeGenericType and reflection at run time; the suite builds it only with dotnet build for the JIT runtime.",
+  "Untrusted programs: the tape is read and written with Unsafe.Add and only the right edge is guarded, so moving left of cell 0 writes outside the array instead of throwing.",
+  "Short-lived programs that run once for microseconds: every distinct program costs type loading and JIT before the first instruction runs."
+ ],
+ "integration": {
+  "form": "source-drop (one C# file, brainfuck/bf-staged.cs, built by brainfuck-staged.csproj)",
+  "dependencies": "none beyond the .NET base class library",
+  "min_toolchain": ".NET 10 SDK as built (TargetFramework net10.0; README lists .NET 10.0.100, current Dockerfile SDK 10.0.302); uses static abstract interface members and 'allows ref struct' generic constraints",
+  "platforms": "any platform with the CoreCLR JIT; measured on x86-64 Linux only",
+  "thread_safety": "not documented; each Run builds its own tape and the Printer is passed by ref, so separate runs share nothing but the runtime's type cache",
+  "drop_in_for_baseline": false
+ },
+ "gotchas": [
+  "Different algorithm from the baseline: brainfuck/README.md requires every implementation to interpret instructions one by one without squashing, and the maintainer (nuald, issue #485, 2024-03-20) says staged variants are 'not the reference implementations, and rather included just for testing purposes'; the C++ side is the reference interpreter, not a C++ JIT.",
+  "Tape semantics differ: C# uses byte cells that wrap at 256 and loops on != 0, C++ uses int cells and loops on > 0; both suite programs agree on output, but other Brainfuck programs may not.",
+  "AtNoRangeCheck's comment says the address 'has been guarded in AddPointer', but SubPointer never checks the left edge, so a program that steps below cell 0 silently corrupts managed memory (the C++ interpreter's size_t index would also go out of bounds there).",
+  "The JIT and type-construction cost is inside the timed region (xtime.rb times from the program's start message to its stop message), which counts against the staged row; .NET runtime start-up and the Hello World self-check are outside it for every language."
+ ],
+ "pick_this_over_siblings_when": "Among the staged rows of the same table it is the fastest and leanest (bench.b 0.373 s and 36.6 MiB against Scala (Staged) 0.409 s and 229.6 MiB and Racket (Staged) 0.885 s and 101.4 MiB; mandel.b 2.917 s against 7.118 s and 15.722 s), so pick it when your host language is C#. If you must stay in C++, the catalogued ClangJIT and Proteus entries give C++ the same run-time specialization through LLVM.",
+ "verified_claims_summary": "In kostya/benchmarks (README update 2026-07-19, Intel Xeon E-2324G, medians of repeated runs), the staged C# runner on .NET 10.0.100 with TieredCompilation=false ran bench.b in 0.373 s, 14.33 J, against 1.097 s and 46.21 J for the C++ AST interpreter built with g++ 16.1.0 -O3 -march=native -flto=auto (C/gcc 1.112 s, C++/clang++ 22.1.8 with libc++ 1.167 s), about 2.9x (derived from page data); the same pair runs mandel.b in 2.917 s against 10.143 s (about 3.5x, derived from page data). The win is run-time compilation of the Brainfuck program set against a reference interpreter, not .NET code generation beating g++ at equal work.",
+ "status_note": "The suite is active (MIT, 2.9k stars, last update 2026-07-19), and bf-staged.cs has had exactly one commit (e645c23, PR #511, 2025-11-17); it is a copyable teaching sample of .NET generic staging rather than a maintained library.",
+ "sources_read": [
+  "https://github.com/kostya/benchmarks",
+  "https://github.com/kostya/benchmarks/pull/511",
+  "https://github.com/kostya/benchmarks/pull/512",
+  "https://github.com/kostya/benchmarks/issues?q=staged",
+  "https://github.com/kostya/benchmarks/issues/485",
+  "https://github.com/kostya/benchmarks/commits/master/brainfuck/bf-staged.cs",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/README.md",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/README.md",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bf-staged.cs",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bf.cpp",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bf.cs",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/Makefile",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/brainfuck-staged.csproj",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bench.b",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/mandel.b",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/Directory.Build.props",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/common/commands.mk",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/common/libnotify/libnotify.h",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/xtime.rb",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/docker/Dockerfile",
+  "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/LICENSE"
+ ],
+ "confidence": 0.7
+}

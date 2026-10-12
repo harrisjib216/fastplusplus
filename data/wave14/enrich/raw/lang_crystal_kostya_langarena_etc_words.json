@@ -1,0 +1,58 @@
+{
+  "id": "lang:crystal/kostya/langarena#etc-words",
+  "one_liner": "Crystal's idiomatic String#split plus built-in Hash word count, about 1.8x faster than every C and C++ build in LangArena Etc::Words.",
+  "what_it_does": "A LangArena task, not a library: split a 325 KB space-separated text of 50,000 generated lowercase words, count each word in a hash map, then fold the top word, its count and the vocabulary size into a checksum. The Crystal side is five lines in crystal/main.cr (class Words): Hash(String, Int32).new(0), @text.split(' ') with a block, Hash#update and max_by. To use the result, write the task in Crystal; nothing here can be linked into a C++ program.",
+  "how_it_is_fast": "The win comes from the libraries, not from code generation. Crystal's String#split(Char) walks the bytes once with Char::Reader and copies each word into a new GC-allocated String. Its Hash is an insertion-ordered, open-addressing table with linear probing over a power-of-two index array, and strings are hashed with the funny_hash-based Crystal::Hasher. The C++ baseline instead runs the locale-aware std::istringstream operator>> (which also copies the whole text into its stringbuf each iteration) and a node-based std::unordered_map<std::string,int>. Every C row timed almost the same (1.96-2.08 s) whether built by Clang, GCC, the author's mycc or cproc/QBE, and every C++ row stayed within 1.59-1.73 s whatever the flags, which suggests most of the time is spent inside libc and libstdc++ calls rather than in compiled user code (inference from the results file).",
+  "when_to_use": [
+    "You are choosing a language for log, text or word-count tooling and want GC-managed, Ruby-like code that still beats a naive istringstream plus unordered_map C++ version.",
+    "Workloads that tokenize on a single ASCII byte and count small string keys (about 18.6k distinct 3-8 letter words here) in a hash that fits in cache.",
+    "Command-line or batch jobs on Linux x86-64 or AArch64 where you can build with crystal build --release.",
+    "As a reference point to check whether your own C++ tokenizer or hash map has the same istream or node-allocation overhead."
+  ],
+  "when_not_to_use": [
+    "Inside an existing C++ codebase: Crystal binds to C APIs only (its README: 'call C code by writing bindings'), so a C++ program would need a C shim, and Crystal brings its own Boehm GC runtime.",
+    "If you can change the C++ code: string_view tokenizing plus a flat or open-addressing map is the obvious fix, and the suite never measured such a version, so the 1.8x gap says little against tuned C++ (inference).",
+    "Memory-tight jobs: Crystal peaked at 8.8 MB RSS against 5.3 MB for C and 7.8 MB for C++ on this task, and it allocates a fresh String for every word, including repeated ones.",
+    "Builds without --release: the suite's Crystal/O3 row (crystal build -O3, no --single-module) took 3.105 s, slower than every C and C++ row.",
+    "Latency-sensitive services where stop-the-world Boehm GC pauses matter; this benchmark only reports total runtime."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Crystal compiler (1.21.1 in the measured run, LLVM backend) and its runtime, linked against Boehm GC (libgc / bdw-gc); the benchmark file also requires the cryyjson shard, which this task does not use",
+    "min_toolchain": "Crystal 1.21.1 measured; older versions not tested here",
+    "platforms": "Measured on x86-64 Linux (AMD Ryzen 7 3800X); Crystal's README shows Linux, macOS, AArch64 and Windows CI",
+    "thread_safety": "Not documented for this task; the benchmark is single-threaded and Crystal's Hash is not synchronized",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The workload is less random than it looks. Helper.next_int is the Benchmarks Game fasta LCG (IM 139968, IA 3877, IC 29573), whose period is at most 139,968, and the text needs about 375k draws, so the 50,000-word text is an 18,656-word block repeated about 2.7 times. That leaves 18,623 distinct words, most seen 2 or 3 times, and one clear winner ('tea', 9 times). My Python replay reproduces run.js's checksum 1998586832 as 432 iterations (72 warm-up plus 360 timed) of 9 + djb2('tea') + 18,623. The checksum is therefore valid across languages because the top word has no tie, but the test is a small-vocabulary hash workload, not a 50k-key one.",
+    "The 1.8x is a library and idiom comparison: C++ pays for std::istringstream operator>> and a whole-text copy into the stringbuf each iteration; C does strdup of the whole text, strtok_r, strlen and a malloc plus strdup per distinct word into uthash. Neither is how a performance-minded C++ programmer would write it.",
+    "Crystal's Hash#update with a default probes twice on a miss (find_entry_with_index, then upsert), so the Crystal side is not even optimal; about 37% of words per iteration are first sightings.",
+    "Crystal runs GC.collect before the timer starts and after it stops, so the final collection of each run is untimed; collections during the 360 iterations are still counted. One measurement per configuration, no variance reported."
+  ],
+  "pick_this_over_siblings_when": "Against the other catalogued LangArena Etc::Words rows, Crystal (0.88 s) is the fastest default-flag build, ahead of Zig ReleaseSafe 0.91 s, Rust 1.021 s and Go 1.129 s; pick Crystal for the shortest garbage-collected code, Zig (4.2 MB) or Rust (5.4 MB) when memory matters or you need code that can live next to C. For production text splitting in a C/C++ stack, a real tool such as csv-zero or a Rust crate from the sibling list is more useful than this benchmark row.",
+  "verified_claims_summary": "In the 2026-10-05 LangArena run on an AMD Ryzen 7 3800X (Linux), Crystal 1.21.1 built with --release took 0.88 s for 360 iterations, against 1.587 s for the best of 16 C/C++ configurations (C++/G++/PGO, GCC 16.0.1 trunk, libstdc++, -O2 plus profile use), 1.638 s for C++/G++ at -O2 and 1.988 s for C/Clang 22.1.8. That is about 1.8x faster than the best C/C++ row (derived from page data), with the same 1.79-1.82x lead in five monthly runs since 2026-07-14.",
+  "status_note": "Active MIT-licensed suite (41 stars, last commit 2026-10-08, monthly reruns); the author calls it subjective, began it in Crystal and calls C++ and Crystal the reference implementations (issue #1), with other languages AI-assisted translations, so use the row as a language-level data point, not as a component to adopt.",
+  "sources_read": [
+    "https://github.com/kostya/LangArena",
+    "https://github.com/kostya/LangArena/commits/master",
+    "https://github.com/kostya/LangArena/issues?q=is%3Aissue",
+    "https://github.com/kostya/LangArena/issues/1",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/crystal/main.cr",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/crystal/shard.yml",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/words.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/words.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/benchmark.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/run.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/crystal-lang/crystal/1.21.1/README.md",
+    "https://raw.githubusercontent.com/crystal-lang/crystal/1.21.1/src/string.cr",
+    "https://raw.githubusercontent.com/crystal-lang/crystal/1.21.1/src/hash.cr",
+    "https://raw.githubusercontent.com/crystal-lang/crystal/1.21.1/src/crystal/hasher.cr",
+    "https://raw.githubusercontent.com/crystal-lang/crystal/1.21.1/src/gc/boehm.cr"
+  ],
+  "confidence": 0.75
+}

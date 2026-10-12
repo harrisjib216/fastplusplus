@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/virustotal/yara-x",
+  "one_liner": "Rust rewrite of the YARA malware-pattern scanner; vendor reports 1.85x faster full-ruleset scans than C YARA since v1.16.0.",
+  "what_it_does": "Compiles YARA rules (text, hex and regex patterns plus a boolean condition per rule, with PE, ELF, Mach-O, .NET, DEX, LNK and other parsing modules) and scans files or memory buffers with them. It accepts nearly all existing YARA rules, but some regex syntax that YARA tolerates is rejected (unescaped '{', invalid escapes; the CLI has --relaxed-re-syntax) and base64 patterns need at least 3 characters. The library API (Rust crate, C API in capi/ built as staticlib or cdylib, Python and Go bindings) is not compatible with libyara's, and process scanning is not implemented.",
+  "how_it_is_fast": "Rule strings are reduced to short atoms and found in one pass with a double-array Aho-Corasick automaton (the daachorse crate since v1.16.0, PR #654) plus an in-tree Teddy SIMD prefilter adapted from the aho-corasick crate for small pattern sets; atom hits are then verified, with 'exact atoms' skipping verification when the atom alone proves a match, and regex verification runs on YARA-X's own FastVM with a PikeVM fallback (the docs give no mechanism for the regex gap versus YARA). Rule conditions are compiled to WebAssembly and JIT-compiled to native code by wasmtime's Cranelift, and since PR #657 (v1.17.0) many 'matches' tests on one field inside an 'or' are merged into a single regex::RegexSet pass.",
+  "when_to_use": [
+    "Bulk scanning of large corpora (GB-scale, many files) with large rule sets such as YARA Forge, where match time dominates and the v1.16+ daachorse matcher applies.",
+    "Rule sets with expensive regexes or complex hex patterns that YARA warns 'may slow down scanning'; the docs cite more than 20 s versus under 1 s for a bitcoin-address regex on a ~200 MB file.",
+    "Rules with loops over the file (for any i in (0..filesize-1)), which the docs put at 5-6x faster than YARA.",
+    "New Rust, C, Python or Go integrations that want memory safety, better error reporting, a reusable parser (formatter, language server) and per-scan timeouts, and can adopt a new API."
+  ],
+  "when_not_to_use": [
+    "Many short scans of small files, each in a new process: issue #496 measured the yr CLI at 10.7 ms per small file versus YARA at 1.9 ms with precompiled rules, because loading rules JIT-compiles their WASM (2.68 ms for four rules) unless the non-default native-code-serialization feature is used.",
+    "Existing code built on libyara's C API, or on yara-python and go-yara: the APIs differ and must be ported.",
+    "Live process memory scanning, which YARA supports and YARA-X does not.",
+    "Hardened or sandboxed hosts that forbid executable memory (macOS 26 Hardened Runtime killed scans in issue #645 without allow-jit and allow-unsigned-executable-memory entitlements); the opt-in 'pulley' interpreter avoids the JIT but one user measured about 3x lower throughput.",
+    "Pinned older versions: before v1.16.0 independent users measured YARA-X slower than YARA (issue #391: 1.31x, 1.41x and 3.19x more wall time, derived from page data)."
+  ],
+  "integration": {
+    "form": "crate (yara-x on crates.io); C API as static or shared library (yara_x_capi); Python and Go bindings; yr CLI",
+    "dependencies": "wasmtime 48 with Cranelift, daachorse 5, regex and regex-automata, memchr, protobuf, plus parser crates per enabled module (nom, x509-parser, RSA/ECDSA crates for signature checks)",
+    "min_toolchain": "Rust 1.95.0 (MSRV in Cargo.toml), edition 2024",
+    "platforms": "Platforms Cranelift supports for the default JIT build; the optional 'pulley' feature interprets rule conditions for other targets or no-JIT environments; a wasm32 build exists (js-wasm).",
+    "thread_safety": "Compiled Rules can be shared across threads; each Scanner scans one file or buffer at a time and should be used from one thread (one scanner per thread, per the crate docs and C header).",
+    "drop_in_for_baseline": "partial — most YARA rules compile unchanged (stricter regex escaping, base64 and a few other documented differences), but the C, Python and Go APIs and compiled-rule files are not compatible with YARA's, and process scanning is missing."
+  },
+  "gotchas": [
+    "Harness note: the blog's 1.85x quotes run 1 of three per scanner from PR #654, and YARA's run 1 (48.275 s) was its slowest; three-run means give 47.671 s vs 26.155 s (1.82x), and the YARA Forge core set in the same PR gives only 32.103 s vs 20.871 s (1.54x, derived from page data). All runs used 'scan -r -p 16' with precompiled rules on unstated hardware and an unstated YARA version.",
+    "The only independent same-session check after the daachorse change (issue #391, 2026-05-07, about 9,500 rules over /usr) shows YARA-X v1.16.0 at 9m59.056s wall versus YARA 9m41.222s, about 3% slower, while using about 17% less user CPU (derived from page data); the vendor's 1.85x is not reproduced on that workload.",
+    "Atom extraction differs from YARA: in issue #444 the regex /[A-Za-z0-9+\\/]{64,512}\\x00/ yields 4096 two-byte atoms in YARA-X versus a single '00' atom in YARA, so one rule took about 10 s on a sub-700 KB file once another rule forced pattern search; profile with the rules-profiling feature.",
+    "In November 2025 (issue #496) the maintainer still described YARA as about 2-3x faster at raw scanning; the docs page now claims YARA-X is faster in almost all cases, which rests on the v1.16.0 matcher swap."
+  ],
+  "pick_this_over_siblings_when": "Pick YARA-X when you need YARA rule semantics (conditions, counts, offsets, file-format modules) over many files; for plain multi-regex text search the Rust regex crate (which YARA-X uses for its RegexSet path) or Hyperscan in that sibling's benchmarks is the simpler tool, and fastgrep or similar grep replacements suit ad hoc searching.",
+  "verified_claims_summary": "VirusTotal's own run (PR #654, blog 2026-05-13): 500 random VirusTotal files (~24 GB, private), YARA Forge full rule set, 16 scan threads, precompiled rules, YARA-X with daachorse about 26.2 s versus legacy C YARA about 47.7-48.3 s (1.82-1.85x) and 1.54x on the core set; hardware, compilers, flags and the YARA version are not stated. Independent users measured older YARA-X builds 1.3-3.2x slower than YARA and v1.16.0 at rough parity (3% slower wall, 17% less CPU).",
+  "status_note": "Actively developed by VirusTotal (v1.21.0 workspace version, last commit 2026-10-09, 1.3k stars, BSD-3-Clause) and run in VirusTotal production; usable today, but its speed advantage over YARA dates only from v1.16.0 (May 2026) and is vendor-measured, with the one independent post-1.16 check showing parity rather than 1.85x.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/VirusTotal/yara-x/HEAD/README.md",
+    "https://raw.githubusercontent.com/VirusTotal/yara-x/HEAD/site/content/blog/yara-x-just-got-faster/index.md",
+    "https://raw.githubusercontent.com/VirusTotal/yara-x/HEAD/site/content/docs/intro/yara_vs_yara-x.md",
+    "https://raw.githubusercontent.com/VirusTotal/yara-x/HEAD/site/content/docs/writing_rules/differences.md",
+    "https://raw.githubusercontent.com/VirusTotal/yara-x/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/VirusTotal/yara-x/HEAD/lib/Cargo.toml",
+    "https://raw.githubusercontent.com/VirusTotal/yara-x/HEAD/capi/Cargo.toml",
+    "https://raw.githubusercontent.com/VirusTotal/yara-x/HEAD/capi/include/yara_x.h",
+    "https://raw.githubusercontent.com/VirusTotal/yara-x/HEAD/lib/src/lib.rs",
+    "https://raw.githubusercontent.com/VirusTotal/yara-x/HEAD/lib/src/scanner/mod.rs",
+    "https://raw.githubusercontent.com/VirusTotal/yara-x/HEAD/lib/src/compiler/atoms/mod.rs",
+    "https://raw.githubusercontent.com/VirusTotal/yara-x/HEAD/lib/src/scanner/matches.rs",
+    "https://github.com/VirusTotal/yara-x",
+    "https://github.com/VirusTotal/yara-x/tree/main/site/content/docs/writing_rules",
+    "https://github.com/VirusTotal/yara-x/issues?q=is%3Aissue+slower+than+yara",
+    "https://github.com/VirusTotal/yara-x/issues/391",
+    "https://github.com/VirusTotal/yara-x/issues/496",
+    "https://github.com/VirusTotal/yara-x/issues/444",
+    "https://github.com/VirusTotal/yara-x/issues/645",
+    "https://github.com/VirusTotal/yara-x/pull/654"
+  ],
+  "confidence": 0.75
+}

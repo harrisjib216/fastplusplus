@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/volution/kawipiko",
+  "one_liner": "Go static-site server that serves a prebuilt CDB archive from memory over fasthttp; author measured 1.22-1.34x NGINX request rate.",
+  "what_it_does": "Serves a static website that has first been packed into a single read-only CDB (constant database) file by the companion kawipiko-archiver, which can pre-compress content with gzip, zopfli or brotli. kawipiko-server answers only GET requests from that archive over HTTP/1.1 (fasthttp, plain or TLS) or HTTP/2 (Go net/http); there is no dynamic content, reverse proxying, per-request recompression or live reload. It is not a drop-in for an NGINX docroot: you rebuild the archive and restart the server to publish changes.",
+  "how_it_is_fast": "Every resource lives in one CDB file that is loaded into RAM (--archive-inmem) or memory-mapped (--archive-mmap), so a request does no open/read/close syscalls; optional in-RAM indexes (--index-paths, --index-data-meta, --index-data-content) remove even the CDB hash lookups. Response headers are stored precomputed in the archive and bodies are pre-compressed at build time, and the handler copies the request path into stack buffers and hands the archive bytes to fasthttp with SetBodyRaw, avoiding heap allocations. Duplicate files are stored once, which helped the OpenStreetMap tile run (about 250k tiles became about 100k entries).",
+  "when_to_use": [
+    "Self-hosting a static site or tile set made of many small files (the author's OpenStreetMap case: ~250k PNGs, median 103 bytes) where per-file syscalls and inode overhead dominate.",
+    "Deployments that want atomic publish and rollback: build one archive in CI, swap it with rename, restart.",
+    "Plain HTTP/1.1 or HTTPS over HTTP/1.1 behind a CDN or load balancer, where fasthttp's path is the fast one.",
+    "Small static-only hosts (Linux, FreeBSD, OpenBSD, macOS) that want a single statically linked binary and no config files."
+  ],
+  "when_not_to_use": [
+    "HTTP/2-heavy traffic: the author measured kawipiko's HTTP/2 (Go net/http) at about one sixth of its HTTP/1-over-TLS rate, while NGINX's HTTP/2 was close to its HTTP/1 rate.",
+    "Content that changes often, needs per-client content negotiation (it sends the archive's encoding regardless of Accept-Encoding), custom headers, auth, proxying or more than 4 GiB / 16M resources.",
+    "Workloads that need correct HTTP caching semantics: the fasthttp path sets NoDefaultDate, so responses carry no Date header (RFC 9110 requires one from origin servers with a clock), and no conditional-GET (304) or Range handling appears in the server source.",
+    "Memory-tight hosts: the tile run used about 1 GiB RAM for kawipiko while NGINX used the least; --archive-inmem also copies the archive into each process.",
+    "Strict latency targets at high connection counts: in the author's own Hello World rows NGINX had lower average and p99 latency at 2048 and 4096 connections."
+  ],
+  "integration": {
+    "form": "static binary (kawipiko-server, kawipiko-archiver, all-in-one kawipiko); Go module source",
+    "dependencies": "fasthttp v1.40.0, a fork of colinmarc/cdb with mmap support (cipriancraciun/go-cdb-lib), andybalholm/brotli, go-zopfli, zeebo/blake3, bbolt (archiver cache), golang.org/x/sys",
+    "min_toolchain": "Go 1.17 per go.mod (prebuilt v0.1.0 preview binaries for linux/freebsd/openbsd x86_64 and darwin x86_64/aarch64)",
+    "platforms": "Linux (main platform), FreeBSD, OpenBSD, macOS; x86-64 and arm64 builds",
+    "thread_safety": "Read-only archive shared lock-free by all goroutines; scale with --threads per process or several --processes (use --archive-mmap then, since --archive-inmem copies the archive per process).",
+    "drop_in_for_baseline": "partial — it replaces an NGINX static docroot only after archiving the site; GET-only, no per-request compression, no reload without restart, and different response headers (no Date, Server or Last-Modified)."
+  },
+  "gotchas": [
+    "Harness flaw: the Hello World ratios pair kawipiko rows labelled August 2018 with NGINX rows labelled August 2019, and the NGINX config the page links (examples/nginx/nginx.conf) was first committed on 2021-12-23, two years after the NGINX runs, with non-default settings (sendfile off, tcp_nodelay off, open_file_cache max=2048, far below the ~250k tile files); the tile run's per-path wrk Lua script is loaded from a separate kawipiko-examples repo (scripts/benchmark.z-run) that returned 404 here, so neither comparison can be rerun as measured.",
+    "The higher request rate comes with worse tails in the same table: at 2048 connections kawipiko averaged 45.42 ms (p99 417.40 ms) vs NGINX 27.11 ms (p99 126.97 ms); at 4096 connections p99 745.94 ms vs 339.05 ms, with 4,449 vs 187 requests past wrk's 1 s timeout dropped from the histogram. Those kawipiko rows are also internally inconsistent: the mean latency times the request count exceeds connections times duration by 2.2x and 2.1x (Little's law, derived from page data), which a one-request-per-connection wrk run cannot produce.",
+    "The responses were not equivalent: kawipiko ran with --security-headers-disable and --timeout-disable and sends no Date, Server or Last-Modified headers, so wrk read about 169 bytes per response from kawipiko vs 263 from NGINX (derived from page data); the author says timeouts alone cost 10-15%.",
+    "Request paths are not percent-decoded (a FIXME in sources/cmd/server/server.go), so URLs with escaped characters must match the archive keys literally; experimental QUIC/HTTP/3 and seccomp support were removed on 2026-08-15."
+  ],
+  "pick_this_over_siblings_when": "Pick kawipiko for serving a fixed static site or tile set from one immutable archive; the HttpArena siblings (vanilla, zix, zeemo, tokio-uring and others) beat a custom NGINX handler module on synthetic dynamic endpoints and are frameworks rather than static servers, and cblt is the closer static-file sibling but its NGINX comparison is a Docker image under ab.",
+  "verified_claims_summary": "Author-run wrk over loopback with server and client pinned to separate physical cores, 'Hello World!' from tmpfs: kawipiko (2 threads, 2018 run) 106,699 / 100,297 / 95,628 / 53,549 req/s vs a distribution-package NGINX with 2 workers (2019 run) 79,816 / 78,211 / 75,971 / 43,910 req/s at 512 / 2048 / 4096 / 16384 connections on an i7-3667U laptop (1.22-1.34x across runs a year apart); the same-session OpenStreetMap tile run on an i7-4770 desktop gave 238,500 vs 188,255 req/s (1.27x) at 16384 connections. Go and NGINX versions and build flags are not stated.",
+  "status_note": "Single-author project, AGPL-3.0-or-later, 397 stars, last commits 2026-08-15 (removing QUIC and seccomp), dependencies pinned to 2022 versions (fasthttp v1.40.0, Go 1.17); the author reports it serving about 600k pages in production, but the benchmarks date from 2018-2019 and have not been rerun against current NGINX.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/volution/kawipiko/development/documentation/readme/benchmarks.rst",
+    "https://raw.githubusercontent.com/volution/kawipiko/development/documentation/readme/readme.rst",
+    "https://raw.githubusercontent.com/volution/kawipiko/development/documentation/readme/installation.rst",
+    "https://raw.githubusercontent.com/volution/kawipiko/development/documentation/manuals/server.txt",
+    "https://raw.githubusercontent.com/volution/kawipiko/development/sources/go.mod",
+    "https://raw.githubusercontent.com/volution/kawipiko/development/sources/cmd/server/server.go",
+    "https://raw.githubusercontent.com/volution/kawipiko/development/sources/cmd/server.go",
+    "https://raw.githubusercontent.com/volution/kawipiko/development/examples/nginx/nginx.conf",
+    "https://raw.githubusercontent.com/volution/kawipiko/development/scripts/benchmark.z-run",
+    "https://raw.githubusercontent.com/volution/kawipiko-examples/development/sources/wrk-paths-from-file.lua",
+    "https://github.com/volution/kawipiko",
+    "https://github.com/volution/kawipiko/tree/development/documentation/readme",
+    "https://github.com/volution/kawipiko/tree/development/examples/nginx",
+    "https://github.com/volution/kawipiko/tree/development/sources/lib/server",
+    "https://github.com/volution/kawipiko/tree/development/scripts",
+    "https://github.com/volution/kawipiko/commits/development/examples/nginx/nginx.conf",
+    "https://github.com/volution/kawipiko/commits/development",
+    "https://github.com/volution/kawipiko/issues?q=is%3Aissue",
+    "https://github.com/volution/kawipiko/issues/5"
+  ],
+  "confidence": 0.7
+}

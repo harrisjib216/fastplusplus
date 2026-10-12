@@ -1,0 +1,53 @@
+{
+  "id": "lang:csharp/glebolsen/benchlang#binary-trees",
+  "one_liner": "Default-settings .NET 11 preview JIT running C# binary trees 8% faster than per-node malloc/free C and 23% faster than new/delete C++ at -O3.",
+  "what_it_does": "A row from benchLANG, a small 19-language benchmark, not a library. Its binary-trees workload (depths 4 to 18, a stretch tree, a long-lived tree and about 68.3 million nodes in all) builds complete binary trees of individually allocated nodes, sums them with a recursive check, then discards them. The C# version is a sealed class Node with readonly Left, Right and Item fields in a single file-based Program.cs, built with dotnet build -c Release and run on the default JIT and GC. Getting this result means writing the allocation-heavy code in C#; nothing can be linked into a C++ program.",
+  "how_it_is_fast": "The gain comes from memory management, not code generation. Likely mechanism (inference, consistent with the README's note that GC runtimes 'collect when they like'): .NET hands out each node from a bump-pointer allocation context, and since each short-lived tree is dead by the next gen0 collection, the generational GC reclaims it without tracing it. The C and C++ programs instead call glibc malloc or operator new for every node, then walk every tree a second time (free_tree) to free or delete each node inside the timer. Per node that works out to about 13.6 ns for C# against 14.8 ns for C and 16.8 ns for C++ (derived from page data over 68.3M nodes), a small margin that JIT warm-up inside the timed region does not erase.",
+  "when_to_use": [
+    "You already ship .NET and wonder whether to move an allocation-heavy tree or graph builder to native code: on this workload the default JIT and GC already match or beat naive malloc/free C.",
+    "Workloads that create many small short-lived objects (parse trees, temporary graphs) and drop them all at once, the pattern generational GCs handle best.",
+    "Batch or throughput jobs where whole-process wall time matters more than pause times or memory footprint.",
+    "As a data point when arguing that per-node malloc/free, not the language, is the bottleneck in a C or C++ tree builder."
+  ],
+  "when_not_to_use": [
+    "As evidence that .NET beats tuned C++: a per-tree arena such as std::pmr::monotonic_buffer_resource or a pool allocator would remove both the per-node frees and the second traversal; benchLANG has no arena version (inference, not measured).",
+    "Memory-constrained deployments: whole-process peak RSS was 122.1 MiB for C# against 33.3 MiB for C, and the .NET runtime ships outside the reported binary size.",
+    "If the C# margin matters to you: it is 8% from one run, inside the 0.986-1.147 s spread of the native malloc-based rows (Fortran, C, Rust, Ada, Zig, C++) for the same algorithm.",
+    "If you are picking a managed runtime for allocation throughput: in the same table Java (OpenJDK 25, 0.347 s), Nim (0.809 s), Bun (0.816 s), OCaml and Dart (0.865 s) all beat C#.",
+    "Code dominated by recursion or arithmetic: C# loses the suite overall (11.914 s vs C 9.762 s) and needs 3.793 s vs 1.694 s for C on Fibonacci(45)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": ".NET SDK 11.0.100-preview.7 from nixpkgs-unstable (dotnet-sdk_11 in flake.nix); no NuGet packages",
+    "min_toolchain": ".NET SDK 11.0.100-preview.7 as measured; the repo has no .csproj, so the build relies on SDK support for file-based apps (dotnet build Program.cs)",
+    "platforms": "Measured on x86-64 Linux only (flake.nix pins x86_64-linux); other .NET platforms not tested here",
+    "thread_safety": "Not applicable: single-threaded workload; the runtime may use extra GC and JIT threads",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The C/C++ harness does more work than the C# one: free_tree walks every tree a second time and frees each node inside the timer, while the C# program just drops the root. That is by design ('native code frees inside the timer, GC runtimes collect when they like'), but it means the result compares allocation strategies rather than languages.",
+    "Only Program.cs is versioned: the repo's .gitignore ignores every file by default, including project files and any runtimeconfig or Directory.Build.props, so the published numbers can only be assumed to use default runtime settings (tiered JIT, default GC). Microsoft's docs (search snippet only; the page was blocked here) say file-based apps default to PublishAot=true, but the runner uses dotnet build plus dotnet out/Program.dll, which runs on the JIT, not Native AOT.",
+    "Single run per language on 2026-09-03 with a preview SDK, wall time from Stopwatch inside the program; run_benchmarks.sh supports --runs N averaging, but the README table does not use it.",
+    "The C++ row (new/delete, 1.147 s) is 13% slower than the C row (malloc/free, 1.010 s) on identical logic, which shows how much of the gap comes from the allocator call path and run-to-run noise rather than the C# runtime."
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued benchLANG binary-trees rows, C# (0.931 s) is slower than Bun (0.816 s) and OCaml (0.865 s), so pick it only when you are already on .NET; if you want the biggest managed-runtime win on allocation churn, the same table's Java row (0.347 s) and LangArena's Bun Binarytrees::Obj entry show much larger margins over C and C++.",
+  "verified_claims_summary": "benchLANG's 3 September 2026 run on a Ryzen 9 5900X locked at 3.5 GHz (Arch Linux, 48 GB DDR4-3600) timed binary trees at 0.931 s for C# on .NET SDK 11.0.100-preview.7 (default JIT and GC) against 1.010 s for C and 1.147 s for C++, both built by GCC 16.2.0 with -O3 -march=native -flto -funroll-loops and allocating each node with malloc/free or new/delete. That makes C# about 1.08x faster than C and 1.23x faster than C++ (derived from page data); the runner's analyzer checks that every language printed the same checksum.",
+  "status_note": "Small single-author MIT repo (8 stars, 42 commits, no issues, last commit 2026-09-03) with Nix-pinned toolchains, so anyone can rerun it, but the result is one run of one micro-workload, not something to adopt.",
+  "sources_read": [
+    "https://github.com/GlebOlsen/benchLANG",
+    "https://github.com/GlebOlsen/benchLANG/commits/main",
+    "https://github.com/GlebOlsen/benchLANG/issues?q=is%3Aissue",
+    "https://github.com/GlebOlsen/benchLANG/tree/main/languages/C%23/Bench",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/README.md",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/run_benchmarks.sh",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/clean.sh",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/analyze_results.sh",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/flake.nix",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/.gitignore",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/C/bench.c",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/C++/bench.cpp",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/C%23/Bench/Program.cs",
+    "WebSearch: .NET file-based apps default MSBuild properties (snippets from learn.microsoft.com/en-us/dotnet/core/sdk/file-based-apps; the page itself was unreachable)"
+  ],
+  "confidence": 0.75
+}

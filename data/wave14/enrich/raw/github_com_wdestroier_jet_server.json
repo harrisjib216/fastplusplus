@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/wdestroier/jet_server",
+  "one_liner": "Experimental pure-Dart HTTP/1.1 server driving epoll through dart:ffi; 1.36-1.46x Drogon's req/s in the-benchmarker.",
+  "what_it_does": "jet_server is a minimal HTTP/1.1 server for Linux (x86-64 in practice) published on pub.dev (0.2.0, 2026-09-26), whose only dependency is package:ffi. You give JetServer(port, handler) a synchronous handler that receives a zero-copy HttpRequest (byte slices for method, path, version, plus a linear header lookup) and returns the complete raw response bytes, status line and headers included. serve() runs a blocking epoll loop; to use several cores you spawn one isolate per core, each binding the port with SO_REUSEPORT. There is no router, middleware, TLS, chunked encoding or HTTP/2, so it does not replace Drogon or Dart's shelf/dart:io HttpServer feature for feature.",
+  "how_it_is_fast": "Each isolate runs a level-triggered epoll loop written in Dart that calls accept4, recv, send and epoll_ctl in libc through dart:ffi, bypassing dart:io's socket and stream layers. It reuses a 64 KiB native receive buffer and a 64 KiB send buffer per loop, keeps per-connection stashes for pipelined or fragmented requests, and parses only the request line plus the Connection and Content-Length headers. The hot loops carry vm:unsafe:no-bounds-checks and vm:unsafe:no-interrupts pragmas. In the suite entry the handler matches routes byte by byte and returns pre-built response arrays without Date, Server or Content-Type headers, so most of the per-request work in a framework like Drogon never runs.",
+  "when_to_use": [
+    "Dart services on x86-64 Linux that answer tiny, fixed or computed responses synchronously (health checks, echo, small lookups from memory) and need far more req/s than shelf (about 33k vs 256k req/s in the same table).",
+    "Benchmarks or experiments on how far Dart AOT or JIT can go with raw epoll through FFI.",
+    "Very small, auditable code (about 1,300 lines across lib/src) that you plan to vendor and harden yourself."
+  ],
+  "when_not_to_use": [
+    "Handlers that need async work (database calls, HTTP clients, timers): the handler is synchronous and serve() blocks the isolate in epoll_wait, so Futures and timers scheduled in that isolate cannot run while it serves (by code reading).",
+    "aarch64 or other non-x86-64 Linux: the code hard-codes the packed 12-byte x86-64 struct epoll_event (stride 12, fd at offset 4), but Linux packs the struct only on x86_64. Elsewhere it is 16 bytes, so events are misread and epoll_wait can write past the 12*maxEvents-byte buffer.",
+    "Internet-facing or proxied traffic: no Transfer-Encoding: chunked support (chunked bodies are parsed as the next request), no idle or slowloris timeouts, no TLS, no HTTP/2, and no Date header unless the handler writes one.",
+    "Anyone needing a supported framework: 8 commits, 1 star, self-described experimental, Linux/WSL only."
+  ],
+  "integration": {
+    "form": "module (pub.dev package jet_server 0.2.0)",
+    "dependencies": "package:ffi ^2.1.0; glibc or musl libc at runtime (libc.so.6 or process symbols)",
+    "min_toolchain": "Dart SDK 3.13",
+    "platforms": "Linux and WSL only (throws UnsupportedError elsewhere); x86-64 only in practice because of the hard-coded 12-byte epoll_event layout; IPv4 INADDR_ANY bind only",
+    "thread_safety": "one JetServer loop per isolate with no shared state; scale out by spawning isolates that each bind the port with SO_REUSEPORT (the benchmark spawns Platform.numberOfProcessors isolates)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Remote crash, by code reading (not run): Content-Length is parsed with unchecked n*10+d on wrapping 64-bit Dart ints, so a 20-digit value wraps negative. total = headerEnd + contentLength then passes the end < total test, conn.start is set below the request start, and the next pass calls findHeadersEnd (vm:unsafe:no-bounds-checks) at a negative index, or conn.compact() throws an uncaught RangeError out of serve(). Either way one request can take down a serving isolate.",
+    "Stale connection state: _flushPending's close-after path (and a blocked _sendClose) closes the fd without removing conns[fd], so a later accept that reuses the fd number inherits the previous client's leftover buffered bytes.",
+    "Benchmark entry is author-written and suite-specialised: dart/jet_server/server.dart compares raw method and path bytes and returns pre-built 62-byte replies with no Content-Type, Date or Server header, while Drogon runs its router and builds HttpResponse objects. jet_server averages 62.3 bytes per response vs Drogon's 78.3, and no Dart row records the suite's server_cpu_saturation check.",
+    "Under write backpressure, a connection with pending output returns from _handleRead without reading, so level-triggered EPOLLIN keeps firing and the loop spins until the socket becomes writable. BufferPool is allocated but unused in the hot path."
+  ],
+  "pick_this_over_siblings_when": "Pick it only when the server must be Dart. In the same the-benchmarker table, PowPow (Nim, 248,309 req/s at 256 connections), khttp (Rust, 199,813) and Tako (Rust, 200,361) beat Drogon without the x86-64-only FFI layout or the synchronous-handler limit, and PowPow and the HttpArena siblings (vanilla, by enghitalo, who is co-credited in jet_server's LICENSE) are more mature.",
+  "verified_claims_summary": "In the-benchmarker/web-frameworks data.json updated 2026-10-06 (16-CPU x86_64 Fedora host labelled 'M1 Eight-Core Processor', about 4 CPUs per server container judging by Drogon's 2.5 cores at 62% saturation), jet_server 0.2 AOT served 240,586 / 255,549 / 249,136 req/s at 64 / 256 / 512 connections. Drogon 1.9.13 (CMake release, threads auto) served 177,005 / 178,341 / 171,358, so jet_server was 1.36-1.45x faster (ratios derived from page data). All rows recorded zero socket and HTTP errors, and the Dart VM build matched AOT within 3.5%.",
+  "status_note": "Active but experimental (8 commits, last on 2026-09-26; pub.dev versions 0.1.0 to 0.2.0 between 2026-08-30 and 2026-09-26), MIT-licensed and small enough to vendor, but by code reading it has an unchecked Content-Length overflow that can crash a serving isolate and an x86-64-only epoll layout; fix both before exposing it.",
+  "sources_read": [
+    "https://github.com/Wdestroier/jet_server",
+    "https://github.com/Wdestroier/jet_server/commits/main",
+    "https://raw.githubusercontent.com/Wdestroier/jet_server/HEAD/README.md",
+    "https://raw.githubusercontent.com/Wdestroier/jet_server/HEAD/pubspec.yaml",
+    "https://raw.githubusercontent.com/Wdestroier/jet_server/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/Wdestroier/jet_server/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/Wdestroier/jet_server/HEAD/lib/jet_server.dart",
+    "https://raw.githubusercontent.com/Wdestroier/jet_server/HEAD/lib/src/jet_server_impl.dart",
+    "https://raw.githubusercontent.com/Wdestroier/jet_server/HEAD/lib/src/http_parser.dart",
+    "https://raw.githubusercontent.com/Wdestroier/jet_server/HEAD/lib/src/syscall.dart",
+    "https://raw.githubusercontent.com/Wdestroier/jet_server/HEAD/lib/src/buffer_pool.dart",
+    "https://raw.githubusercontent.com/Wdestroier/jet_server/HEAD/lib/src/constants.dart",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/HEAD/data.json",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/HEAD/dart/jet_server/server.dart",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/HEAD/dart/jet_server/config.yaml",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/HEAD/dart/jet_server/pubspec.yaml",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/HEAD/dart/config.yaml",
+    "https://raw.githubusercontent.com/torvalds/linux/master/include/uapi/linux/eventpoll.h",
+    "https://pub.dev/api/packages/jet_server"
+  ],
+  "confidence": 0.6
+}

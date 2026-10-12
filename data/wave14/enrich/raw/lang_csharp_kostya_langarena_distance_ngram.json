@@ -1,0 +1,57 @@
+{
+ "id": "lang:csharp/kostya/langarena#distance-ngram",
+ "one_liner": "Idiomatic C# Dictionary<uint,int> 4-gram counting on .NET 11, about 1.6x faster than the suite's C++ std::unordered_map version.",
+ "what_it_does": "LangArena's Distance::NGram test packs every 4-character window of two generated strings into a uint32 key, counts occurrences in two hash maps and scores the overlap as intersection over distinct grams. The C# version (csharp/Distance.cs, CalcNGram) is plain BCL code: Encoding.ASCII.GetBytes, two Dictionary<uint,int> pre-sized to the string length, TryGetValue plus indexer updates. It is a benchmark program, not a library; the entry documents what the stock .NET runtime and Dictionary deliver against the idiomatic C++ container.",
+ "how_it_is_fast": "The gap is in the containers, not in JIT code generation: libstdc++ std::unordered_map allocates a node for every distinct key and walks bucket chains through pointers, while .NET's Dictionary keeps buckets and entries in flat arrays, so building and dropping thousands of grams per call costs no per-key heap allocation (inferred from the sources; the suite gives no explanation). Every language whose standard map is array-based also beats C++ here: Rust std HashMap with its default SipHash hasher 0.533 s, Zig 0.52 s, Go 0.603 s, and C# compiled ahead of time with NativeAOT 0.609 s. The C# code even does more work per gram (two lookups per update and a fourth lookup for the count check, plus an ASCII copy of both strings) than the C++ try_emplace plus find.",
+ "when_to_use": [
+  "Counting small packed integer keys (n-grams, k-mers, IDs) in .NET: idiomatic Dictionary<uint,int> code already runs about 1.6-1.7x faster than C++ code that reaches for std::unordered_map (0.516 s vs 0.863 s).",
+  "Choosing a language for text-similarity or frequency-count services where the C++ alternative would be written with standard containers rather than a tuned flat hash map.",
+  "Deployments that cannot use a JIT: NativeAOT builds also win (C#/AOT 0.609 s at 14.6 MB, against C++/G++ 0.863 s at 7.1 MB).",
+  "Long-running processes where tiered JIT warm-up is amortized; the measured loop follows 20 untimed warm-up iterations."
+ ],
+ "when_not_to_use": [
+  "As a reason to leave C++: the loss is the container's, and a C++ open-addressing map would likely close the gap; the suite never ran one, but Rust's std HashMap (0.533 s, 4.3 MB) and Zig (0.52 s, 3.4 MB) show what array-based maps reach with a fraction of the memory.",
+  "Memory-tight processes: C#/JIT peaks at 40.6 MB against 6.6-7.1 MB for the C++ rows and 4.0 MB for C.",
+  "As evidence that managed JITs beat C++ in general: the JVM rows lose badly on the same test (Java/OpenJDK 2.072 s, Kotlin about 2.0 s, Scala about 2.4 s), and C#/JIT beats both C++ prod rows in only 7 of the 50 tests in this results file (derived from page data).",
+  "Short-lived or cold-start workloads: the reported time excludes data generation and 20 warm-up iterations for every language, so first-call JIT cost is not reflected.",
+  "Strict release-only toolchains: the run used .NET 11.0.100-rc.1 and a GCC 16.0.1 trunk snapshot."
+ ],
+ "integration": {
+  "form": "runtime plus source snippet (csharp/Distance.cs in a .NET console project, Benchmark.csproj)",
+  "dependencies": "none for this test beyond the .NET base class library (the project references CsvHelper 33.1.0 for other tests)",
+  "min_toolchain": ".NET 11 SDK as measured (TargetFramework net11.0, 11.0.100-rc.1.26425.128); the code itself uses only long-standing BCL APIs",
+  "platforms": "any .NET target; measured on x86-64 Linux (AMD Ryzen 7 3800X)",
+  "thread_safety": "not documented; each call builds and discards its own two dictionaries on one thread",
+  "drop_in_for_baseline": false
+ },
+ "gotchas": [
+  "Container comparison rather than a JIT win: C# NativeAOT (0.609 s), Rust std HashMap (0.533 s), Zig (0.52 s) and Go (0.603 s) all beat every C++ row, while the C version with uthash (one malloc per distinct gram) is twice as slow as C++ at 1.79-1.84 s; the catalogue category runtime-jit-beats-aot fits poorly.",
+  "The C++ ngram loop runs 'for (size_t i = 0; i <= s.size() - 4; ++i)', which underflows and reads out of bounds for strings shorter than four characters; the generator always produces at least four, so the numbers are unaffected, and the C# version returns 0.0 early for short input.",
+  "Both sides reserve capacity equal to the string length (up to 20,003) although at most 10,000 distinct 4-grams exist over the 10-letter alphabet, so each call zeroes or allocates more bucket space than it uses; C# also calls GC.Collect between warm-up and the timed loop.",
+  "One measurement per configuration with no variance figure; the results file is from a single host on 2026-10-05, and LangArena's README calls the suite subjective and AI-assisted in translation."
+ ],
+ "pick_this_over_siblings_when": "Among the catalogued LangArena managed-runtime wins, this is the clearest container-driven case: pick it when the workload is integer-keyed counting, where .NET's flat Dictionary wins and the JVM rows lose (Java 2.072 s), whereas the Java Etc::Words and CacheSimulation siblings are string-keyed maps and the C# Graph::AStar sibling rests on a priority queue and a buggy C heap.",
+ "verified_claims_summary": "LangArena results of 2026-10-05 (AMD Ryzen 7 3800X, Linux) time 100 iterations over 10 generated string pairs of 4 to 20,003 letters after 20 warm-up iterations: C#/JIT (.NET 11.0.100-rc.1, dotnet build -c Release, default tiered JIT) 0.516 s against C++ prod builds at -O2 with libstdc++ std::unordered_map of 0.863 s (g++ 16.0.1 trunk) and 0.877 s (clang++ 22.1.8), and 0.822 s for the best C/C++ configuration (Clang++ PGO), about 1.67x and 1.59x (derived from page data). Rust (0.533 s), Zig (0.52 s), Go (0.603 s) and C# NativeAOT (0.609 s) also beat C++ on the same test.",
+ "status_note": "LangArena is active (MIT, 41 stars, last commit 2026-10-08, monthly result files), and the C# NGram code has been unchanged since 2026-03-04 while the C++ file was last touched on 2026-04-24; the 60-line C# routine is copyable, but the result says more about std::unordered_map than about .NET.",
+ "sources_read": [
+  "https://github.com/kostya/LangArena/issues?q=is%3Aissue",
+  "https://github.com/kostya/LangArena/commits/master/cpp/src/distance.cpp",
+  "https://github.com/kostya/LangArena/commits/master/csharp/Distance.cs",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/README.md",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/LICENSE",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/run.js",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/Makefile",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/Makefile",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/benchmark.cpp",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/helper.cpp",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/distance.cpp",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/distance.hpp",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/csharp/Distance.cs",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/csharp/BenchmarkBase.cs",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/csharp/Benchmark.csproj",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/distance.c",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/rust/src/benchmarks/distance.rs"
+ ],
+ "confidence": 0.72
+}

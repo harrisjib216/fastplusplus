@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/venkat2811/myelon",
+  "one_liner": "Rust LMAX-Disruptor-style shared-memory IPC ring for Linux and macOS; first-party 1 KB ping-pong chart beats Boost.Interprocess and Open MPI.",
+  "what_it_does": "The repository publishes two crates. disruptor-mp is a raw cross-process SPSC/SPMC ring of fixed-size Copy events over POSIX shm_open or a memory-mapped file. myelon builds on it with framed &[u8] messages (fragmenting payloads larger than a frame), bincode, rkyv and flatbuffers codecs, in-place zero-copy reads for rkyv and flatbuffers, and topology helpers. Producer and consumers are separate OS processes that attach to named segments and use ping-pong (two SPSC rings), broadcast or signal patterns. It is not a drop-in for boost::interprocess::message_queue: the API is Rust-only, frame sizes are fixed at compile time and there are no C or C++ bindings yet.",
+  "how_it_is_fast": "It applies the LMAX Disruptor design across processes. A preallocated ring of cache-line-aligned slots lives in shared memory, producer and consumer cursors are atomics on separate cache lines, publishing is a sequence claim with no lock and no syscall, and consumers read the slot in place. The benchmarks run the BusySpin wait strategy, so a handoff costs about one cache-line transfer (README: 130 ns P50 round trip at 64 B on a Ryzen 7 5800X). The Boost peer instead takes an interprocess mutex and condition variable on every send and receive.",
+  "when_to_use": [
+    "Rust processes on one Linux or macOS host exchanging small fixed-size messages with sub-microsecond round trips, such as an inference driver feeding worker ranks (the crate's broadcast plus per-rank ping-pong topology).",
+    "One-to-N fan-out of the same data where each consumer must see every message (README perf-bench: 1p4c, 1 KB, mmap, 9.09M ops/s per consumer).",
+    "Hosts where you can dedicate a spinning core to each waiting side and latency matters more than CPU time.",
+    "Replacing Boost.Interprocess message_queue or ZeroMQ IPC between Rust processes, where blocking wakeups or socket syscalls dominate latency."
+  ],
+  "when_not_to_use": [
+    "C or C++ endpoints: the roadmap leaves C/C++, Python and Zig bindings unchecked, so a C++ project would need its own FFI layer.",
+    "Several producers writing one ring: only SPSC and SPMC exist; MPSC and MPMC are unchecked roadmap items.",
+    "Windows, which is unsupported.",
+    "CPU-constrained hosts or many mostly idle channels: the headline numbers use busy-spin (100% of a core per waiting side). Block, Sleep and SpinThenYield strategies exist but were not benchmarked against the peers.",
+    "Production systems that need hardened code today. It is at 0.1.0-alpha.2, only 12 of 81 internal unsafe blocks carry SAFETY comments, there are no Miri, ASan or TSan lanes yet, and open issue #20 reports silent data corruption under the default producer configuration."
+  ],
+  "integration": {
+    "form": "crate (disruptor-mp and myelon on crates.io)",
+    "dependencies": "metrics-rs facade by default; optional bincode, rkyv and flatbuffers codecs and Prometheus or OTLP exporters (feature list in the README; exact dependency trees not checked)",
+    "min_toolchain": "Rust 1.86 (workspace rust-version), edition 2021",
+    "platforms": "Linux and macOS (POSIX shm_open or mmap file backends; macOS 31-byte shm name limit enforced); Windows unsupported",
+    "thread_safety": "cross-process single-producer rings (SPSC, SPMC); multi-producer modes not implemented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the 1 KB chart: the raw path does not move 1 KB. In perf-bench's raw_myelon and raw_ring ping-pong, the client's write_event fills only sequence and two timestamps in the 64-byte header of PingPongEvent<960>, never writes the 960-byte payload, and reads back only response.sequence. The echo process copies the whole slot (*slot = *event), but the payload bytes never change and the client never reads them, so about one cache line crosses cores per direction. The Boost helper (message_queue send/receive memcpy), Open MPI (MPI_Send/MPI_Recv of a 1 KB buffer) and rusteron (offer, or try_claim plus copy_from_slice) move the full 1 KB each way. That is why the raw 1 KB result (4.4-4.9M) sits near the README's 64 B raw figure (5.58M).",
+    "The like-for-like Myelon figure is the framed path, which publishes a real 1 KB payload and length-checks the echo: 2.45M ops/s in the README's perf-bench table. That is about 1.2x Open MPI's 2.0M and below rusteron/Aeron's 2.6M on the chart (cross-run comparison, derived from page data). The 27-30x over Boost is busy-spin against a mutex and condition-variable queue, not a language effect.",
+    "Open issue #20 (2026-07-05, no maintainer response): build_shared_single_producer defaults to DiscoveryMode::Disabled, which removes backpressure. The producer laps the ring and the consumer silently returns stale payloads from a later lap. The benchmarks opt in with discover_consumer_with_prefix, so they are not affected, but default user code is. Issue #15 adds that FramedTransportProducer::discover_consumers is passive despite its docstring.",
+    "The chart is a single unlabelled run, and its machine, compiler versions and date are not stated. The C/C++ helpers get -march=native -flto while the Rust 'competitive' profile has no target-cpu, and Open MPI is launched with --oversubscribe -n 2 over the vader,self BTLs."
+  ],
+  "pick_this_over_siblings_when": "Cynosure RingBuf is an in-process async SPSC ring compared with rigtorp::SPSCQueue, and Tokio and the Go runtimes schedule tasks inside one process. Pick Myelon only when the two endpoints are separate OS processes on one host and you can spare a spinning core; otherwise those siblings, or an in-process channel, avoid the shared-memory setup.",
+  "verified_claims_summary": "The first-party competitive-bench chart (1 KB, 1p1c ping-pong round trips per second, single run, machine and compiler versions not stated) shows Myelon-Raw at 4.9M (mmap) and 4.4M (shm). Against Open MPI's vader shared-memory path at 2.0M (mpicc -O3 -march=native -flto) that is 2.2-2.5x, and against Boost.Interprocess message_queue at 164K (g++ -O3 -march=native -flto) it is 27-30x. However, the raw client writes only a 64-byte header and reads back only the sequence while the C/C++ peers copy 1 KB each way. The comparable framed 1 KB path runs at 2.45M ops/s on a Ryzen 7 5800X (README), about 1.2x Open MPI (cross-run, derived).",
+  "status_note": "An alpha (0.1.0-alpha.2) single-maintainer project with 20 stars and a last commit on 2026-05-21, dual MIT OR Apache-2.0. It is fine for Rust-only experiments, but its default producer path can silently corrupt data (issue #20) until that is fixed.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/README.md",
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/competitive-bench/README.md",
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/competitive-bench/Cargo.toml",
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/competitive-bench/Makefile",
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/competitive-bench/SETUP.md",
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/competitive-bench/third_party/boost_pingpong/main.cpp",
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/competitive-bench/third_party/boost_pingpong/Makefile",
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/competitive-bench/third_party/ompi_pingpong/pingpong.c",
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/competitive-bench/third_party/ompi_pingpong/Makefile",
+    "https://github.com/Venkat2811/myelon/tree/main/crates/competitive-bench/src/adapters",
+    "https://github.com/Venkat2811/myelon/tree/main/crates/competitive-bench/src/adapters/internal",
+    "https://github.com/Venkat2811/myelon/tree/main/crates/competitive-bench/src/runner",
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/competitive-bench/src/adapters/mod.rs",
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/competitive-bench/src/adapters/internal/mod.rs",
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/competitive-bench/src/runner/dispatch.rs",
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/competitive-bench/src/runner/executor.rs",
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/competitive-bench/src/adapters/rusteron/pingpong.rs",
+    "https://github.com/Venkat2811/myelon/tree/main/crates/perf-bench/src",
+    "https://github.com/Venkat2811/myelon/tree/main/crates/perf-bench/src/bin",
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/perf-bench/src/bin/pingpong.rs",
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/perf-bench/src/layers/raw/myelon/pingpong_shm.rs",
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/perf-bench/src/layers/raw/myelon/mod.rs",
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/perf-bench/src/layers/raw/disruptor_mp/pingpong_shm.rs",
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/perf-bench/src/layers/framed_myelon/frag/pingpong_shm.rs",
+    "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/perf-bench/src/infra/events.rs",
+    "https://github.com/Venkat2811/myelon/issues",
+    "https://github.com/Venkat2811/myelon/issues/20"
+  ],
+  "confidence": 0.7
+}
