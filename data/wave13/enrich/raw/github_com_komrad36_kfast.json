@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/komrad36/kfast",
+  "one_liner": "Single-header AVX2, multithreaded FAST-9 corner detector matching Rosten's output; 5.1x faster than single-threaded OpenCV cv::FAST (2016).",
+  "what_it_does": "Implements the FAST-9 (9 contiguous pixels on the 16-pixel circle) corner test of Rosten and Drummond, with optional 3x3 non-maximal suppression, on an 8-bit grayscale buffer with arbitrary stride. The API is one function template, KFAST<multithread, nonmax>(data, cols, rows, stride, std::vector<Keypoint>&, threshold), that fills a vector of {x, y, score} structs; it is not a cv::FeatureDetector, so OpenCV users convert to cv::KeyPoint themselves. On the repo's test image its keypoints match Rosten's fast9_detect_nonmax and cv::FAST position for position.",
+  "how_it_is_fast": "Each AVX2 iteration tests 32 candidate pixels: saturating add and subtract of the threshold, an XOR with 0x80 so signed byte compares act as unsigned, and the classic four-point (circle points 1, 5, 9, 13) rejection test whose movemask lets the loop skip 32 or 16 pixels at once. Surviving lanes run a branch-free 24-step consecutive-run count over the circle plus 8 wrap-around points with byte max accumulators. Corner scores use 16-bit min/max over all 16 nine-pixel arcs and a PHMINPOSUW horizontal reduction; non-max suppression works on a rolling three-row score buffer. The multithreaded mode splits the image into row bands with overlapping halo rows, one std::async thread per hardware thread (capped at rows/16).",
+  "when_to_use": [
+    "FAST-9 corner detection on 8-bit grayscale frames on x86-64 with AVX2, where you control the input allocation (ORB-style front ends, visual odometry, feature tracking).",
+    "Large images and spare cores: the default multithreaded mode is where the 5x figure comes from.",
+    "When output must be identical to Rosten's reference FAST-9 with non-maximal suppression; the driver checks equality against both Rosten's code and cv::FAST.",
+    "Projects that want FAST without linking OpenCV: KFAST.h has no dependencies beyond the C++ standard library and immintrin.h."
+  ],
+  "when_not_to_use": [
+    "Input buffers you cannot pad: tail columns are read with full 32-byte loads, so the last rows read up to about 30 bytes past the end of the image (issue #3, Valgrind 'Invalid read of size 32'); the maintainer says this crashes if the over-read reaches unmapped memory and recommends over-allocating by at least 32 bytes. Master is unfixed.",
+    "Non-AVX2 targets (ARM/NEON, older x86): there is no fallback, whereas current OpenCV cv::FAST has universal-intrinsic SIMD and a runtime-dispatched AVX2 path and runs everywhere.",
+    "Small images, per-frame latency budgets or already-threaded pipelines: multithreaded mode launches fresh std::async threads on every call; use the single-threaded template there, for which no measurement is published.",
+    "Other FAST variants (FAST-10, 11 or 12, which the bundled Rosten folder does provide) or ROI masks: only the 9-of-16 test is implemented.",
+    "Anything needing maintenance: last code change January 2019, and PR #4 (memcpy tail that removes the over-read) has been open since July 2019."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for KFAST.h; the test driver main.cpp needs OpenCV (core, features2d, highgui, imgcodecs) and pthreads, and uses legacy OpenCV C-API constants (CV_LOAD_IMAGE_GRAYSCALE, CV_WINDOW_NORMAL)",
+    "min_toolchain": "C++11 per README (Makefile builds with g++ -std=gnu++17 -march=native); MSVC also stated as supported; GCC/Clang need -mavx2 plus BMI1 (_tzcnt_u32, _blsr_u32); KFAST.h calls memset without including <cstring>",
+    "platforms": "x86-64 with AVX2 and BMI1; Linux (g++) and Windows (MSVC) per README; no runtime dispatch or scalar fallback",
+    "thread_safety": "not documented; by inspection there is no global state, each call allocates its own scratch buffer with _mm_malloc and writes only the caller's vector, so concurrent calls on different outputs are safe",
+    "drop_in_for_baseline": "partial — same keypoints as cv::FAST(img, kps, thresh, true) with the 9/16 pattern and as Rosten's fast9_detect_nonmax, but a different signature and Keypoint struct, and the input buffer must be padded by 32 bytes"
+  },
+  "gotchas": [
+    "Out-of-bounds read: for most image widths the last processCols call on the last processed row loads 32 bytes from the bottom image row starting a few columns before its end; results are masked so output is unaffected, but ASan/Valgrind flag it and an image ending at a page boundary can segfault (issue #3, closed in April 2019 with the advice to over-allocate, no code change).",
+    "The headline is multi-threaded against single-threaded: main.cpp defaults to KFAST_multithread = true while cv::FAST and Rosten's code run on one thread. The README's single-threaded '60%' and main.cpp's '40-60% over the reference implementation' have no published run; 'reference' cannot mean Rosten's code, because in the same screenshot OpenCV is already 4.2x faster than Rosten (derived from page data). A KFAST.h comment ('2000 -> 2600 microseconds without forced inlining') hints at about 2 ms per call on the test image, roughly 1.6x faster than OpenCV's 3.3 ms (derived), but it does not say which threading mode.",
+    "The only first-party numbers (results.jpg) were captured on 2016-09-12, before the October 2016 'horizontal AVX shuffle' performance commit and the January 2019 PR #2 fix, against an OpenCV build of unknown version; OpenCV's cv::FAST has since gained a runtime-dispatched AVX2 path (fast.avx2.cpp, split out of fast.cpp in October 2017), so the gap to a current OpenCV is unmeasured.",
+    "Before PR #2 (January 2019) the tail mask could evaluate 1 << 32 (undefined behaviour), which the maintainer said misses corners in the last 32 columns for affected widths; in current master the shift amount is at most 31 for any width of 6 columns or more, and narrower images give a negative shift (also undefined)."
+  ],
+  "pick_this_over_siblings_when": "No other FAST detector is catalogued; the listed siblings (bilinear_filter_simd, SIMD_TriangleAABB, the author's Leftpack and FastArrayOps) are unrelated SIMD kernels. Against the real incumbent, cv::FAST, pick KFAST only when you have AVX2, can pad input buffers, and want multithreaded FAST without OpenCV.",
+  "verified_claims_summary": "The only first-party run (results.jpg, a 2016 console screenshot of main.cpp; one test image, threshold 50, non-max on, mean of 1000 calls after 150 warm-ups) shows multi-threaded KFAST at 646.711 us per call against single-threaded cv::FAST at 3299.35 us (5.1x) and Rosten's scalar fast9_detect_nonmax at 13750.4 us (21.3x), all 8361 keypoints identical; CPU, compiler and OpenCV version are not stated. A third-party run on an unspecified Mac, posted in the PR #4 thread in July 2019 with that PR's branch, gave 717.865 us against 2918.54 us (4.07x) and 13099.9 us (18.25x).",
+  "status_note": "Abandoned since January 2019 (the 2021 commit only adds the MIT LICENSE; the bundled Rosten folder is BSD-3-Clause; PR #4 unmerged), but a single MIT header that is easy to vendor if you pad input buffers by 32 bytes or apply PR #4's memcpy tail; evidence stays first-party and mixes thread counts.",
+  "sources_read": [
+    "https://github.com/komrad36/KFAST",
+    "https://github.com/komrad36/KFAST/commits",
+    "https://github.com/komrad36/KFAST/tree/master/Rosten",
+    "https://github.com/komrad36/KFAST/issues?q=is%3Aissue",
+    "https://github.com/komrad36/KFAST/issues/3",
+    "https://github.com/komrad36/KFAST/pulls",
+    "https://github.com/komrad36/KFAST/pull/2",
+    "https://github.com/komrad36/KFAST/pull/4",
+    "https://raw.githubusercontent.com/komrad36/KFAST/HEAD/README.md",
+    "https://raw.githubusercontent.com/komrad36/KFAST/HEAD/KFAST.h",
+    "https://raw.githubusercontent.com/komrad36/KFAST/HEAD/main.cpp",
+    "https://raw.githubusercontent.com/komrad36/KFAST/HEAD/Makefile",
+    "https://raw.githubusercontent.com/komrad36/KFAST/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/komrad36/KFAST/HEAD/results.jpg",
+    "https://raw.githubusercontent.com/kudanowen/KFAST/patch-1/KFAST.h",
+    "https://raw.githubusercontent.com/opencv/opencv/4.x/modules/features2d/src/fast.cpp",
+    "https://github.com/opencv/opencv/commits/4.x/modules/features2d/src/fast.avx2.cpp",
+    "https://github.com/opencv/opencv/commit/2eb61a4",
+    "https://github.com/komrad36?tab=repositories",
+    "WebSearch: komrad36 KFAST AVX2 FAST corner detector speed compared OpenCV (no independent benchmark found)"
+  ],
+  "confidence": 0.7
+}

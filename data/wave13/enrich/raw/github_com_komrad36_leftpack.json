@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/komrad36/leftpack",
+  "one_liner": "Single-header AVX2+BMI2 left-pack (compress) of one 32-byte register; author claims 1.6-5.3x over a branchless scalar loop.",
+  "what_it_does": "Given 32 bytes of input and a keep-mask, it writes the selected elements contiguously to an output pointer and returns how many it kept, for 8-, 16-, 32- and 64-bit elements. Each width has an overload taking an integer bitmask (U64) and one taking a __m256i vector mask, plus Leftpack8_Zen2 and Leftpack32_Zen2 variants for AMD Zen1/Zen2. It is a per-register kernel: the caller writes the loop over the array, advances the output pointer by the returned count and handles the tail.",
+  "how_it_is_fast": "The bitmask is turned into a shuffle control without branches: the 8- and 32-bit paths build packed nibble or byte indices with PDEP/PEXT (the classic BMI2 left-pack trick) and then apply PSHUFB or VPERMD; the 16- and 64-bit paths and the Zen2 variants look the index pattern up in 256- or 16-entry nibble tables, expand it with unpack/variable shifts and apply the shuffle. The 8- and 16-bit versions compact each 128-bit half separately and store the two halves with overlapping unaligned stores at pOut and pOut + popcount(low half), so no cross-lane byte permute is needed. Counts come from POPCNT; there is no per-element branch, so random masks do not cause mispredictions.",
+  "when_to_use": [
+    "Stream compaction or filtering inner loops on x86-64 (Haswell or later, AMD Zen3 or later) where a compare already yields a 32-byte mask: selection vectors in column scans, removing delimiters or spaces from byte buffers, sparse-to-dense packing.",
+    "8- and 16-bit elements, where the claimed gain over the branchless scalar loop is largest (5.3x and 3.8x).",
+    "Targets without AVX-512 (or without AVX512_VBMI2 for byte/word compress), where VPCOMPRESS is unavailable.",
+    "AMD Zen1/Zen2 fleets, using the *_Zen2 variants that avoid microcoded PDEP/PEXT.",
+    "Code that can over-allocate the output buffer by 32 bytes and pad the input to whole 32-byte blocks."
+  ],
+  "when_not_to_use": [
+    "Anything not x86-64 with AVX2, BMI2 and POPCNT: there is no scalar, SSE, NEON or SVE fallback and no runtime dispatch.",
+    "64-bit and 32-bit elements if the extra code is not worth 1.6x and 2.2x (the README's own figures against the branchless loop).",
+    "Zen1/Zen2 with the default Leftpack8/Leftpack32: the choice between PDEP and table variants is compile-time and wrong picks are very slow there.",
+    "When you need audited performance numbers: the repo has no benchmark code, and the claim that it beats AVX-512 VCOMPRESS for the bitmask case has no published measurement.",
+    "When you want a whole-array API with tail handling; this is one register per call and always reads and writes 32 bytes."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (immintrin.h only)",
+    "min_toolchain": "Header uses C++11 features (alignas, raw-string inline asm); test.cpp needs C++17 (if constexpr). Must be built with AVX2, BMI2 and POPCNT enabled (e.g. -mavx2 -mbmi2 -mpopcnt or -march=haswell). README says GCC, Clang and MSVC; versions not documented.",
+    "platforms": "x86-64 only (AVX2 + BMI2 + POPCNT required, including the _Zen2 variants, whose GCC/Clang path uses SHLX); GCC/Clang get an inline AT&T-asm path for Leftpack8_Zen2, MSVC gets the intrinsics path.",
+    "thread_safety": "Not documented; the functions are pure, touch only caller buffers and read-only static constexpr tables, so concurrent calls are safe.",
+    "drop_in_for_baseline": "partial: replaces the body of a hand-written 32-byte compaction loop (void* in/out, mask, returns count), not a library call; the caller supplies the outer loop, 32 bytes of output slack and a padded tail."
+  },
+  "gotchas": [
+    "Every call loads a full 32 bytes from p and stores a full 32 bytes at pOut regardless of the kept count (8/16-bit versions store at pOut and pOut + popcount(low half)), so the last call in a loop overruns an exact-size output by up to 32 bytes and reads past a short input.",
+    "Mask contracts are not enforced: Leftpack16 indexes its 256-entry table with m >> 8, Leftpack32_Zen2 and Leftpack64 index with m directly, so stray bits above the 16/8/4 valid bits read past the static tables (undefined behaviour); Leftpack32 (PDEP) ignores them for the shuffle but popcounts all 32 bits and returns a wrong count. The 8-bit vector-mask versions need every mask byte to be exactly 0x00 or 0xFF (PEXT uses all bits), while the 16/32/64-bit vector versions read only the sign bit.",
+    "Latent inline-asm defect (found reading leftpack.h, not observed in tests): the GCC/Clang asm in the bitmask Leftpack8_Zen2 reads the 32 input bytes through a plain register operand (\"r\"(p)) with no \"m\" input or \"memory\" clobber, so the compiler may legally sink or drop the caller's preceding stores into that buffer after inlining; test.cpp does not catch this because the reference loop reads the input first. The vector-mask Leftpack8 also passes an uninitialised c1 as a \"+r\" operand (harmless in practice).",
+    "test.cpp is exhaustive for 16/32/64-bit masks but for the 8-bit versions checks every mask only up to 2^22 and then every 1009th mask; it times nothing, so the README speedup table has no public harness, CPU, compiler, flags or mask distribution behind it."
+  ],
+  "pick_this_over_siblings_when": "Pick it over lemire/despacer when you need a generic compress primitive for 8/16/32/64-bit lanes with an arbitrary integer or vector mask rather than a ready-made whitespace remover with its own benchmark; pick it over EVE's compress_store when you want one dependency-free x86 header instead of a large portable template library that also covers NEON and AVX-512.",
+  "verified_claims_summary": "The only numbers are the author's README table: 39x, 31x, 14x and 7.8x over a branchy scalar loop and 5.3x, 3.8x, 2.2x and 1.6x over a branchless scalar loop for 8-, 16-, 32- and 64-bit elements, with no CPU, compiler, flags, input size or mask distribution given and no benchmark code in the repo (test.cpp checks correctness only). The branchless loop is the fair baseline; the branchy column mostly measures branch mispredictions on random masks.",
+  "status_note": "Nine commits between 2023-09-03 and 2023-10-04, no issues, no releases and 4 stars, so effectively abandoned, but MIT-licensed and a single ~30 KB header that is easy to vendor and audit (fix the asm memory operand and mask the bitmask inputs if you do).",
+  "sources_read": [
+    "https://github.com/komrad36/Leftpack",
+    "https://github.com/komrad36/Leftpack/commits",
+    "https://github.com/komrad36/Leftpack/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/komrad36/Leftpack/HEAD/README.md",
+    "https://raw.githubusercontent.com/komrad36/Leftpack/HEAD/leftpack.h",
+    "https://raw.githubusercontent.com/komrad36/Leftpack/HEAD/test.cpp",
+    "https://raw.githubusercontent.com/komrad36/Leftpack/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/lemire/despacer/HEAD/README.md",
+    "https://raw.githubusercontent.com/jfalcou/eve/main/include/eve/module/core/compress/compress_store.hpp"
+  ],
+  "confidence": 0.7
+}

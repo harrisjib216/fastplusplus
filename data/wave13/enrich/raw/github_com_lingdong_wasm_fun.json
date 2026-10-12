@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/lingdong-/wasm-fun",
+  "one_liner": "Hand-written WebAssembly text (WAT) image and utility algorithms; claims skeleton tracing beats an Emscripten build and vanilla JS.",
+  "what_it_does": "A set of nine small programs written directly in WebAssembly text format and assembled with wabt's wat2wasm: Zhang-Suen thinning, Meijster distance transform, Suzuki-Abe contour finding, skeleton-to-polyline tracing, brownian trees, Wilson maze generation, a first-fit malloc, STL-like containers and random generators. Each .wat ships with a prebuilt .wasm that takes no imports. traceskeleton.wasm exposes a C-style API rather than the TraceSkeleton.fromCanvas interface of skeleton-tracing: setup(w,h), im_set(x,y,v) per pixel, thinning_zs(), trace_skeleton() returning a pointer to a linked list of polylines in linear memory, pl_*/pt_* accessors to walk it, and pls_destroy() to free it.",
+  "how_it_is_fast": "The module carries no Emscripten runtime, WebIDL glue or string marshalling: the image lives as a byte array in linear memory and results stay as a linked list that JS walks through accessor exports. Tracing is the skeleton-tracing algorithm (recursive split of the image along the row or column of least resistance into 10-pixel chunks, a border walk of each chunk, then fragment merging) hand-translated to WAT with an inline implicit-free-list first-fit malloc. No benchmark isolates which of these choices produces the claimed gain.",
+  "when_to_use": [
+    "A browser or Node page that needs binary-image skeleton tracing to polylines and wants a sub-kilobyte-class module (README: average binary about 900 bytes) instead of a SINGLE_FILE Emscripten bundle.",
+    "Small images where per-call overhead of the Emscripten build (string-encoded input, text-serialised polylines and rects parsed back with split/parseInt) would dominate.",
+    "Hosts with no build toolchain: the prebuilt .wasm files have no imports and can be instantiated directly.",
+    "Learning or teaching hand-written WAT: the sources are heavily commented and cite the papers they implement."
+  ],
+  "when_not_to_use": [
+    "When you need a measured speedup: the only claim is one approximate README sentence with no harness, engine, hardware or input, and the repo times nothing but its own version.",
+    "Large images or skeletons with many points: every malloc scans the heap from address 0 (first-fit implicit free list) to place 12-byte point and 20-byte polyline nodes, so allocation cost grows with live nodes, unlike Emscripten's default allocator.",
+    "Native code: skeleton-tracing's C99 version (pthreads) is the reference implementation and its README puts it at 0.76 ms per run on a 300x149 image.",
+    "Concurrent use or several images per instance: all state (W, H, image pointer, heap) is module-global.",
+    "Projects that need maintenance or tests: 9 commits, last on 2020-08-26, only demo pages under tests/."
+  ],
+  "integration": {
+    "form": "source-drop (.wat sources plus prebuilt .wasm modules)",
+    "dependencies": "none at runtime; wabt wat2wasm to reassemble (compile.py calls ./wat2wasm)",
+    "min_toolchain": "any WebAssembly 1.0 engine (traceskeleton exports mutable globals MAX_ITER and CHUNK_SIZE); wabt to rebuild",
+    "platforms": "any WebAssembly host (browsers, Node.js); wasm32 linear memory starting at one 64 KiB page and grown on demand",
+    "thread_safety": "not documented; module-global state and a single heap make one instance usable by one caller at a time",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the 300% claim: skeleton-tracing's Emscripten build exposes only trace(DOMString img, w, h), which in one call runs Zhang-Suen thinning, tracing with SAVE_RECTS=1, std::to_string serialisation of polylines and rects, while its fromImageData/fromCanvas wrappers build the input string pixel by pixel and parse the output with split/parseInt; the only WAT timing in this repo (tests/traceskeleton.html) runs thinning_zs() and the im_set fill before starting a single Date() timer around trace_skeleton() and reads results after stopping it. A comparison through the public Emscripten API therefore timed thinning and marshalling on one side only; the method was never published. The vanilla JS library does expose traceSkeleton separately, but skeleton-tracing's own table puts vanilla JS (Node v12.10) at 38% of native C -O3, so a 5-6x win over it would make the WAT about twice as fast as native C, which points to non-comparable runs (one cold run, 1 ms Date() resolution, different input: horse.png is 400x328).",
+    "Licence mismatch: the repo LICENSE is the Unlicense and most .wat headers say Public Domain, but traceskeleton.wat is headed 'MIT License' and ends with the full MIT text (it ports MIT-licensed skeleton-tracing), so keep that notice when copying it.",
+    "setup() mallocs a new W*H image on every call without freeing the old one and does not zero it, so every pixel must be written with im_set; extend() drops the memory.grow result, so a failed grow traps on an out-of-bounds store instead of returning NULL.",
+    "thinning_zs stops as soon as either Zhang-Suen sub-iteration changes nothing (diff &= ...), not when a full pass changes nothing; the quirk is inherited from skeleton-tracing's C, C++ and JS versions, so output matches upstream but thinning can end early."
+  ],
+  "pick_this_over_siblings_when": "No sibling in hand-written-asm-kernels targets WebAssembly: FastMemcpy, FP-ASM, cespare/xxhash and the rest are native x86, Arm or Go assembly with published harnesses. Pick wasm-fun only when the code must run in a WebAssembly host and binary size matters; for native targets those siblings carry far better evidence.",
+  "verified_claims_summary": "The README says traceskeleton.wat is '~300% faster than the version complied with emscripten (and ~10x smaller), ~500% faster than vanilla Javascript', with no engine, hardware, Emscripten version, input or harness; the comparator is skeleton-tracing's -O3, closure-compiled, WebIDL-glued Emscripten build and its vanilla JS port. Nothing was re-measured, and the repo's only timing code covers the WAT version alone and excludes thinning and I/O that the Emscripten path includes.",
+  "status_note": "Abandoned since 2020-08-26 (9 commits, no issues filed); the small, dependency-free sources are easy to vendor under the Unlicense, except traceskeleton.wat, which carries an MIT notice.",
+  "sources_read": [
+    "https://github.com/LingDong-/wasm-fun",
+    "https://github.com/LingDong-/wasm-fun/commits",
+    "https://github.com/LingDong-/wasm-fun/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/LingDong-/wasm-fun/HEAD/README.md",
+    "https://raw.githubusercontent.com/LingDong-/wasm-fun/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/LingDong-/wasm-fun/HEAD/compile.py",
+    "https://raw.githubusercontent.com/LingDong-/wasm-fun/HEAD/tests/traceskeleton.html",
+    "https://raw.githubusercontent.com/LingDong-/wasm-fun/HEAD/tests/assets/horse.png",
+    "https://raw.githubusercontent.com/LingDong-/wasm-fun/HEAD/wat/traceskeleton.wat",
+    "https://raw.githubusercontent.com/LingDong-/wasm-fun/HEAD/wat/malloc.wat",
+    "https://raw.githubusercontent.com/LingDong-/wasm-fun/HEAD/wat/thinning.wat",
+    "https://raw.githubusercontent.com/LingDong-/wasm-fun/HEAD/wat/disttransform.wat",
+    "https://raw.githubusercontent.com/LingDong-/wasm-fun/HEAD/wat/findcontours.wat",
+    "https://raw.githubusercontent.com/LingDong-/wasm-fun/HEAD/wat/mazegen.wat",
+    "https://raw.githubusercontent.com/LingDong-/wasm-fun/HEAD/wat/containers.wat",
+    "https://raw.githubusercontent.com/LingDong-/wasm-fun/HEAD/wat/random.wat",
+    "https://raw.githubusercontent.com/LingDong-/wasm-fun/HEAD/wat/browniantree.wat",
+    "https://raw.githubusercontent.com/LingDong-/skeleton-tracing/HEAD/README.md",
+    "https://raw.githubusercontent.com/LingDong-/skeleton-tracing/HEAD/LICENSE",
+    "https://github.com/LingDong-/skeleton-tracing/tree/master/wasm",
+    "https://raw.githubusercontent.com/LingDong-/skeleton-tracing/HEAD/wasm/compile.sh",
+    "https://raw.githubusercontent.com/LingDong-/skeleton-tracing/HEAD/wasm/glue_wrapper.cpp",
+    "https://raw.githubusercontent.com/LingDong-/skeleton-tracing/HEAD/wasm/wrapper.js",
+    "https://raw.githubusercontent.com/LingDong-/skeleton-tracing/HEAD/wasm/trace_skeleton.idl",
+    "https://raw.githubusercontent.com/LingDong-/skeleton-tracing/HEAD/cpp/trace_skeleton.cpp",
+    "https://raw.githubusercontent.com/LingDong-/skeleton-tracing/HEAD/c/trace_skeleton.c",
+    "https://raw.githubusercontent.com/LingDong-/skeleton-tracing/HEAD/js/trace_skeleton.vanilla.js"
+  ],
+  "confidence": 0.55
+}

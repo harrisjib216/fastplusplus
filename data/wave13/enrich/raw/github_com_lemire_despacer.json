@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/lemire/despacer",
+  "one_liner": "C research library of SSE4/AVX2 in-place whitespace strippers; 3-5x faster than the best scalar loop, 10-15x the naive one.",
+  "what_it_does": "Removes ' ', '\\n' and '\\r' from a byte buffer, mostly in place: each function takes (char *bytes, size_t n) and returns the new length without writing a NUL terminator. It is a menu of about 30 variants rather than one API: scalar (despace, faster_despace, despace64, despace_to), aqrit's scalar and SSSE3/AVX2 copy variants with a (dst, src, length) signature, SSE4.1, SSE4.2 (pcmpestrm) and AVX2 shuffle-table versions, and an AVX-512 VBMI2 compress-store version, plus countspaces and hasspace helpers. Which SIMD functions exist is decided at compile time by the -m flags; there is no runtime dispatch.",
+  "how_it_is_fast": "Each 16-byte block is compared against the three whitespace bytes, the comparison is turned into a 16-bit movemask, and that mask indexes a precomputed pshufb shuffle table (despace_mask16, 32,768 entries of 16 bytes) that packs the kept bytes to the left; the store pointer then advances by 16 minus the popcount, so the hot loop has no data-dependent branch. The AVX2 variants run two 16-byte lanes per 256-bit vector and the _u2/_u4 versions unroll; aqrit's variants replace the big table with a 1 KB table or a prefix-sum, and the AVX-512 version uses vpcompressb (_mm512_mask_compressstoreu_epi8) with no table at all.",
+  "when_to_use": [
+    "Stripping spaces and line breaks from large ASCII or UTF-8 text in place (minifying, normalising base64 or hex dumps, cleaning logs) on x86-64 with SSE4.1 or AVX2, where a branchy scalar loop costs about 5 cycles per byte.",
+    "Sparse whitespace (a few percent of bytes), the regime the benchmark measures: most 16-byte blocks then have no whitespace or one, and the shuffle table stays hot in cache.",
+    "As a reference collection of stream-compaction (left-pack) techniques to copy into your own code: table-driven pshufb, 1 KB LUT, prefix-sum, vpermd and VBMI2 compress-store side by side with a harness to compare them on your CPU.",
+    "Builds compiled for one known machine or a fixed ISA level, since each SIMD function exists only when the matching -m flag is on."
+  ],
+  "when_not_to_use": [
+    "Portable binaries or non-x86 targets: no runtime dispatch, the CMake build forces -march=native (issue #21 open), and there is no NEON port (issue #4 open since 2017); on ARM only the scalar loops are available.",
+    "Dense whitespace (source code, pretty-printed JSON, tables): untested here, and the SSE4/AVX2 table variants then spread lookups across a 512 KiB shuffle table (plus a 64 KiB popcount table) that overflows L1 and often L2.",
+    "When the whitespace set must be exact and consistent: '\\t' is kept by despace and the SSE4/AVX2 variants but removed by aqrit's variants, the *32, skinny and VBMI2 variants drop every byte up to 0x20, and nothing handles Unicode whitespace (issue #8 open).",
+    "UTF-8 or Latin-1 text with the AVX-512 VBMI2 or skinny variants: signed-char comparisons make them delete non-ASCII bytes (see gotchas).",
+    "Production use without your own tests: the maintainer calls it research code and asks serious users to contact him (issue #21); the last commit was 2024-09-05."
+  ],
+  "integration": {
+    "form": "static lib (CMake target despacer) or source-drop (src/despacer.c, the 3 MB src/despacer_tables.h and include/*.h)",
+    "dependencies": "none",
+    "min_toolchain": "C99 and CMake 3.15+; GCC, Clang or MSVC (CI on Ubuntu 22.04 GCC 11 and Visual Studio 2022); the benchmark needs GCC or Clang on x86-64",
+    "platforms": "x86-64 for the SIMD paths (SSSE3, SSE4.1, SSE4.2, AVX2, AVX-512 VBMI2, chosen at compile time); scalar functions build anywhere; no NEON",
+    "thread_safety": "Functions are reentrant over caller-owned buffers; gen_table_512kb() fills the global 512 KB lut_1mb table and must be called once, before any thread uses despace_ssse3_lut_512kb",
+    "drop_in_for_baseline": "partial: replaces a hand-written erase-remove loop (same in-place semantics, returns the new length, no NUL), but the signatures differ between families ((bytes, n), (dst, src, n), (src, n, out)) and so does the whitespace set"
+  },
+  "gotchas": [
+    "Signed-char bugs outside the headline functions: vbmi2_despace compares with the signed _mm512_cmpgt_epi8_mask(x, ' '), so it deletes every byte from 0x80 up, i.e. all UTF-8 multibyte characters, despite the README's UTF-8/Latin-1 claim; sse4_despace_skinny_u2/u4 keep such bytes in the vector loop but delete them in the scalar tail ((int)c <= 0x20 on signed char), corrupting UTF-8 in the final n mod 16 bytes; countspaces32 counts bytes from 0x80 up as whitespace. The unused vbmi2_256_despace passes a 32-bit byte mask to the 16-bit-lane _mm256_mask_compressstoreu_epi16 and would output garbage.",
+    "Harness and test blind spots hide these: the benchmark's fillwithtext rejects (char)rand() <= 32 with signed char, so the input is printable 7-bit ASCII (33-127) plus 3% whitespace, never a byte from 0x80 up; the benchmark checks only the returned length, not the bytes; in tests/unit.c the random-text branch is dead (if (i < 128) with repeat = 128), so the unit tests only try 128-byte runs of 'c' with a single space, and vbmi2_despace is never tested. The headline SSE4/AVX2 functions use exact byte equality and are not affected.",
+    "Reproducing the README with the documented 'make benchmark' builds unoptimized: since July 2021 the Makefile runs cmake with no CMAKE_BUILD_TYPE and --config Release, which single-config generators ignore, so library and benchmark get only -march=native; the README sample predates that change (it lacks aqrit's variants, already in the code by 2018 per issue #8), when the Makefile used -std=c99 -O3 -march=native. Use cmake -DCMAKE_BUILD_TYPE=Release.",
+    "Each timed call is bracketed by cpuid+rdtsc and the README figures are TSC reference cycles, not core cycles; on VMs, where cpuid traps to the hypervisor, the fixed overhead per 8 KiB call can swamp the faster kernels. Each despace_ssse3_lut_512kb call also silently returns wrong bytes if gen_table_512kb() was never called."
+  ],
+  "pick_this_over_siblings_when": "Pick despacer over komrad36's Leftpack when the job is byte-level whitespace removal and you want ready-made SSE4/AVX2 kernels plus a harness; Leftpack is the general left-pack-by-predicate primitive for 8- to 64-bit elements. Like validateutf8-experiments from the same author it is research code that is best copied and re-tested, not depended on.",
+  "verified_claims_summary": "The README's 'Possible results' sample (unnamed CPU and compiler, most likely built with the pre-2021 Makefile's -O3 -march=native) covers an 8 KiB buffer of printable ASCII with 1% each of space, LF and CR, best of 100 calls: sse4_despace_branchless_u4 used 0.35 cycles per byte against 5.34 for the naive branchy loop (15.2x) and 1.69 for the table-driven scalar faster_despace (4.8x); avx2_despace_branchless_u2 used 0.54 (10.0x and 3.2x), with memcpy at 0.11. The current harness prints GB/s, warns its numbers are illustrative, and no other density, size or CPU has been published.",
+  "status_note": "Stale (last commit 2024-09-05, CI and D-binding fixes) and self-described research code, but BSD-3-Clause with no dependencies, so the one or two functions you need are easy to vendor once you add your own tests for non-ASCII input.",
+  "sources_read": [
+    "https://github.com/lemire/despacer",
+    "https://raw.githubusercontent.com/lemire/despacer/HEAD/README.md",
+    "https://raw.githubusercontent.com/lemire/despacer/HEAD/Makefile",
+    "https://raw.githubusercontent.com/lemire/despacer/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/lemire/despacer/HEAD/benchmarks/despacebenchmark.c",
+    "https://raw.githubusercontent.com/lemire/despacer/HEAD/src/despacer.c",
+    "https://raw.githubusercontent.com/lemire/despacer/HEAD/src/despacer_tables.h",
+    "https://raw.githubusercontent.com/lemire/despacer/HEAD/include/despacer.h",
+    "https://raw.githubusercontent.com/lemire/despacer/HEAD/include/despacer_generic.h",
+    "https://raw.githubusercontent.com/lemire/despacer/HEAD/include/despacer_SSSE3.h",
+    "https://raw.githubusercontent.com/lemire/despacer/HEAD/include/despacer_AVX2.h",
+    "https://raw.githubusercontent.com/lemire/despacer/HEAD/include/despacer_AVX512.h",
+    "https://raw.githubusercontent.com/lemire/despacer/HEAD/tests/unit.c",
+    "https://raw.githubusercontent.com/lemire/despacer/HEAD/dub.json (404)",
+    "https://github.com/lemire/despacer/commits/master",
+    "https://github.com/lemire/despacer/commits/master/Makefile",
+    "https://raw.githubusercontent.com/lemire/despacer/a06275967fd16fa6132902b3803dd3118f8a15f0/Makefile",
+    "https://github.com/lemire/despacer/issues?q=is%3Aissue",
+    "https://github.com/lemire/despacer/issues/8",
+    "https://github.com/lemire/despacer/issues/21"
+  ],
+  "confidence": 0.8
+}

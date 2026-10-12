@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/kraionix/imguimemchrbench",
+  "one_liner": "Unmerged Dear ImGui PR: SSE/AVX2 strlen and memchr with software prefetch, 1.4-1.55x over MSVC CRT on large buffers.",
+  "what_it_does": "PR ocornut/imgui #8421 replaces ImGui's internal strlen/memchr calls with ImStrlen and ImMemchr implemented in SSE and AVX2 intrinsics, chosen at compile time from __SSE__/__AVX2__ through new IMGUI_ENABLE_*/IMGUI_DISABLE_* macros; the signatures match strlen and memchr. Kraionix/ImGuiMemchrBench is the companion Visual Studio Google Benchmark project that times 15 memchr variants (SSE, SSE4.2, AVX2, AVX-512, each with unroll and prefetch options) against the CRT memchr. Upstream ImGui only took the hooks: master (1.93.0 WIP) has `#define ImStrlen strlen` and `#define ImMemchr memchr` in imgui_internal.h.",
+  "how_it_is_fast": "Each function does one unaligned 32-byte (or 16-byte) load at the start, rounds the pointer up to an aligned boundary, then loops on aligned loads with PCMPEQB + PMOVMSKB and TZCNT to locate the first match, and issues a software prefetch 1024 bytes ahead on every iteration. ImStrlen keeps over-reads inside the first 4 KB page explicitly and then relies on aligned loads never crossing a page; ImMemchr stays inside [buf, buf+count) and finishes the last 0-31 bytes with a scalar loop. At 1 GB most of the gain is the prefetch: AVX2 memchr without it is only 1.13x over the CRT.",
+  "when_to_use": [
+    "MSVC x64 builds of Dear ImGui that render very large text blocks (multi-megabyte logs through TextUnformatted, where the author saw frame time drop from about 1.6 ms to 0.98 ms on a 16 MB buffer with a newline every 131 characters).",
+    "Projects already compiling with /arch:AVX2 (or -march=haswell) whose C runtime strlen/memchr is not AVX2-dispatched.",
+    "As a starting point for your own ImStrlen/ImMemchr override, patched into imgui_internal.h in place of the strlen/memchr defines."
+  ],
+  "when_not_to_use": [
+    "Typical ImGui UI text: labels are short, and ImMemchr falls back to a byte-by-byte loop below 32 bytes (16 for SSE) and for every 0-31 byte tail, where a libc memchr is likely as fast or faster (not measured by the author).",
+    "Linux/glibc or macOS: the only baseline measured is the MSVC static CRT, and glibc already dispatches AVX2/EVEX memchr and strlen, so the gain there is undocumented.",
+    "Debug builds: the maintainer noted libc is always compiled optimized while ImGui follows the project's flags, so unoptimized intrinsics may lose to the CRT.",
+    "Builds checked with AddressSanitizer: ImStrlen reads whole aligned 32-byte blocks past the terminator (page-safe but outside the allocation).",
+    "Non-x86-64 targets: no NEON or other fallback beyond libc."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the functions (intrin.h or x86intrin.h); the benchmark needs Google Benchmark, fmt and reflect-cpp via vcpkg plus the repo's BenchConfigCpp project",
+    "min_toolchain": "Measured with Visual Studio 2022 (v143, /std:c++latest, /arch:AVX2); GCC/Clang builds not shown in the PR thread.",
+    "platforms": "x86-64 only (AVX2 path also uses BMI1 TZCNT/ANDN; SSE path uses TZCNT); other targets use libc strlen/memchr.",
+    "thread_safety": "Pure functions over caller memory with no shared state; safe to call concurrently (not documented).",
+    "drop_in_for_baseline": "partial: same signatures as strlen/memchr and wired in by the PR's fork, but upstream ImGui master defines ImStrlen/ImMemchr to strlen/memchr without an #ifndef guard, so using it today means patching imgui_internal.h."
+  },
+  "gotchas": [
+    "Benchmark-repo defects found reading ImMemchrBench/immemchr.h (they do not touch the posted AVX2/SSE/CSTD rows): the SSE4.2 variants use _mm_cmpistri, an implicit-length string compare that stops at a 0x00 byte, so they miss matches after an embedded NUL and cannot search for '\\0'; their two-chunk loop runs while ptr <= end - 16 but loads ptr + 16 as well, reading 16 bytes past the buffer and returning a pointer beyond end if that garbage holds the byte. The AVX2_UNROLL variants set the unrolled bound to end - 32 * 128 (4096 bytes) instead of end - 128. The harness never compares any variant's result with memchr, so these went unnoticed.",
+    "Harness asymmetry: the SIMD variants are defined in the benchmark's own translation unit (inlinable under /GL /Ob2), while CSTD calls the static CRT memchr once per 131-byte line, about 8.2 million calls per GiB, so per-call overhead is part of the measured gap (inference from the code; not quantified).",
+    "Portability: the PR gates the SSE path on __SSE__ (always defined on x86-64) and the AVX2 path on __AVX2__, yet both call _tzcnt_u32 and the AVX2 path _andn_u64, which GCC's bmiintrin.h compiles under target(\"bmi\"); a GCC build without -mbmi is therefore expected to fail with a target-specific option mismatch (read from the header, not compiled here). MSVC accepts them.",
+    "ImMemchr computes end - 32 (or 16) and end - 1024 before checking the length, forming pointers before the buffer for short inputs (formally undefined, harmless on x86); ImStrlen's aligned loads read up to 31 bytes past the terminator (page-safe), which AddressSanitizer will report as an out-of-bounds read."
+  ],
+  "pick_this_over_siblings_when": "Pick it over WojciechMula/toys avx512-string when you need AVX2 rather than AVX-512 and the baseline is MSVC's CRT; pick it over AOCL-LibMem when you only want ImGui's two string hot paths sped up rather than replacing libc wholesale. For general use, a tuned libc or Arm/AMD optimized routines remain the safer choice.",
+  "verified_claims_summary": "Author-run Google Benchmark tables in PR #8421 on an overclocked i9-10980XE, built with MSVC v143 Release /arch:AVX2 /MT (exact version unstated), against the MSVC CRT: memchr finding a newline every 131 bytes, AVX2+prefetch 20.53 vs 14.29 GiB/s at 1 MB (about 1.44x) and 17.17 vs 10.93 GiB/s at 1 GB (about 1.55x; 1.13x without prefetch); strlen over one long string 93.33 vs 16.45 GiB/s at 1 MB (about 5.7x, L2-resident) and 17.6 vs 12.52 GiB/s at 1 GB (about 1.41x), ratios derived from page data. Only the memchr harness is public; the strlen benchmark code is not.",
+  "status_note": "Reference only: the bench repo has no licence and five commits (last 2025-02-23), the PR has been open and unmerged since 2025-02-21 with the maintainer adding only strlen/memchr #define hooks (commit 1ec99f4, 2025-03-07); the fork's code sits in an MIT-licensed ImGui fork but the author states no licence for it.",
+  "sources_read": [
+    "https://github.com/Kraionix/ImGuiMemchrBench",
+    "https://raw.githubusercontent.com/Kraionix/ImGuiMemchrBench/HEAD/README.md",
+    "https://raw.githubusercontent.com/Kraionix/ImGuiMemchrBench/HEAD/ImMemchrBench/ImMemchrGoogleBench.cpp",
+    "https://raw.githubusercontent.com/Kraionix/ImGuiMemchrBench/HEAD/ImMemchrBench/immemchr.h",
+    "https://raw.githubusercontent.com/Kraionix/ImGuiMemchrBench/HEAD/ImMemchrBench/ImMemchrBench.vcxproj",
+    "https://raw.githubusercontent.com/Kraionix/ImGuiMemchrBench/HEAD/ImMemchrBench/bench_config.json",
+    "https://raw.githubusercontent.com/Kraionix/ImGuiMemchrBench/HEAD/LICENSE",
+    "https://github.com/ocornut/imgui/pull/8421",
+    "https://github.com/ocornut/imgui/pull/8421/files",
+    "https://github.com/ocornut/imgui/pull/8421/checks",
+    "https://raw.githubusercontent.com/Kraionix/imgui/master/imgui_internal.h",
+    "https://raw.githubusercontent.com/Kraionix/imgui/master/imgui.cpp",
+    "https://raw.githubusercontent.com/Kraionix/imgui/master/LICENSE.txt",
+    "https://raw.githubusercontent.com/ocornut/imgui/master/imgui_internal.h",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/master/gcc/config/i386/bmiintrin.h"
+  ],
+  "confidence": 0.7
+}

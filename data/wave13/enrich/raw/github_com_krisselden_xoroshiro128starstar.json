@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/krisselden/xoroshiro128starstar",
+  "one_liner": "262-byte AssemblyScript WebAssembly xoroshiro128** giving a seeded Math.random replacement for Node; about 10% faster than 2018 V8 Math.random.",
+  "what_it_does": "A port of Blackman and Vigna's xoroshiro128** PRNG to AssemblyScript, compiled to a WebAssembly module whose only state is two mutable i64 globals (zero memory pages). The npm entry point is a factory: require('xoroshiro128starstar')(seed) instantiates a fresh module, seeds it through splitmix64 from the bit pattern of a JS number, and returns a zero-argument next() that yields a double in [0, 1), so it drops into anything that takes a Math.random-shaped function (for example random.use()).",
+  "how_it_is_fast": "The generator is a handful of 64-bit multiplies, rotates, shifts and xors, which WebAssembly runs natively as i64 ops instead of emulating 64-bit arithmetic in JS doubles or 32-bit halves the way pure-JS seeded generators must. State lives in Wasm globals rather than linear memory, so each call is a bare global load/store plus one u64-to-double conversion (the published 1.1.1 build multiplies a 53-bit integer by 2^-53; GitHub master ORs 52 bits into the exponent-1 mantissa and subtracts 1.0). The cost that remains is the JS-to-Wasm call per number, which is why the margin over V8's own Math.random was small.",
+  "when_to_use": [
+    "Node.js code that needs a reproducible, seedable stream of doubles in [0, 1) with a Math.random-shaped API (simulations, tests, procedural generation, the random npm package's random.use()).",
+    "Replacing seedrandom's default ARC4 generator when per-call speed matters: the README run shows about 3.4x its throughput (derived from page data).",
+    "Many independent generators in one process: each factory call creates its own Wasm instance with 16 bytes of state and no memory pages.",
+    "Code that wants a tiny dependency: the published package is a 262-byte module plus a 1.3 KB loader and no runtime dependencies."
+  ],
+  "when_not_to_use": [
+    "Anything security-sensitive (tokens, keys, shuffles that must not be predicted): xoroshiro128** is not a cryptographic generator; use crypto.getRandomValues or crypto.randomBytes.",
+    "Browsers without a bundler: index.js reads the .wasm with fs.readFileSync(__dirname + ...), so it only runs on Node as published (issue #4, open since 2020).",
+    "Bulk generation (filling typed arrays with millions of values): there is no batch API, so every number pays a JS-to-Wasm call; a generator that writes into linear memory, or a pure-JS xorshift on 32-bit halves, may be faster on current engines.",
+    "When you need integers, 64-bit outputs or bit-exact streams that match other xoroshiro128** implementations: only next() as a double is exported, and the seeding is not the reference splitmix64 sequence (see gotchas).",
+    "Projects that need a maintained dependency or the newer xoshiro256** family: no release since August 2018, last commit January 2019, and the request for xoshiro256 (issue #3) was declined."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime (Node fs and WebAssembly); the build needs the AssemblyScript compiler (asc), pinned only to GitHub master in devDependencies",
+    "min_toolchain": "Node.js with WebAssembly support (benchmarked on Node v10.3.0); a browser needs a bundler or a custom loader",
+    "platforms": "Node.js on any CPU with a WebAssembly engine; browser use not supported out of the box",
+    "thread_safety": "Each factory call creates its own Wasm instance with its own two globals; a single next() function is not meant to be shared across worker threads (instances are per-isolate). Not documented beyond that.",
+    "drop_in_for_baseline": "partial — next() has Math.random's signature and range, so assigning it where a () => number is expected works, but it is a separate function you must create and seed, not a patch of Math.random, and the README's `const Math.random = require(...)(SEED)` snippet is not valid JavaScript"
+  },
+  "gotchas": [
+    "npm and GitHub differ: the latest npm release, 1.1.1 (2018-08-26), ships the -Oz build with the 53-bit next() that the README benchmarked; the -O3 --validate build and 52-bit mantissa conversion merged from PR #2 (commit bc56b66, 2019-01-02) were never published, and the .wasm is gitignored, so using master means building it yourself. The master next() tops out at 1 - 2^-52 even though the comments still say 0.9999999999999999.",
+    "Seed 0 (or -0) and any non-number seed silently fall back to Math.random() for the seed, so the stream is not reproducible; the seed is used as the raw IEEE-754 bit pattern of the double.",
+    "Seeding is not the reference splitmix64 procedure: s1 = splitmix64(s0) chains the first output instead of advancing the splitmix state by the golden-ratio constant, so streams will not match other xoroshiro128** ports seeded with splitmix64 from the same value (the core next() step itself matches the reference algorithm).",
+    "The README benchmark is a single Benchmark.js run through do-you-even-bench, which prints only ops/s (no relative margin of error), with no CPU named and on Node 10.3 (V8 6.7); the 10% lead over Math.random has not been re-measured on any later engine."
+  ],
+  "pick_this_over_siblings_when": "Among catalogued AssemblyScript entries, pick this over tinymt-wasm-typescript-benchmark when you want a published npm package with a Math.random-compatible double API and xoroshiro128**'s 64-bit outputs rather than a TinyMT32 benchmark repo; galois, superfasthash and long.js solve different problems (field arithmetic, hashing, 64-bit integer ops).",
+  "verified_claims_summary": "First-party README run on Node v10.3.0 (CPU not stated) with do-you-even-bench (a Benchmark.js wrapper) in a loop of freq[(f() * 10) | 0]++ calling a global function: the 2018 -Oz Wasm build did 81,321,598 op/s against V8 Math.random at 73,658,101 op/s (about 1.10x, derived from page data) and seedrandom's default ARC4 at 24,057,933 op/s (about 3.4x, derived), with uniform 0-9 frequency counts printed for all three. That build is the one on npm today; the 2019 master build was never measured.",
+  "status_note": "Abandoned since January 2019 (npm 1.1.1 from August 2018, two open issues answered in 2022 without code changes), but BSD-2-Clause and a 262-byte module plus a 40-line loader, so it is trivial to vendor or rebuild, and the algorithm is equivalent to the public-domain reference.",
+  "sources_read": [
+    "https://github.com/krisselden/xoroshiro128starstar/commits",
+    "https://github.com/krisselden/xoroshiro128starstar/issues?q=is%3Aissue",
+    "https://github.com/krisselden/xoroshiro128starstar/issues/1",
+    "https://github.com/krisselden/xoroshiro128starstar/issues/3",
+    "https://github.com/krisselden/xoroshiro128starstar/issues/4",
+    "https://github.com/krisselden/xoroshiro128starstar/pull/2",
+    "https://raw.githubusercontent.com/krisselden/xoroshiro128starstar/HEAD/README.md",
+    "https://raw.githubusercontent.com/krisselden/xoroshiro128starstar/HEAD/bench.js",
+    "https://raw.githubusercontent.com/krisselden/xoroshiro128starstar/HEAD/package.json",
+    "https://raw.githubusercontent.com/krisselden/xoroshiro128starstar/HEAD/index.js",
+    "https://raw.githubusercontent.com/krisselden/xoroshiro128starstar/HEAD/index.d.ts",
+    "https://raw.githubusercontent.com/krisselden/xoroshiro128starstar/HEAD/assembly/index.ts",
+    "https://raw.githubusercontent.com/krisselden/xoroshiro128starstar/HEAD/LICENSE.md",
+    "https://raw.githubusercontent.com/krisselden/xoroshiro128starstar/HEAD/.gitignore",
+    "https://raw.githubusercontent.com/krisselden/xoroshiro128starstar/c7cf3b3/assembly/index.ts",
+    "https://raw.githubusercontent.com/krisselden/xoroshiro128starstar/c7cf3b3/package.json",
+    "https://raw.githubusercontent.com/krisselden/xoroshiro128starstar/c7cf3b3/index.js",
+    "https://raw.githubusercontent.com/krisselden/xoroshiro128starstar/e5e290b/assembly/index.ts",
+    "https://raw.githubusercontent.com/krisselden/xoroshiro128starstar/e5e290b/package.json",
+    "https://raw.githubusercontent.com/krisselden/xoroshiro128starstar/e5e290b/index.js",
+    "https://registry.npmjs.org/xoroshiro128starstar",
+    "https://registry.npmjs.org/xoroshiro128starstar/-/xoroshiro128starstar-1.1.1.tgz",
+    "https://registry.npmjs.org/do-you-even-bench",
+    "https://registry.npmjs.org/do-you-even-bench/-/do-you-even-bench-1.0.5.tgz"
+  ],
+  "confidence": 0.72
+}

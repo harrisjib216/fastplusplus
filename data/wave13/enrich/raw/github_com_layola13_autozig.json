@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/layola13/autozig",
+  "one_liner": "Rust-to-Zig FFI generator whose WASM demo links a Zig SIMD128 image filter into a Rust module; claims 4.75x over JavaScript.",
+  "what_it_does": "AutoZig is an autocxx-style binding generator: you write Zig inside an autozig! (or include_zig!) macro in a Rust file, a build.rs step compiles it with the Zig compiler into a static library, and the macro emits Rust wrappers (slices and &str lowered to pointer plus length, monomorphized generics, tokio spawn_blocking async wrappers, opaque-pointer traits). The catalogued speed claim comes from one example, examples/wasm_filter, where Zig kernels for invert, grayscale and brightness are statically linked into a Rust wasm32 cdylib and called from a browser page through wasm-bindgen. It is a build tool and FFI layer, not a drop-in image library.",
+  "how_it_is_fast": "The fast row is a hand-written Zig loop over @Vector(16, u8) that lowers to WebAssembly SIMD128 (v128 load, i8x16 sub or saturating add/sub, store), 16 bytes per step, compiled with -O ReleaseFast -mcpu=mvp+simd128. The Rust comparison is a bounds-checked scalar step_by(4) loop built at opt-level \"s\", and the JavaScript one is a scalar per-byte loop that also allocates a fresh output array, so the gap is SIMD versus scalar code rather than anything Zig-specific. Grayscale is scalar in Zig too.",
+  "when_to_use": [
+    "A Rust project that wants to keep a few hot kernels in Zig (for @Vector SIMD, comptime or existing Zig/C code) and call them through generated wrappers with one cargo build.",
+    "A Rust wasm32 browser module where you want Zig and Rust code statically linked into one .wasm sharing linear memory, with the Zig side built for SIMD128.",
+    "Prototyping Rust-Zig-C three-way interop (the zig-c example) or comparing Zig and Rust codegen for small byte-crunching loops.",
+    "As a worked example of writing WebAssembly SIMD128 byte kernels; the speedup itself is reproducible in Rust with core::arch::wasm32 intrinsics."
+  ],
+  "when_not_to_use": [
+    "When you need a correct image filter: the SIMD invert path also inverts the alpha byte (opaque pixels become transparent) and the SIMD brightness path changes alpha, unlike the Rust and JS versions and the example README's 'Alpha channel unchanged'.",
+    "When you need a measured speedup you can trust: every figure is one browser click timed with performance.now, with no browser, CPU or filter named, and the 'Rust native' baseline is scalar size-optimized Rust compiled to wasm, not native Rust or Rust SIMD.",
+    "When the build must be reproducible from the current tree: since commit f419e92 (2026-01-10) the wasm_filter example has no wasm-bindgen dependency, while its page still imports wasm-bindgen glue, so the benchmark has to be rebuilt from 9cf585e or earlier.",
+    "Safety-critical FFI: wrappers for Zig functions declared with raw-pointer parameters are generated as safe pub fn bodies wrapping unsafe calls, so safe Rust can hand Zig a dangling pointer.",
+    "Projects needing a maintained, released dependency: 5 stars, no issues filed, crates.io stuck at 0.1.2 (2026-01-06, 80 downloads) while the repo moved on, and no commits since 2026-01-15."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "autozig plus autozig-build as a build-dependency (crates autozig-macro, autozig-engine pulled in); Zig compiler on PATH at build time; tokio and futures for the async and stream features; the WASM demo also needs wasm-pack and wasm-bindgen",
+    "min_toolchain": "Rust 1.77+, Zig 0.15+ (README; the example README still says 0.11+); browsers with WebAssembly SIMD128 (Chrome 91+, Firefox 89+, Safari 16.4+ per .cargo/config.toml)",
+    "platforms": "Native targets the Zig compiler supports (x86-64, aarch64), wasm32-freestanding with SIMD128, experimental wasm64 (Memory64) in the repo only",
+    "thread_safety": "Not documented for generated wrappers; the README requires free callbacks to be Send + Sync, and opaque trait types are !Send and !Sync.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw: the demo page keeps only the last duration per implementation (perfStats[impl].time) regardless of which filter produced it, and every brightness-slider input event also overwrites it, so the README's relative column can compare different filters across rows; combined with single samples and no warm-up loop (a first click on the JS row includes JIT tiering, and every JS call allocates a fresh 2.1 MB Uint8Array), the 3.13x and 4.75x ratios are not a controlled measurement.",
+    "Correctness: the timed SIMD invert path writes 255 - x to every byte including alpha, and the SIMD brightness path saturates alpha too, so the fast row does not compute the same image as the Rust and JS rows.",
+    "The Zig kernels cast ptr + i to *@Vector(16, u8) with @alignCast, but the buffer is a Vec<u8> with only byte alignment guaranteed: in ReleaseFast this is unchecked illegal behavior (works on wasm because load alignment is only a hint) and in Debug or ReleaseSafe builds a misaligned buffer would panic.",
+    "Repo and crates.io diverge: crates.io autozig-macro 0.1.2 has no #[autozig_export], which the current example uses; at HEAD #[autozig_export] expands to a #[no_mangle] extern \"C\" fn taking and returning Vec<u8> by value, which is not FFI-safe and is not what the page's wasm-bindgen import expects."
+  ],
+  "pick_this_over_siblings_when": "Pick AutoZig only for its Rust-Zig build integration; for the WASM speedup itself, wasm-perf (Emscripten SIMD intrinsics vs JS) and tape-sha256 (WASM SIMD SHA-256) publish more careful numbers, and msf/wasmplay compares Zig wasm against C++ on one runtime.",
+  "verified_claims_summary": "One click per implementation in examples/wasm_filter/www/index.html on a user-uploaded image of about 2.1 MiB of RGBA data (throughputs times durations agree), timed with performance.now around a single call that includes wasm-bindgen copy-in and copy-out: Zig SIMD128 0.80 ms, scalar Rust compiled to wasm at opt-level \"s\" 2.50 ms, scalar JavaScript 3.80 ms; browser, CPU and filter not stated. The table was added in commit 9cf585e (2026-01-09) on the wasm-bindgen version of the example, whose Zig kernels are unchanged at HEAD.",
+  "status_note": "Dual MIT/Apache-2.0 and small, but effectively a one-author experiment idle since 2026-01-15 with the published crates behind the repo and the benchmarked demo no longer building as committed; treat the image-filter numbers as a SIMD-versus-scalar illustration.",
+  "sources_read": [
+    "https://github.com/layola13/autozig",
+    "https://github.com/layola13/autozig/commits/main",
+    "https://github.com/layola13/autozig/commits/main/examples/wasm_filter",
+    "https://github.com/layola13/autozig/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/layola13/autozig/HEAD/README.md",
+    "https://raw.githubusercontent.com/layola13/autozig/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/layola13/autozig/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/layola13/autozig/HEAD/macro/src/lib.rs",
+    "https://raw.githubusercontent.com/layola13/autozig/HEAD/gen/build/src/lib.rs",
+    "https://raw.githubusercontent.com/layola13/autozig/HEAD/engine/src/zig_compiler.rs",
+    "https://raw.githubusercontent.com/layola13/autozig/HEAD/examples/wasm_filter/README.md",
+    "https://raw.githubusercontent.com/layola13/autozig/HEAD/examples/wasm_filter/src/lib.rs",
+    "https://raw.githubusercontent.com/layola13/autozig/HEAD/examples/wasm_filter/Cargo.toml",
+    "https://raw.githubusercontent.com/layola13/autozig/HEAD/examples/wasm_filter/build.rs",
+    "https://raw.githubusercontent.com/layola13/autozig/HEAD/examples/wasm_filter/build_and_serve.sh",
+    "https://raw.githubusercontent.com/layola13/autozig/HEAD/examples/wasm_filter/www/index.html",
+    "https://raw.githubusercontent.com/layola13/autozig/HEAD/examples/wasm_filter/.cargo/config.toml",
+    "https://raw.githubusercontent.com/layola13/autozig/4e329af/examples/wasm_filter/src/lib.rs",
+    "https://raw.githubusercontent.com/layola13/autozig/4e329af/examples/wasm_filter/Cargo.toml",
+    "https://raw.githubusercontent.com/layola13/autozig/42e4349/examples/wasm_filter/src/lib.rs",
+    "https://raw.githubusercontent.com/layola13/autozig/42e4349/examples/wasm_filter/Cargo.toml",
+    "https://raw.githubusercontent.com/layola13/autozig/9cf585e/examples/wasm_filter/src/lib.rs",
+    "https://raw.githubusercontent.com/layola13/autozig/9cf585e/examples/wasm_filter/Cargo.toml",
+    "https://raw.githubusercontent.com/layola13/autozig/0a096ae/README.md",
+    "https://raw.githubusercontent.com/layola13/autozig/4e329af/README.md",
+    "https://raw.githubusercontent.com/layola13/autozig/9cf585e/README.md",
+    "https://crates.io/api/v1/crates/autozig",
+    "https://crates.io/api/v1/crates/autozig-build",
+    "https://crates.io/api/v1/crates/autozig-macro",
+    "https://crates.io/api/v1/crates/autozig-engine",
+    "https://static.crates.io/crates/autozig-engine/autozig-engine-0.1.2.crate",
+    "https://static.crates.io/crates/autozig-macro/autozig-macro-0.1.2.crate"
+  ],
+  "confidence": 0.7
+}

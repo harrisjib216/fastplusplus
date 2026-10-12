@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/jairussw/as-str",
+  "one_liner": "Zero-copy UTF-16/UTF-8 string views for AssemblyScript with SIMD/SWAR search; beats stdlib String on search and ASCII case folding.",
+  "what_it_does": "as-str adds `str`, a view type holding a backing `string` (the GC owner) plus `[start, end)` byte pointers, and `str8`, a byte-indexed UTF-8 view over an ArrayBuffer. It mirrors the AssemblyScript `String` surface (slice, trim, split, indexOf, replace, toUpperCase, comparison operators) both as instance methods and as static free functions that accept a native `string` or a view, so `str.indexOf(s, \"x\")` can be called on an ordinary string without wrapping it. Results are materialized into a real `string` only on `toString()` or in the allocating ops. Optional compiler transforms (`as-str/global`, `as-str/auto`, `as-str/single`) inject imports or rewrite native-string code into views and packed u64 spans automatically.",
+  "how_it_is_fast": "Search uses a memchr-style first-code-unit filter (`findUnit`) that tests 8 UTF-16 units per step with `i16x8.eq` + bitmask under `--enable simd`, or 4 units per step with Mycroft's SWAR zero-lane trick on u64 words otherwise, then confirms the tail with a size-tiered byte compare; the stdlib's `indexOf` instead calls `compareImpl` at every candidate position. Case conversion checks the range is ASCII with one vector scan and folds a-z/A-Z in a single allocate-and-fold pass, where the stdlib over-allocates 3x, walks the Unicode special-case tables per code unit and then reallocates. View-producing ops (slice, trim, split) move two pointers instead of copying characters, so they avoid copying characters but still allocate one view object.",
+  "when_to_use": [
+    "Substring search (indexOf, includes, replace) on haystacks of hundreds to thousands of UTF-16 units in AssemblyScript: 8.1-8.2x for indexOf/includes and 11x for replace on a 1,024-unit ASCII string (author's v0.2.2 chart).",
+    "ASCII case folding (toUpperCase/toLowerCase) of mostly-ASCII text such as headers, identifiers or keys: about 3.8-3.9x over the stdlib's Unicode-aware loop.",
+    "Tokenizing and trimming input (log lines, request lines, CSV fields) where most substrings are inspected and discarded rather than kept, so materialization is rare.",
+    "Text that already lives as UTF-8 bytes (WASI, network, JSON payloads): `str8.fromBuffer` slices and searches it without transcoding to UTF-16.",
+    "An existing AssemblyScript codebase that can try the `as-str/auto` transform, which turns safe internal string locals into allocation-free packed spans without source edits (measure on your own workload, as the README advises)."
+  ],
+  "when_not_to_use": [
+    "Cheap per-call queries: length, charAt, at, codePointAt and substr measured 0.8-0.9x and startsWith/endsWith 0.7-0.8x of native on the author's chart; slice, substring, split, equals, repeat and concat are about 1.0x.",
+    "Non-ASCII text in toUpperCase/toLowerCase: the fast path bails out and the view is materialized and passed to the native method, which adds a copy over calling native directly.",
+    "Code that needs JavaScript String semantics or passes strings across many API boundaries: semantics mirror AssemblyScript's String, views are a distinct type, and every boundary crossing costs a `toString()` copy.",
+    "Long-lived small slices of large inputs: a view keeps its whole backing string reachable, so a retained 10-character view pins the full source buffer.",
+    "Projects that need a proven dependency: single author, 1 star, no issues filed, 11 npm releases between 24 June and 30 July 2026, and the published charts predate the v0.4-0.6 transform rewrite."
+  ],
+  "integration": {
+    "form": "module (npm package of AssemblyScript source, plus optional asc transforms as-str/global, as-str/auto, as-str/single)",
+    "dependencies": "utf-as ^0.3.1 (UTF-8/UTF-16 encode and decode); peer dependency assemblyscript >=0.28.10",
+    "min_toolchain": "AssemblyScript asc 0.28.10+ (benchmarked with ^0.28.18); SIMD tier needs --enable simd, otherwise the SWAR tier is compiled",
+    "platforms": "any WebAssembly host that runs asc output; SIMD path needs Wasm SIMD128 support (chosen at compile time via ASC_FEATURE_SIMD); views rely on AssemblyScript's non-moving GC",
+    "thread_safety": "not documented (views are plain GC objects; AssemblyScript modules are single-threaded per instance)",
+    "drop_in_for_baseline": "partial — the free functions take a native string and return the same results as String methods (differential-fuzzed per the README), and as-str/auto rewrites native string code automatically, but `str` is a separate type and view results must be materialized with toString() wherever a native string is required"
+  },
+  "gotchas": [
+    "lastIndexOf is not SIMD/SWAR accelerated at HEAD: util.ts `lastIndexOf` is a scalar backward loop that only checks the first code unit before the tail compare, although the README's Architecture section says `findUnit` powers it; the throughput chart accordingly shows identical SWAR and SIMD bars (28 Mops/s), and its 2.5x comes from skipping the stdlib's per-position compareImpl call.",
+    "'Without allocating' applies only to the transforms' packed spans: every `str.slice`, `trim`, `split` piece is a heap-allocated 3-field Str object (the Architecture section says a view op is exactly one allocation), which is why view ops chart at 1.0-1.5x rather than large gains.",
+    "replaceAll scans the haystack twice (a counting pass, then a copy pass, each calling indexOf until no match), so it gains 3.5x versus replace's 11x; str.replace and replaceAll also return a fresh copy when nothing matches, whereas the stdlib returns the original string.",
+    "Benchmark scope: one 1,024-unit ASCII string with the needle at code unit 953 (8 pad + 21 x 45-unit phrase, derived from str.bench.ts) and one 'n' false candidate per phrase; no non-ASCII input, short haystack or needle-dense case is measured, and the charts carry no CPU or OS."
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued AssemblyScript entries, as-string-sink (MaxGraey) speeds up building strings by concatenation, and json-as (same author) parses JSON; pick as-str when the hot path reads existing text (search, trim, slice, case-fold), and combine it with as-string-sink when you also build output.",
+  "verified_claims_summary": "First-party as-bench microbenchmarks (assembly/__benches__/str.bench.ts) at v0.2.2, commit a1025c0, 24 June 2026, V8 15.1.42, CPU not stated: on one 1,024-unit ASCII string the str SIMD build ran indexOf/includes about 0.75 vs 6.3 Mops/s (8.1-8.2x), lastIndexOf 11 vs 28 Mops/s (2.5x), toUpperCase/toLowerCase 3.8-3.9x and replace 11x faster than the AssemblyScript 0.28 stdlib String compiled with the same flags, while equals, compare, slice and most single-character queries were 0.7-1.1x. Both arms are in the same module, and the equality test uses a distinct copy so the stdlib's pointer-equality shortcut does not fire, so the comparison is fair, but it covers only that one input.",
+  "status_note": "Active single-author project (npm 0.1.0 to 0.6.0 between 24 June and 30 July 2026, last commit 2026-07-30), MIT and small enough to vendor, but the only published charts are for v0.2.2, so re-measure on current code; the README's Flavors link (github.com/AssemblyScript/as-str) is a 404.",
+  "sources_read": [
+    "https://github.com/JairusSW/as-str",
+    "https://github.com/JairusSW/as-str/issues?q=is%3Aissue",
+    "https://github.com/JairusSW/as-str/tree/docs/charts",
+    "https://raw.githubusercontent.com/JairusSW/as-str/HEAD/README.md",
+    "https://raw.githubusercontent.com/JairusSW/as-str/HEAD/package.json",
+    "https://raw.githubusercontent.com/JairusSW/as-str/HEAD/as-bench.config.json",
+    "https://raw.githubusercontent.com/JairusSW/as-str/HEAD/asconfig.json",
+    "https://raw.githubusercontent.com/JairusSW/as-str/HEAD/CONTEXT.md",
+    "https://raw.githubusercontent.com/JairusSW/as-str/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/JairusSW/as-str/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/JairusSW/as-str/HEAD/assembly/index.ts",
+    "https://raw.githubusercontent.com/JairusSW/as-str/HEAD/assembly/str.ts",
+    "https://raw.githubusercontent.com/JairusSW/as-str/HEAD/assembly/util.ts",
+    "https://raw.githubusercontent.com/JairusSW/as-str/HEAD/assembly/__benches__/str.bench.ts",
+    "https://raw.githubusercontent.com/JairusSW/as-str/HEAD/scripts/build-charts.sh",
+    "https://raw.githubusercontent.com/JairusSW/as-str/refs/heads/docs/charts/v0.2.2/per-op-speedup.svg",
+    "https://raw.githubusercontent.com/JairusSW/as-str/refs/heads/docs/charts/v0.2.2/throughput.svg",
+    "https://raw.githubusercontent.com/JairusSW/as-str/refs/heads/docs/charts/v0.2.2/throughput.png",
+    "https://registry.npmjs.org/as-str",
+    "https://github.com/JairusSW/as-bench",
+    "https://raw.githubusercontent.com/JairusSW/as-bench/HEAD/assembly/index.ts",
+    "https://raw.githubusercontent.com/JairusSW/as-bench/HEAD/as-bench.config.json",
+    "https://raw.githubusercontent.com/AssemblyScript/assemblyscript/main/std/assembly/string.ts",
+    "https://raw.githubusercontent.com/AssemblyScript/assemblyscript/main/std/assembly/util/string.ts"
+  ],
+  "confidence": 0.7
+}

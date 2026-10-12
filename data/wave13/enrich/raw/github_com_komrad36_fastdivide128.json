@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/komrad36/fastdivide128",
+  "one_liner": "Unsigned 128-bit Div/Mod/DivMod for x86-64 with BMI2; author says about 2x faster than compiler-rt's __udivmodti4.",
+  "what_it_does": "Provides DivMod(N, D, rem) plus inline Div and Mod wrappers for unsigned __int128 in one header and one .cpp file (about 100 lines). It was written for Clang on Windows, where a / b or a % b on unsigned __int128 emits calls to __udivti3, __umodti3 or __udivmodti4 that fail to link, and for other platforms where those compiler-rt routines link but are slow. It is not a symbol-level replacement: callers rewrite a / b as Div(a, b), because the library does not define the compiler-rt symbols.",
+  "how_it_is_fast": "A case split runs before the general loop: D > N returns 0 immediately; a power-of-two divisor is handled with TZCNT, a 128-bit shift and BZHI masks; a divisor below 2^64 uses one hardware DIVQ (or a 32-bit DIVL when the numerator's high word is zero, the divisor fits in 32 bits and the quotient fits in 32 bits), or two chained DIVQs when the quotient needs more than 64 bits. Divisors of 2^64 or more go through LZCNT-aligned restoring shift-subtract division with an inline-asm SUB/SBB/CMOVC/SBB step per quotient bit (up to 64 iterations). compiler-rt's __udivmodti4 has used the same DIVQ fast path and the same clz-aligned, branch-free shift-subtract loop since commit 68c011a (2020-07-10, D81809), seven months before this repo, so against current compiler-rt the differences are the DIVL and power-of-two shortcuts and the hand-written loop body.",
+  "when_to_use": [
+    "Runtime-variable unsigned 128-bit division or modulo in hot code (128-bit fixed point, reducing 64x64 products by a runtime modulus, big-ID hashing) built with Clang for x86-64 Haswell or newer.",
+    "Clang targeting the MSVC ABI on Windows where unsigned __int128 division fails to link with unresolved __udivti3/__umodti3, and you would rather call a function than link compiler-rt builtins.",
+    "Divisor mixes dominated by powers of two or 32-bit values, which take the TZCNT/BZHI and DIVL shortcuts that compiler-rt does not have.",
+    "Code that needs quotient and remainder together: DivMod returns both from one call."
+  ],
+  "when_not_to_use": [
+    "Compile-time-constant divisors or numerators: the README itself says a simpler specialised approach should be used, and compilers already strength-reduce constant division.",
+    "Repeated division by the same 64-bit divisor: a precomputed-reciprocal library (libdivide, or the author's FastDivide) avoids DIV altogether.",
+    "Divisors of 2^64 or more with a wide magnitude gap to the numerator: the bit-serial loop runs up to 64 iterations, the same algorithm compiler-rt uses, so expect little difference on that path.",
+    "Non-x86 targets, MSVC proper (no __uint128_t, no GNU inline asm), CPUs without BMI1/BMI2/LZCNT (no runtime dispatch or fallback), or GCC builds (README: compiles but codegen is not as good).",
+    "Anything that needs a tested or maintained dependency: no tests, no benchmark code, six commits on one day in February 2021."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (immintrin.h intrinsics and GNU-style inline assembly)",
+    "min_toolchain": "Clang with __uint128_t and AT&T-syntax GNU inline asm (primary target); GCC compiles with worse codegen per README and ignores the Clang-only '#pragma nounroll'; needs -mbmi -mbmi2 -mlzcnt or -march=haswell; no C++ standard stated (uses C++11 using-aliases)",
+    "platforms": "x86-64 only, Haswell or newer per README (uses LZCNT, TZCNT, BZHI, SHLX); no runtime CPU check",
+    "thread_safety": "not documented; the functions are pure and keep no state, so concurrent calls are safe by inspection",
+    "drop_in_for_baseline": "partial — same results as __udivti3/__umodti3/__udivmodti4 for nonzero divisors, but exposed as global Div, Mod and DivMod functions that must be called explicitly; the library does not define the compiler-rt symbols, so the / and % operators on __uint128_t are not redirected"
+  },
+  "gotchas": [
+    "Division by zero does not trap: IsPow2(0, 0) returns true, so D = 0 takes the power-of-two path, sets rem = N and evaluates N >> 128, which is undefined behaviour in C++; compiler-rt instead reaches a hardware DIV by zero. Add your own zero check (found by reading fast-div-128.cpp; no test covers it).",
+    "The 'about 2x faster than the compiler-rt stuff' claim has no benchmark code, numbers, CPU model, compiler version or compiler-rt version. The repo dates from 2021-02-14, after compiler-rt's July 2020 rewrite (commit 68c011a, which itself reported unsigned 128-bit small-divisor division falling from 153 ns to 27.1 ns on x86-64), so it is unknown whether the 2x was measured against the old bit-by-bit code or the current DIVQ-based code.",
+    "Inline assembly is AT&T syntax, so builds with -masm=intel break; the names Div, Mod and DivMod live in the global namespace and may collide with other code.",
+    "DivMod is defined out of line in fast-div-128.cpp, so each Div or Mod is a real function call unless you use LTO or move it into the header."
+  ],
+  "pick_this_over_siblings_when": "libdivide and the author's FastDivide speed up 64-bit and 32-bit division by a reused runtime divisor, and fastmod handles 32-bit compile-time divisors; none of them divides an arbitrary 128-bit dividend by an arbitrary 128-bit divisor, which is the only case FastDivide128 covers. Pick it when both operands are unsigned __int128 and the divisor changes from call to call.",
+  "verified_claims_summary": "Nothing was measured publicly: the README states the Div, Mod and DivMod routines are 'about 2x faster than the compiler-rt stuff' (__udivti3, __umodti3, __udivmodti4) on Haswell or newer x86, with no timings, benchmark source, CPU model, compiler version or compiler-rt version. Because compiler-rt adopted the same DIVQ fast path and shift-subtract loop in July 2020, the size of any gain against a current toolchain is unknown.",
+  "status_note": "Abandoned since its single day of commits (2021-02-14; no issues, pull requests, tests or benchmarks), but MIT-licensed and about 100 lines, so it is easy to vendor after adding a divide-by-zero check and benchmarking it against the compiler-rt your own toolchain ships.",
+  "sources_read": [
+    "https://github.com/komrad36/FastDivide128",
+    "https://github.com/komrad36/FastDivide128/commits",
+    "https://github.com/komrad36/FastDivide128/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/komrad36/FastDivide128/HEAD/README.md",
+    "https://raw.githubusercontent.com/komrad36/FastDivide128/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/komrad36/FastDivide128/HEAD/fast-div-128.h",
+    "https://raw.githubusercontent.com/komrad36/FastDivide128/HEAD/fast-div-128.cpp",
+    "https://raw.githubusercontent.com/llvm/llvm-project/main/compiler-rt/lib/builtins/udivmodti4.c",
+    "https://github.com/llvm/llvm-project/commits/main/compiler-rt/lib/builtins/udivmodti4.c",
+    "https://github.com/llvm/llvm-project/commit/68c011aa085ab8ec198198e45c83de605a7dc31f",
+    "WebSearch: clang Windows __udivti3 unresolved external symbol (results: lists.llvm.org cfe-dev 2017-November thread naming LLVM bug 25305; no source showing it fixed)"
+  ],
+  "confidence": 0.65
+}
