@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/dot-asm/cryptogams",
+  "one_liner": "Andy Polyakov's perlasm generators for ChaCha20, Poly1305, Keccak, SHA, AES and X25519 on a dozen ISAs; integer paths 1.4-3x faster than gcc output.",
+  "what_it_does": "This is the distribution repository for the CRYPTOGAMS assembly modules that OpenSSL and parts of the Linux kernel also carry. Each `.pl` script prints assembly for one ISA and ABI 'flavour', e.g. `perl x86_64/chacha-x86_64.pl elf chacha.s`. It covers x86_64, x86, ARMv4/v8, RISC-V, PPC, MIPS, SPARCv9, s390x, IA64 and CIL, plus a hand-written WebAssembly Poly1305 (webasm/poly1305_global.wat). You get OpenSSL-internal entry points such as `ChaCha20_ctr32(out, inp, len, key, counter)` and `poly1305_init/blocks/emit(ctx, ...)`. There is no C API or header beyond c/sha1.h, and no build system, so you write the glue.",
+  "how_it_is_fast": "Each primitive is hand-scheduled per microarchitecture and dispatched at run time from capability bits. ChaCha20 runs 1x/2x/4x SSSE3, 4x XOP, 8x AVX2 and 16x AVX-512F block-parallel lanes. Poly1305 keeps the accumulator in base 2^26 limbs for AVX/AVX2/AVX-512. With AVX512-IFMA it uses base 2^44 and vpmadd52luq/huq, and it precomputes key powers r^1..r^4 so that 4 blocks are multiplied in parallel. The scalar paths use 64-bit limb arithmetic tuned for each core. x86_64-xlate.pl translates one source to ELF, Mach-O and Win64 (with SEH unwind tables); newer RISC-V files add vector, Zbb/Zvkb, Zknh, Zicfilp and CHERI variants.",
+  "when_to_use": [
+    "You need fast ChaCha20-Poly1305, Keccak/SHA-3 or SHA-512 kernels inside your own crypto or TLS code without linking OpenSSL; the Linux kernel's lib/crypto/x86/poly1305-x86_64-cryptogams.pl is derived from this code.",
+    "RISC-V targets, where this is among the few tuned sources: Poly1305 runs at 1.8 cycles per byte on SiFive U74 (header: over 100% faster than compiler output) and 1.2 cpb vectorised on SpacemiT X60. ChaCha20 runs at 6.0 cpb with the 'vertical' vector code on X60. Zbb/Zvkb, Zknh and CHERI variants are included.",
+    "ARMv8 ChaCha20 on big cores: 1.25-1.30 cpb with 6xNEON+2xIALU on Apple M1, Cortex-X925 and Snapdragon X, against 3.9-4.5 cpb for the integer path (header table).",
+    "GPLv2 code bases that cannot take OpenSSL's Apache-2.0 copies: the CRYPTOGAMS licence offers BSD-3-style terms or the GPL."
+  ],
+  "when_not_to_use": [
+    "You want a turnkey library. CPU-feature detection is missing (issue #4, open since 2019), and so are benchmark or test programs (#3), a build system and C headers. Nettle, libgcrypt, OpenSSL or libsodium ship the same class of assembly behind a real API.",
+    "SHA-1 on modern x86: x86_64/sha1-x86_64.pl is the original integer-only file (6.8 / 9.9 cpb on Opteron / Xeon EM64T against gcc 3.4). OpenSSL's current copy adds SSSE3, AVX, AVX2 and SHA-NI paths: 3.54 cpb on Skylake, 1.93 on Ryzen with SHA extensions.",
+    "If you need every OpenSSL-side fix and file: issue #7 (open since 2020) lists OpenSSL modules missing here. Some have since been added (aesni-gcm-x86_64, ghashv8-armx, sha512-armv8), but x86_64/ghash-x86_64.pl is still absent. Pull requests are ignored, and issues shared with OpenSSL are redirected there.",
+    "ARMv8 ChaCha20 on little or older cores: inputs of 512 bytes or more take the 6xNEON+2xIALU path, which the header marks slower than 4+1 on Cortex-A53 (4.45 vs 4.06 cpb), A57, Denver, X-Gene, Mongoose and Kryo.",
+    "When licence clarity matters: the GPL alternative names no version (issue #12, open since 2021), and headers mix 'GPL-1.0+ OR BSD-3-Clause' with the older 'OpenSSL or CRYPTOGAMS' wording."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Perl at build time and an assembler (GNU as or clang; nasm or ml64 for Win64). The caller must define and fill OpenSSL's capability words: OPENSSL_ia32cap_P on x86 and OPENSSL_armcap_P on ARM. ARM files include arm/arm_arch.h.",
+    "min_toolchain": "Perl 5. For x86_64 SIMD paths: GNU binutils 2.19 (AVX), 2.22 (AVX2), 2.25 (AVX-512) and 2.26 (IFMA, Poly1305), or clang above 3.0 (clang 7 or later for AVX-512); nasm 2.09+ or ml64 for Win64.",
+    "platforms": "x86_64 (ELF, Mach-O, mingw64, Win64 nasm/masm), x86, ARMv4-v8 (including a Linux-kernel flavour), RISC-V 32/64 with V/Zbb/Zvkb/Zknh/Zicfilp/CHERI, PPC, MIPS, SPARCv9, s390x, IA64, CIL; WebAssembly text for Poly1305",
+    "thread_safety": "Reentrant by code reading: pure functions on caller-owned contexts; the capability words are read-only after the caller sets them",
+    "drop_in_for_baseline": "partial: the entry points and context layouts are OpenSSL's internal ones (ChaCha20_ctr32, poly1305_init/blocks/emit), so it can replace a C fallback behind that interface, but there is no C header, CPU detection or high-level AEAD API"
+  },
+  "gotchas": [
+    "SIMD paths are chosen when the Perl script runs, not only at run time. Each x86_64 script probes `$CC -Wa,-v` or `$CC -v` (or nasm/ml64) for the assembler version. If the regex does not match, as with an unusual cross-compiler name, `$avx` stays undefined and the AVX/AVX2/AVX-512 code is left out without warning, leaving only SSSE3 and scalar code.",
+    "Run-time dispatch reads OpenSSL's bit layout (`OPENSSL_ia32cap_P+4/+8`, `OPENSSL_armcap_P`), and nothing here fills it. The ChaCha20 and Poly1305 headers say AVX-512 is deliberately suppressed on Skylake-X because it slows the whole system. That suppression lives in OpenSSL's CPUID code, so an integrator who simply copies CPUID bits gets the AVX-512 paths the author avoids.",
+    "poly1305_init selects the implementation and, outside the kernel flavour, returns the matching blocks/emit function pointers through its third argument. The IFMA path keeps the hash in base 2^44 (poly1305_init_base2_44, poly1305_emit_base2_44), so do not mix entry points of different implementations on one context.",
+    "Divergence from OpenSSL on Win64 IFMA, from reading the code: OpenSSL now builds its AVX512-IFMA Poly1305 only when not Win64 (`$avx>3 && !$win64`, the area of its CVE-2023-4807 fix), and its 8-block IFMA routine uses ymm6-10 without saving them. Here IFMA stays enabled on Win64, but that 8-block routine is compiled out with `if (0)`, and the live 1x/4x IFMA routines use only ymm0-5 and ymm16-31. The header does not say which routine produced its 0.24 cpb AVX-512 IFMA figures for Cannon Lake and Rocket Lake."
+  ],
+  "pick_this_over_siblings_when": "Pick it over the Nettle or libgcrypt siblings when you want individual kernels (especially RISC-V, CHERI or a GPLv2-compatible licence) without adopting a whole library. Pick those libraries when you need a supported API with CPU detection and tests. For post-quantum RISC-V work, PQRV covers Kyber and Dilithium, which CRYPTOGAMS does not.",
+  "verified_claims_summary": "All numbers are first-party comment tables in each perlasm file, in cycles per byte, mostly measured with rdtsc at fixed clock. Each integer path is compared with gcc output for C code that is not in the repo. Examples: x86_64 ChaCha20 at 5.87 cpb on Skylake (+39% over gcc 4.8), x86_64 Poly1305 +90-200% over gcc-4.8 __int128 code (about 50% over clang), ARMv4 Poly1305 +85-130% over gcc-4.4, and RISC-V Poly1305 at 1.8 cpb on U74 (over 100% versus an unnamed compiler). SIMD paths reach 0.58 cpb for ChaCha20 (Rocket Lake) and 0.24 cpb for Poly1305 with IFMA. No harness, C reference or compiler flags are published.",
+  "status_note": "Active and copyable as a source drop: last commit 2026-10-05; 2025-2026 work is mostly RISC-V vector and CHERI support plus new Cortex-X925 and Snapdragon X results. 70 stars, 8 open issues (#3 benchmarks and #4 CPU detection open since 2019); pull requests are ignored, and the README's background link is dead (#19).",
+  "sources_read": [
+    "https://github.com/dot-asm/cryptogams",
+    "https://github.com/dot-asm/cryptogams/commits",
+    "https://github.com/dot-asm/cryptogams/issues",
+    "https://github.com/dot-asm/cryptogams/issues/4",
+    "https://github.com/dot-asm/cryptogams/issues/7",
+    "https://github.com/dot-asm/cryptogams/issues/12",
+    "https://github.com/dot-asm/cryptogams/issues/19",
+    "https://github.com/dot-asm/cryptogams/tree/master/x86_64",
+    "https://github.com/dot-asm/cryptogams/tree/master/arm",
+    "https://github.com/dot-asm/cryptogams/tree/master/c",
+    "https://github.com/dot-asm/cryptogams/tree/master/webasm",
+    "https://raw.githubusercontent.com/dot-asm/cryptogams/HEAD/README.md",
+    "https://raw.githubusercontent.com/dot-asm/cryptogams/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/dot-asm/cryptogams/HEAD/x86_64/chacha-x86_64.pl",
+    "https://raw.githubusercontent.com/dot-asm/cryptogams/HEAD/x86_64/poly1305-x86_64.pl",
+    "https://raw.githubusercontent.com/dot-asm/cryptogams/HEAD/x86_64/sha1-x86_64.pl",
+    "https://raw.githubusercontent.com/dot-asm/cryptogams/HEAD/x86_64/aesni-x86_64.pl",
+    "https://raw.githubusercontent.com/dot-asm/cryptogams/HEAD/x86_64/keccak1600-x86_64.pl",
+    "https://raw.githubusercontent.com/dot-asm/cryptogams/HEAD/x86_64/x86_64-xlate.pl",
+    "https://raw.githubusercontent.com/dot-asm/cryptogams/HEAD/arm/poly1305-armv4.pl",
+    "https://raw.githubusercontent.com/dot-asm/cryptogams/HEAD/arm/chacha-armv8.pl",
+    "https://raw.githubusercontent.com/dot-asm/cryptogams/HEAD/riscv/poly1305-riscv.pl",
+    "https://raw.githubusercontent.com/dot-asm/cryptogams/HEAD/riscv/chacha-riscv.pl",
+    "https://raw.githubusercontent.com/openssl/openssl/master/crypto/sha/asm/sha1-x86_64.pl",
+    "https://raw.githubusercontent.com/openssl/openssl/master/crypto/poly1305/asm/poly1305-x86_64.pl",
+    "https://raw.githubusercontent.com/torvalds/linux/master/lib/crypto/x86/poly1305-x86_64-cryptogams.pl"
+  ],
+  "confidence": 0.8
+}
