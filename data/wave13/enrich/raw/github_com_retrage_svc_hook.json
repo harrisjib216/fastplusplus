@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/retrage/svc-hook",
+  "one_liner": "LD_PRELOAD library that rewrites every ARM64 svc into a branch to a trampoline, hooking system calls in-process instead of via ptrace.",
+  "what_it_does": "svc-hook intercepts the system calls of an unmodified, dynamically linked ARM64 program on Linux, Android, FreeBSD or NetBSD. You preload libsvchook.so and point LIBSVCHOOK at your own hook library, which exports __hook_init and swaps in a function that receives the six arguments plus the syscall number and may forward to the original syscall (the same hook API as the authors' x86-64 zpoline). It is a different interface from ptrace: the hook runs inside the target process, not in a separate tracer.",
+  "how_it_is_fast": "Before main runs, a constructor reads /proc/self/maps, pattern-matches the svc encoding in every executable ELF section, and overwrites each svc with a direct b to a per-site gate inside the ±128 MiB branch range. The gate loads the return address and jumps to a common handler that saves registers and calls the C hook. A hooked syscall therefore costs a few branches and a register save inside the process instead of the two extra context switches to a tracer that ptrace needs per stop. Setup is fast because it only scans for one fixed instruction pattern, while ASC-Hook disassembles code to find the instructions that set x8.",
+  "when_to_use": [
+    "Tracing, filtering or emulating the syscalls of an unmodified, dynamically linked ARM64 Linux program where ptrace's per-syscall stops would dominate the run time (syscall-heavy servers and databases).",
+    "Building user-space syscall redirection on ARM64 (library OS, sandbox prototypes, fault injection, record and replay) with the zpoline-style hook API.",
+    "Syscall-intensive services that must keep near-native throughput: with a pass-through hook the authors measured 1.2% fewer pgbench TPS on PostgreSQL 17.6 and 0.1-0.9% less Samba throughput.",
+    "Short-lived processes where hook start-up matters: 25 ms of setup against 1890 ms for ASC-Hook in the authors' run.",
+    "ARM64 FreeBSD or NetBSD, which few in-process syscall hooks support."
+  ],
+  "when_not_to_use": [
+    "Statically linked or setuid binaries: it relies on LD_PRELOAD (the authors removed -static from sqlite-bench to hook it).",
+    "Security sandboxing: the hook lives in the target's address space, and code that is dlopen'ed, JIT-compiled or mapped after start-up issues unhooked svc instructions, because main.c scans memory only once in its constructor.",
+    "x86-64 or 32-bit Arm targets: ARM64 only (zpoline is the same group's x86-64 counterpart).",
+    "Hooks that call libc on Android or musl: there it loads the hook library with plain dlopen into the same namespace, and the Linux path has no re-entrancy guard (only the BSD path sets hook_active), so libc calls inside the hook appear to re-enter it (from code reading). On glibc it uses dlmopen with a private libc.",
+    "Environments that forbid writable code: it needs mprotect on text pages, GLIBC_TUNABLES=glibc.rtld.seal=0 under glibc memory sealing, procfs on the BSDs and PaX mprotect disabled on NetBSD."
+  ],
+  "integration": {
+    "form": "shared lib (libsvchook.so via LD_PRELOAD, plus your hook shared library named in LIBSVCHOOK)",
+    "dependencies": "none beyond libc and libdl",
+    "min_toolchain": "aarch64 GCC or Clang with make (Makefile builds with -O3 -fPIC -Werror; minimum versions not documented); cross-compiling via CC=aarch64-linux-gnu-gcc is supported",
+    "platforms": "ARM64 Linux, Android, FreeBSD, NetBSD",
+    "thread_safety": "Rewriting runs once in a constructor before main. The hook is then called on whichever thread makes the syscall, so it must be thread-safe; clone and clone3 with CLONE_VM copy the saved register context onto the child's stack. Otherwise not documented.",
+    "drop_in_for_baseline": "partial — replaces ptrace only for in-process interception of dynamically linked programs; it is not an out-of-process tracer, cannot follow static or setuid binaries, and does not see code loaded after start-up"
+  },
+  "gotchas": [
+    "The published numbers come from code later fixed for a correctness bug. Documentation/README.md (Dec 2025, and the paper) predates commit c4c2e5b (2026-08-27). Before that commit, trampolines were mapped with MAP_FIXED at the first page of the reachable window, which silently replaces any mapping already there, and there was no __builtin___clear_cache before mprotect. The fixed allocator may now loop mmap/munmap page by page, and the 14 ns hook cost and 25 ms setup have not been re-measured on it.",
+    "Register state is not fully preserved. On Linux each gate writes the svc immediate into x6, the trampoline uses x14 and x15, and asm_syscall_hook runs cmp before saving context, so those registers and the NZCV flags differ after a hooked svc, although the kernel preserves every register except x0. Inline-asm syscalls that keep live values there could break (found by reading the code; no failure has been reported).",
+    "Side effects inside assert(): the mprotect calls, fopen of /proc/self/maps and the call to __hook_init are all written inside assert(), so a build with -DNDEBUG silently drops them. The shipped Makefile does not define NDEBUG, so build it with that Makefile.",
+    "The memory footprint is understated. The documented 20,812 bytes assumes 28-byte per-svc gates, but the code at the linked commit f65a553 and later emits 6-instruction (24-byte) gates. The figure also leaves out the 512 KiB table of 65,536 'svc #i; ret' stubs that setup_syscall_table writes in every hooked process."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (Zydis, iced, XED, bddisasm, diStorm and similar) are x86 disassemblers and assemblers; none intercepts system calls, so pick svc-hook only when you need in-process syscall hooking on ARM64. It is the only such tool in the category; on x86-64 use zpoline instead.",
+  "verified_claims_summary": "The README's '1,000 times faster than ptrace' has no ptrace measurement anywhere in the repository. The only head-to-head numbers are first-party, on a HoneyComb LX2 (NXP LX2160A Cortex-A72, Linux 5.10, glibc 2.31): getpid hook cost of 14 ns for svc-hook, 39 ns for ASC-Hook and 3 ns for plain LD_PRELOAD (11 ns against 36 ns of trampoline overhead, about 3.3x, derived), and 25 ms against 1890 ms of setup. The getpid benchmark code is not in the repository, and the code measured was later changed (see gotchas).",
+  "status_note": "Active research prototype from the Middleware 2025 paper (last commit 2026-08-27 adding NetBSD support), Apache-2.0, one roughly 1,000-line C file that is easy to vendor; its fit in assemblers-and-asm-tooling is weak, and its evidence stays tier C because it is first-party and was measured on code with the MAP_FIXED trampoline bug.",
+  "sources_read": [
+    "https://github.com/retrage/svc-hook/issues?q=is%3Aissue",
+    "https://github.com/retrage/svc-hook/issues/18",
+    "https://github.com/retrage/svc-hook/commits",
+    "https://github.com/retrage/svc-hook/commit/c4c2e5b",
+    "https://raw.githubusercontent.com/retrage/svc-hook/HEAD/README.md",
+    "https://raw.githubusercontent.com/retrage/svc-hook/HEAD/Documentation/README.md",
+    "https://raw.githubusercontent.com/retrage/svc-hook/HEAD/Makefile",
+    "https://raw.githubusercontent.com/retrage/svc-hook/HEAD/main.c",
+    "https://raw.githubusercontent.com/retrage/svc-hook/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/retrage/svc-hook/HEAD/apps/basic/main.c",
+    "https://raw.githubusercontent.com/retrage/svc-hook/41ac430/main.c",
+    "https://raw.githubusercontent.com/retrage/svc-hook/f65a553fa95ffa130636c40022d9764394dce0e3/main.c"
+  ],
+  "confidence": 0.7
+}

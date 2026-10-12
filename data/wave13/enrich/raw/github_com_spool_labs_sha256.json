@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/spool-labs/sha256",
+  "one_liner": "Multi-buffer SHA-256 in Rust whose wasm simd128 build hashes small-message batches about 3.4-3.7x faster than @noble/hashes in V8.",
+  "what_it_does": "tape-sha256 is a Rust crate (0.2.1 on crates.io) that hashes many independent messages per call (hash_many, hash_many_prefixed, hash_pairs for Merkle parents) and runs serial or parallel SHA-256 hash chains (hash_chain, hash_chains for Solana proof-of-history). For JavaScript, the repo ships only an example cdylib (examples/wasm_lib.rs) exporting walloc, backend_name and hash_many_prefixed_raw over linear memory: the caller copies message bytes and a length array into wasm memory, makes one call per batch and reads 32-byte digests back. It is not a drop-in for noble's sha256(bytes) one-shot; it is a batch interface and there is no npm package.",
+  "how_it_is_fast": "SHA-256 cannot be vectorised within one message because each round depends on the last, so the crate runs four independent messages in lockstep, one per u32x4 lane of a wasm v128 register (multi-buffer hashing, as in Intel's isa-l_crypto). Input words are loaded with a byte-swapping i8x16 shuffle and transposed into lane order with canonical i32x4 shuffles that engines lower to single instructions; rotates are shift-pair plus or, since wasm has no vector rotate. The rounds are fully unrolled (flat-round body), and one wasm call amortises the JS-to-wasm boundary over the whole batch, which is what beats per-call libraries on 60-90 byte messages.",
+  "when_to_use": [
+    "Hashing many small independent messages (about 60-100 bytes, two SHA-256 blocks) in a synchronous browser loop, such as Solana createWithSeed vanity-address grinding: 4.55 M candidates/s in Chrome 150, 3.7x noble and 1.6x hash-wasm.",
+    "Replacing @noble/hashes (the @solana/web3.js 1.x path) or hash-wasm for batched Merkle-leaf hashing in a JS runtime without native crypto, where you can collect leaves into one call.",
+    "Rust code (native, not wasm) that hashes Merkle leaves or verifies many hash chains: the same crate dispatches to AVX-512, SHA-NI, ARM SHA-2 and NEON multi-buffer kernels, 2.0-6.8x the sha2 crate in its BENCHMARKS.md.",
+    "Engines where the multi-buffer wasm kernel is known to help: V8 (Node, Chrome) and JavaScriptCore (Bun) per the repo's matrix.cjs runs."
+  ],
+  "when_not_to_use": [
+    "Node.js: native node:crypto crypto.hash does the 64-leaf batch in 42.89 us against 100.61 us for the wasm build (2.3x faster, derived from page data); the author recommends a napi binding of the native backend instead.",
+    "Browser batches of ~1 KB messages: Chrome's WebCrypto subtle.digest with Promise.all measured 75 us against 80-90 us for the wasm build, and the README says to use WebCrypto there.",
+    "One message at a time or one large message: the speedup comes from filling four lanes per call; a single-stream hasher such as hash-wasm or WebCrypto fits better.",
+    "Solana PDA derivation: the ed25519 off-curve check is 94-99% of each candidate's cost, so batching the hashes gained only 4% (37.5 vs 39.1 us per PDA in Chrome).",
+    "Targets that must run on engines without wasm SIMD (Safari and iOS before 16.4, per Emscripten's SIMD docs found by search): a simd128 build is rejected at instantiation and there is no runtime fallback inside one module."
+  ],
+  "integration": {
+    "form": "crate (Rust); for JS, a self-built wasm32-unknown-unknown cdylib from examples/wasm_lib.rs, no npm package",
+    "dependencies": "none at runtime (sha2, rand and ed25519-dalek are dev-dependencies only); JS glue must be written by the user",
+    "min_toolchain": "Rust 1.89 (rust-version in Cargo.toml); wasm build needs RUSTFLAGS='-C target-feature=+simd128' and the wasm32-unknown-unknown target",
+    "platforms": "wasm32 with simd128 (simd128-4 kernel); native x86-64 (AVX-512, AVX2, SHA-NI), aarch64 (ARM SHA-2, NEON), portable Rust fallback elsewhere",
+    "thread_safety": "Entry points are stateless; the crate docs say two threads may call them concurrently on disjoint halves of a batch. The crate never spawns or pins threads.",
+    "drop_in_for_baseline": "partial — produces bit-identical SHA-256 digests, but replaces noble's per-message sha256(bytes) with a batch call over wasm linear memory and JS glue you write yourself"
+  },
+  "gotchas": [
+    "Stale fallback claim: benches/wasm/README.md says a build without +simd128 falls back to portable-8 and 'roughly ties hash-wasm', but current dispatch in src/lib.rs (changed in commit d967d91 'fix portable fallback width', 2026-07-27; BENCHMARKS.md agrees) picks portable-8 only on aarch64 and portable-1 on every other target including wasm32, so the non-SIMD wasm speed is not documented for the current code.",
+    "SIMD is a build-time fact in wasm (no runtime probing): ship two modules and feature-detect in JS if you need older engines. SpiderMonkey runs the 2x4 and 4x4 multi-wave kernels at 0.57-0.64x, so dispatch stays on the single 4-lane wave and Firefox gains are not measured beyond that.",
+    "The example module's walloc never frees memory and the bench module is about 210 KB because it exports three extra wave kernels; the author measured a dispatch-only build at 47.1 KB (38.7 KB after wasm-opt, 14.2 KB gzipped).",
+    "Benchmark reproducibility gaps: benches/wasm has no package-lock, so the exact @noble/hashes 1.x (^1.5.0; noble's current line is 2.4.0) and hash-wasm versions measured are not recorded; Node numbers are unpinned; Chrome's performance.now is clamped to 100 us, so batch rows move in 5 us steps and the grind rows (4 iterations of about 0.45 ms for tape) in roughly 5% steps, enough to blur tape vs WebCrypto at ~1 KB."
+  ],
+  "pick_this_over_siblings_when": "Pick it over sha2-wasm (single-stream SHA-2, about 5-7% faster than hash-wasm) when you hash many independent short messages per call, since multi-buffer lanes and one boundary crossing per batch give 1.55-1.6x over hash-wasm here; pick sha2-wasm or WebCrypto for one long stream. For Solana PDA work pair it with a faster curve check such as berith's wasm Ed25519, because the hash is only 1-6% of the cost.",
+  "verified_claims_summary": "On an Apple M4 Max, a 64-leaf Merkle batch (67,680 bytes) in Node v24 took 100.61 us with the simd128 wasm build including copies in and out, against 337.97 us for @noble/hashes 1.x one-shot (about 3.4x) and 156.24 us for hash-wasm (1.55x), while node:crypto took 42.89 us; in Chrome 150 an 87-byte createWithSeed grind reached 4.55 M candidates/s against 1.22 M for noble (3.72x) and 2.82 M for hash-wasm (1.61x). Builds used rustc release with +simd128; best of 15 rounds x 50 iterations (Chrome: 12 x 20, grind 12 x 4) after warmup, with every tape lane checked against node:crypto or noble.",
+  "status_note": "Active but very young (13 commits, 2026-07-26 to 2026-08-11, two committers, 1 star, 0 issues, crate 0.2.1 with 469 downloads); Apache-2.0 and small enough to vendor, but the JS integration is an example, not a maintained package.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/spool-labs/sha256/HEAD/README.md",
+    "https://raw.githubusercontent.com/spool-labs/sha256/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/spool-labs/sha256/HEAD/benches/wasm/README.md",
+    "https://raw.githubusercontent.com/spool-labs/sha256/HEAD/benches/wasm/bench.mjs",
+    "https://raw.githubusercontent.com/spool-labs/sha256/HEAD/benches/wasm/pda.mjs",
+    "https://raw.githubusercontent.com/spool-labs/sha256/HEAD/benches/wasm/package.json",
+    "https://raw.githubusercontent.com/spool-labs/sha256/HEAD/benches/wasm/check.mjs",
+    "https://raw.githubusercontent.com/spool-labs/sha256/HEAD/benches/wasm/matrix.cjs",
+    "https://raw.githubusercontent.com/spool-labs/sha256/HEAD/benches/wasm/browser/browser-bench.mjs",
+    "https://raw.githubusercontent.com/spool-labs/sha256/HEAD/examples/wasm_lib.rs",
+    "https://raw.githubusercontent.com/spool-labs/sha256/HEAD/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/spool-labs/sha256/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/spool-labs/sha256/HEAD/src/simd128.rs",
+    "https://raw.githubusercontent.com/spool-labs/sha256/HEAD/benches/wasm/package-lock.json (404)",
+    "https://github.com/spool-labs/sha256/commits",
+    "https://github.com/spool-labs/sha256/commit/d967d91",
+    "https://github.com/spool-labs/sha256/issues?q=is%3Aissue",
+    "https://crates.io/api/v1/crates/tape-sha256",
+    "https://registry.npmjs.org/tape-sha256 (404)",
+    "https://registry.npmjs.org/@noble%2Fhashes",
+    "WebSearch: Safari 16.4 WebAssembly SIMD support (snippets from emscripten.org/docs/porting/simd.html, nutrient.io, gigazine.net)"
+  ],
+  "confidence": 0.8
+}

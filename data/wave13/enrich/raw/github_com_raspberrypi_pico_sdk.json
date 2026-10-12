@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/raspberrypi/pico-sdk",
+  "one_liner": "Pico SDK's ROM-backed float, double and memcpy/memset replacements for RP2040, faster than libgcc soft-float and newlib libm on Cortex-M0+.",
+  "what_it_does": "pico_float (and its double-precision twin pico_double) replaces the compiler's soft-float helpers (__aeabi_fadd, __aeabi_fmul, __aeabi_fdiv, comparisons, int and int64 conversions, __aeabi_f2d) and the common math.h functions (sqrtf, sinf, cosf, tanf, atan2f, expf, logf, powf and about 30 more) at link time through the SDK's --wrap mechanism, so ordinary C float code speeds up with no source change. It also adds non-standard helpers such as fix2float, float2fix and round-towards-minus-infinity conversions. The implementation is picked per executable with pico_set_float_implementation(target, pico|compiler|none, plus pico_vfp or pico_dcp on RP2350). pico_mem_ops wraps memcpy, memset and the __aeabi_memcpy/memset variants to the RP2040 bootrom routines.",
+  "how_it_is_fast": "On RP2040 the SDK wrappers tail-call through a function table (sf_table) into hand-written Cortex-M0+ Thumb assembly in the chip's mask ROM (Mark Owen's mufplib in pico-bootrom-rp2040), which runs without XIP flash cache misses and costs no flash. Division uses the RP2040 SIO hardware integer divider, square root uses a Newton-Raphson reciprocal estimate with a final remainder step for correct rounding, and sin, cos and sincos use fixed-point CORDIC rotation. The rest of the math library (asinf, powf, hypotf and others) is C in float_math.c built on those primitives, partly through double-precision intermediates. On RP2350 the Arm build inlines VFP (FPU) instructions plus custom scientific functions (pico_vfp) or uses the RP2350 double coprocessor (pico_dcp).",
+  "when_to_use": [
+    "RP2040 firmware that does real soft-float work (trig, log, exp, division in control loops, sensor fusion, DSP) built with the Pico SDK: the default pico_float_pico is already on, so keep it rather than switching to compiler.",
+    "Arduino sketches on RP2040 that are float-bound: the Arduino-Pico core (earlephilhower), which is built on the SDK, measured 44.6 ms against 248.2 ms for the Arduino mbed core on tana's Box-Muller test.",
+    "Flash-constrained RP2040 images: the arithmetic and trig kernels live in ROM, so linking them costs only small wrappers instead of libgcc and newlib libm code.",
+    "Code that needs fast float to fixed-point conversions with saturation (float2fix, fix2float, float2int rounding towards minus infinity).",
+    "RP2350 Arm builds that want hardware single precision plus faster scientific functions (pico_vfp, the default there), or float without enabling the FPU in interrupts and tasks (pico_dcp)."
+  ],
+  "when_not_to_use": [
+    "Code that needs strict IEEE 754 behaviour: the ROM routines and comparisons flush denormals to zero ('clear mantissa if denormal'), NaNs are not propagated unless PICO_FLOAT_PROPAGATE_NANS=1, and fmaf is computed through double precision with double rounding (the source says 'not exact').",
+    "Trig on large arguments: the ROM sin/cos/tan only accept -128 < x < 128, and the SDK reduces larger inputs with remainderf by the float-rounded 2*pi (0x40c90fdb), so the phase error grows linearly with |x| (about 2.8e-4 rad at 1e4 and 0.028 rad at 1e6, derived from the constant).",
+    "Any chip other than an RP2-series part: the RP2040 kernels are in mask ROM under a licence that permits use 'solely on a Raspberry Pi RP2040 device' (or GPLv2 from the author), so they cannot be copied to another Cortex-M0+; use Qfplib-M0 there.",
+    "RP2350 RISC-V (Hazard3) builds: only __addsf3, __subsf3 and __mulsf3 are replaced; everything else is the compiler's soft-float.",
+    "memcpy/memset tuning: pico_mem_ops has no published numbers anywhere, and on RP2350 it defaults to the compiler's memcpy (the SDK warns the compiler memcpy cannot be used for unaligned copies in peripheral space)."
+  ],
+  "integration": {
+    "form": "static lib (CMake INTERFACE libraries pico_float, pico_double and pico_mem_ops inside the Pico SDK, linked into the firmware through pico_stdlib)",
+    "dependencies": "Pico SDK (pico_bootrom, hardware_divider), the RP2040 bootrom at runtime; build needs CMake, Python 3 and an arm-none-eabi cross compiler (GCC or Clang)",
+    "min_toolchain": "CMake 3.13; arm-none-eabi GCC (minimum version not documented); RP2350 RISC-V needs a separate GCC 14 prebuilt toolchain",
+    "platforms": "RP2040 (Cortex-M0+, ROM routines); RP2350 Arm Cortex-M33 (VFP or DCP variants); RP2350 RISC-V (single-precision add, sub and mul only)",
+    "thread_safety": "Stateless routines. __aeabi_fdiv saves and restores the per-core SIO divider state when it is dirty, so it is safe from interrupts; building with PICO_DIVIDER_DISABLE_INTERRUPTS=1 instead disables interrupts around the call. Otherwise not documented.",
+    "drop_in_for_baseline": "partial — transparent inside a Pico SDK build (float operators and math.h calls are rerouted by --wrap), but not usable outside the SDK or on non-RP2 chips, and results differ from libgcc and newlib at edge cases (denormals, NaNs, large trig arguments)"
+  },
+  "gotchas": [
+    "Harness flaw behind the only numbers: tana/pico_float_bench compares a Pico SDK build at 125 MHz with the whole Arduino mbed core stack (Mbed OS RTOS, unknown clock per ArduinoCore-mbed issue #221, unstated compiler and flags, heap array via malloc and micros() instead of a stack array and get_absolute_time), one run each. A same-stack baseline would be the SDK built with pico_set_float_implementation(target compiler); that was never measured. The Arduino-Pico row (SDK float code at 133 MHz: 44,557 / 10,420 / 15,168 us, about 47.4 / 11.1 / 16.1 ms scaled to 125 MHz) matches the SDK row, which supports blaming the mbed gap on the float routines but does not isolate their speedup.",
+    "The benchmark's phases do not time what their names suggest: generation includes two newlib rand() calls per pair and a double-precision multiply (2 * M_PI * random2 promotes to double: f2d, dmul, d2f), so pico_double is timed too; the mean and variance loops are dominated by two size_t-to-float conversions and one float divide per element, not by multiply and add.",
+    "The SDK's own test/pico_float_test/float_benchmark.c (one SysTick-timed call per input, averaged over 4 inputs, every implementation built copy_to_ram with PICO_FLOAT_IN_RAM=1) is a fair like-for-like harness, but its inputs include edge values (sinf/cosf at 1.6e15 take the remainderf path, logf(0)) and no results are published.",
+    "RP2350 regression: with SDK 2.1.1 and the default pico_vfp, sinf(1.565) returned -0.547 and cosf -0.837 (issue #2406, layout-dependent); fixed through PR #2429 for 2.2.0, so pin 2.2.0 or later on RP2350."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Qfplib-M0-full (same author, Mark Owen; portable Cortex-M0 float library with its own cycle table against GCC) whenever the target is an RP2040: the equivalent kernels are already in ROM, cost no flash and come wired into the SDK; on any other Cortex-M0/M0+ use Qfplib. For memcpy on non-RP2040 Cortex-M parts, rt_memcpy_cm at least publishes a measurement, which pico_mem_ops does not.",
+  "verified_claims_summary": "The only numbers are third-party and single-run: tana/pico_float_bench on a Raspberry Pi Pico took 49.1 ms to generate 4000 Box-Muller Gaussians, 11.6 ms for the running mean and 17.1 ms for the variance with the Pico SDK at 125 MHz, versus 248.2, 27.4 and 36.4 ms with the Arduino mbed core, whose build linked libgcc's GNU soft-float routines (issue #325); that is 5.06x, 2.37x and 2.13x (derived from page data), compiler and flags not stated, baseline clock unknown. The SDK itself only says its routines are 'generally faster and smaller' than the compiler's, and nothing measures pico_mem_ops.",
+  "status_note": "Actively maintained (release 2.3.1 on 2026-09-04, BSD-3-Clause, the standard SDK for RP2040 and RP2350), but 'copyable' covers only the SDK wrappers and float_math.c: the RP2040 arithmetic and trig kernels that do the work live in mask ROM under an RP2040-only licence, and the evidence is a whole-stack comparison, so tier C is right.",
+  "sources_read": [
+    "https://github.com/raspberrypi/pico-sdk",
+    "https://github.com/raspberrypi/pico-sdk/releases",
+    "https://github.com/raspberrypi/pico-sdk/issues?q=is%3Aissue%20pico_float%20OR%20sinf%20OR%20fdiv%20OR%20%22float%22%20bug",
+    "https://github.com/raspberrypi/pico-sdk/issues/2406",
+    "https://raw.githubusercontent.com/raspberrypi/pico-sdk/HEAD/README.md",
+    "https://raw.githubusercontent.com/raspberrypi/pico-sdk/HEAD/src/rp2_common/pico_float/include/pico/float.h",
+    "https://raw.githubusercontent.com/raspberrypi/pico-sdk/HEAD/src/rp2_common/pico_float/CMakeLists.txt",
+    "https://raw.githubusercontent.com/raspberrypi/pico-sdk/HEAD/src/rp2_common/pico_float/float_aeabi_rp2040.S",
+    "https://raw.githubusercontent.com/raspberrypi/pico-sdk/HEAD/src/rp2_common/pico_float/float_math.c",
+    "https://raw.githubusercontent.com/raspberrypi/pico-sdk/HEAD/src/rp2_common/pico_float/float_init_rom_rp2040.c",
+    "https://raw.githubusercontent.com/raspberrypi/pico-sdk/HEAD/src/rp2_common/pico_float/float_v1_rom_shim_rp2040.S",
+    "https://raw.githubusercontent.com/raspberrypi/pico-sdk/HEAD/src/rp2_common/pico_mem_ops/include/pico/mem_ops.h",
+    "https://raw.githubusercontent.com/raspberrypi/pico-sdk/HEAD/src/rp2_common/pico_mem_ops/CMakeLists.txt",
+    "https://raw.githubusercontent.com/raspberrypi/pico-sdk/HEAD/src/rp2_common/pico_mem_ops/mem_ops_aeabi.S",
+    "https://raw.githubusercontent.com/raspberrypi/pico-sdk/HEAD/test/pico_float_test/float_benchmark.c",
+    "https://raw.githubusercontent.com/raspberrypi/pico-sdk/HEAD/test/pico_float_test/CMakeLists.txt",
+    "https://raw.githubusercontent.com/raspberrypi/pico-bootrom-rp2040/HEAD/README.md",
+    "https://raw.githubusercontent.com/raspberrypi/pico-bootrom-rp2040/HEAD/bootrom/mufplib.S",
+    "https://raw.githubusercontent.com/tana/pico_float_bench/HEAD/README.md",
+    "https://raw.githubusercontent.com/tana/pico_float_bench/HEAD/float_bench.c",
+    "https://raw.githubusercontent.com/tana/pico_float_bench/HEAD/CMakeLists.txt",
+    "https://github.com/tana/pico_float_bench/tree/main/float_bench_arduino",
+    "https://raw.githubusercontent.com/tana/pico_float_bench/main/float_bench_arduino/float_bench_arduino.ino",
+    "https://github.com/arduino/ArduinoCore-mbed/issues/325",
+    "https://github.com/arduino/ArduinoCore-mbed/issues/221"
+  ],
+  "confidence": 0.65
+}

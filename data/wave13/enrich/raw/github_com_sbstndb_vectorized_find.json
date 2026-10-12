@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/sbstndb/vectorized_find",
+  "one_liner": "Personal AVX2 experiment: a 2x-unrolled cmpeq/movemask find for int and float, about 3.2x std::find on 4096 L1-resident ints.",
+  "what_it_does": "A small benchmark project rather than a library: ten linear-search variants over int and float arrays (naive, strided, no-break, branchless count, std::find on a raw array and on std::vector, AVX2 intrinsics) timed with Google Benchmark at sizes 2 to 4096. The reusable piece is intrinsic_find(int* or float*, int size, value), a C-style function that returns the index of the first match or -1 (std::find returns last). There is no installable header, no tests and no tail handling, so using it means copying the roughly 25-line function and fixing it.",
+  "how_it_is_fast": "It broadcasts the target with _mm256_set1_epi32 (or _mm256_set1_ps), loads two unaligned 256-bit chunks (16 elements) per iteration, compares with _mm256_cmpeq_epi32 (or _mm256_cmp_ps), collapses each comparison with movemask and finds the hit with __builtin_ctz; the 2x unroll was tuned on the author's CPU. That is one branch per 16 elements, against libstdc++'s std::find for int, which is a scalar `#pragma GCC unroll 4` loop (libstdc++ only switches to memchr for 1-byte types). The even faster Intrinsic2Find and CompareFind rows drop the early exit and count elements below the target over the whole array, which is a different algorithm, not a faster find.",
+  "when_to_use": [
+    "As a compact reading example of the cmpeq + movemask + ctz find idiom for 32-bit int or float on an AVX2 x86-64 machine.",
+    "Repeated scans of short-to-medium unsorted int32 or float arrays (up to a few thousand elements, L1-resident, which is all the benchmark covers) when your toolchain is GCC with libstdc++, whose std::find for 4-byte types is scalar.",
+    "As a starting harness for benchmarking your own find kernel; the Google Benchmark file is short and easy to extend."
+  ],
+  "when_not_to_use": [
+    "Buffers whose length is not a multiple of 16: there is no tail loop, so intrinsic_find reads up to 15 elements past the end and can return an out-of-range index if that stray memory holds the target.",
+    "With libc++ on Linux or with MSVC STL: libc++ routes std::find on 4-byte trivially comparable types to wmemchr (glibc has an AVX2 wmemchr) and MSVC STL dispatches to the vectorized __std_find_trivial_4, so the 3.2x baseline gap does not carry over; the repo never measured those standard libraries.",
+    "Non-x86, pre-AVX2 CPUs or MSVC builds: it uses AVX2 intrinsics, the GCC/Clang-only __m256i_u type and __builtin_ctz, with no scalar fallback or runtime dispatch.",
+    "Sorted lower_bound-style searches: the Intrinsic2Find and CompareFind variants look like that but return wrong counts (see gotchas); use std::lower_bound or a tested branchless search instead.",
+    "Production code in general: no licence, no tests, 0 stars, int sizes rather than size_t, and only int and float overloads."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the find functions; Google Benchmark (find_package(benchmark REQUIRED)) for the benchmark executable",
+    "min_toolchain": "C++17 (CMAKE_CXX_STANDARD 17); CMakeLists requires CMake 3.24 although the README says 3.28; GCC or Clang with AVX2 support",
+    "platforms": "x86-64 with AVX2 only; the build uses -march=native -mavx2",
+    "thread_safety": "not documented; the functions only read the array and keep no shared state, so concurrent calls on read-only data are safe by inspection",
+    "drop_in_for_baseline": "partial — different signature (int* or float*, int size, value), returns -1 instead of last on a miss, only int and float overloads, and the length must be a multiple of 16 to avoid over-reading"
+  },
+  "gotchas": [
+    "Over-read: intrinsic_find always loads 16 elements per step with no tail loop. The benchmark itself bumps sizes 2 and 4 up to 8 and then reads 8 ints past an 8-int malloc at sizes 2, 4 and 8; it also counts 8 items processed for the 2- and 4-element cases, which inflates the small-size throughput rows of the intrinsic variants.",
+    "The ~49.7 G-elements/s headline row (intrinsic2_find) is not a find. It counts elements below the target over the whole array (equal to lower_bound only on sorted input), and its reduction, _mm256_extract_epi32(sum,0) + _mm256_extract_epi32(sum,1) after two in-lane _mm256_hadd_epi32, returns twice the sum of lanes 0-3 and ignores lanes 4-7. On the benchmark input (4095 zeros, then the target) it returns 4096 instead of 4095. No benchmark checks the returned index, so the bug went unnoticed.",
+    "compare_find (the ~32.2 G-elements/s row, which already beats the AVX2 find) is a branchless count with no early exit that GCC auto-vectorizes. Its counter starts at -1, so on the benchmark input it returns 4094 instead of 4095, off by one even as a lower_bound. Its worst-case speed says nothing about inputs where the target appears early.",
+    "Harness limits: every row is a worst case on an all-zero array of at most 4096 ints (16 KiB, L1-resident) that is rescanned in a loop, and no result is validated. The std::find array is 64-byte aligned via aligned_alloc while the intrinsic arrays use malloc. The README's std::find and Intrinsic2 rows have no raw output in the repo, and the archived docs/perf_results/results.txt (older BM_ names) gives IntrinsicFind/4096 at 21.06 G/s, not ~24.9."
+  ],
+  "pick_this_over_siblings_when": "FastArrayOps (komrad36) covers contains/find for 8- to 64-bit integers and float/double, reports about 12x on 32-bit ints and is the better source to copy; libhat and the Rust memchr crate cover byte-pattern and substring search. Pick vectorized_find only as a minimal, readable AVX2 int32/float find to study or adapt (after adding a tail loop). If you only need a faster std::find for int, moving to libc++ or MSVC STL gives a vectorized std::find with no new code.",
+  "verified_claims_summary": "With Google Benchmark on an unnamed machine whose perf stat output shows 24 CPUs, an unstated compiler and standard library (CMake flags: GCC -Ofast -march=native -funroll-loops, or Clang -O3 -ffast-math), searching 4096 ints with the target in the last slot: the AVX2 intrinsic_find runs at ~24.9 G-elements/s against std::find at ~7.7 (raw pointer) and ~8.1 (std::vector), about 3.2x (derived from page data). The 49.7 G-elements/s Intrinsic2Find headline is a buggy full-array count, not a find, and is not a valid speedup.",
+  "status_note": "Stale personal experiment (35 commits, last on 2025-09-29, 0 stars, no issues) with no licence file, so it is reference-only: learn the idiom, do not vendor the code.",
+  "sources_read": [
+    "https://github.com/sbstndb/vectorized_find",
+    "https://github.com/sbstndb/vectorized_find/commits",
+    "https://github.com/sbstndb/vectorized_find/issues",
+    "https://raw.githubusercontent.com/sbstndb/vectorized_find/HEAD/README.md",
+    "https://raw.githubusercontent.com/sbstndb/vectorized_find/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/sbstndb/vectorized_find/HEAD/main.cpp",
+    "https://raw.githubusercontent.com/sbstndb/vectorized_find/HEAD/.gitignore",
+    "https://raw.githubusercontent.com/sbstndb/vectorized_find/HEAD/src/benchmarks/benchmarks.cpp",
+    "https://raw.githubusercontent.com/sbstndb/vectorized_find/HEAD/src/benchmarks/benchmarks.hpp",
+    "https://raw.githubusercontent.com/sbstndb/vectorized_find/HEAD/src/intrinsics/intrinsic_find.cpp",
+    "https://raw.githubusercontent.com/sbstndb/vectorized_find/HEAD/src/intrinsics/intrinsic_find.hpp",
+    "https://raw.githubusercontent.com/sbstndb/vectorized_find/HEAD/src/cpp_stl/cpp_stl_find.cpp",
+    "https://raw.githubusercontent.com/sbstndb/vectorized_find/HEAD/src/cpp_stl/cpp_stl_find.hpp",
+    "https://raw.githubusercontent.com/sbstndb/vectorized_find/HEAD/src/utils/utils.cpp",
+    "https://raw.githubusercontent.com/sbstndb/vectorized_find/HEAD/src/naive/naive_find.cpp",
+    "https://raw.githubusercontent.com/sbstndb/vectorized_find/HEAD/src/compare/compare_find.cpp",
+    "https://raw.githubusercontent.com/sbstndb/vectorized_find/HEAD/docs/perf_results/results.txt",
+    "https://raw.githubusercontent.com/sbstndb/vectorized_find/HEAD/docs/perf_results/intrinsic_perf.txt",
+    "https://raw.githubusercontent.com/llvm/llvm-project/main/libcxx/include/__algorithm/find.h",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/master/libstdc%2B%2B-v3/include/bits/stl_algobase.h",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/master/libstdc%2B%2B-v3/include/bits/stl_algo.h",
+    "https://raw.githubusercontent.com/microsoft/STL/main/stl/inc/xutility",
+    "https://raw.githubusercontent.com/bminor/glibc/master/sysdeps/x86_64/multiarch/wmemchr-avx2.S"
+  ],
+  "confidence": 0.8
+}

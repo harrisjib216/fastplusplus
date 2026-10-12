@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/pyodide/pyodide",
+  "one_liner": "CPython plus NumPy and SciPy compiled to WebAssembly; one informal test inverted a 200x200 matrix about 20x faster than math.js.",
+  "what_it_does": "Pyodide is CPython ported to WebAssembly with Emscripten, running in browsers and Node.js. It adds a JavaScript-Python foreign function interface and micropip, and ships prebuilt ports of C, C++ and Rust packages such as NumPy, pandas, SciPy, Matplotlib and scikit-learn. You call loadPyodide() from pyodide.mjs (jsDelivr CDN or npm), load packages, then run Python code or call Python functions through proxies. It does not replace math.js as a drop-in: you write the maths in Python with NumPy and move data across the FFI.",
+  "how_it_is_fast": "The speedup comes from NumPy's compiled C, not from anything Pyodide adds. np.linalg.inv copies the matrix into a contiguous buffer and calls LAPACK gesv (LU with partial pivoting) against an identity matrix. Pyodide builds NumPy with -Dallow-noblas=true and no BLAS dependency, so gesv runs NumPy's f2c-translated lapack_lite reference code (NumPy calls these '(slow!) internal fallback routines'), compiled by Emscripten at -O2 with no blocking, SIMD or threads. math.js's inv does Gauss-Jordan elimination over nested JS arrays and sends every scalar step through typed-function dispatch: about 12 million addScalar(multiply()) steps for a 200x200 matrix (derived from inv.js). The gap therefore measures that dispatch overhead, not WebAssembly against JavaScript.",
+  "when_to_use": [
+    "Browser or Node.js apps that need real NumPy, SciPy or pandas behaviour on the client (notebooks, teaching tools, offline data apps) when the alternative is rewriting the numerics in JavaScript.",
+    "Dense linear algebra on matrices of a few hundred rows where math.js's generic matrices are the incumbent: 0.024 s vs 0.475 s (Chrome) for one 200x200 inverse.",
+    "Long-lived sessions where the multi-megabyte download and the seconds of startup are paid once, run in a module Web Worker so synchronous Python does not block the UI.",
+    "Porting existing Python numerical code to the web with little rewriting."
+  ],
+  "when_not_to_use": [
+    "One-off or latency-sensitive page loads: the roadmap cites a 6.4 MB first download and 4 to 5 s of initialization for the core, and NumPy adds about 2.8 MB compressed (issue #3763). The comparison measured none of this.",
+    "Heavy BLAS-3 work: Pyodide's reference BLAS ran dgemm 15-35x slower than native (issue #3763), a 1024x1024 float32 np.dot took about 3 s vs 0.005 s natively (issue #1574), and native NumPy did the 200x200 inverse 2.7x faster than Pyodide.",
+    "Data that lives in JavaScript: every array has to cross the JS-Python FFI (issue #2232 reports costly NumPy-to-tfjs transfers). The benchmark avoided this cost by generating its data inside Python.",
+    "Multithreaded work: threading, multiprocessing and subprocess raise RuntimeError (FAQ).",
+    "A single kernel such as a matrix product or an inverse, where a typed-array JS library or a small Emscripten or Rust wasm module needs far less code and download."
+  ],
+  "integration": {
+    "form": "module (JavaScript loader pyodide.mjs plus the pyodide.asm.wasm runtime, python_stdlib.zip and per-package wheels, from the jsDelivr CDN or npm)",
+    "dependencies": "none for the runtime; NumPy and other packages load separately as wheels through loadPackage or micropip",
+    "min_toolchain": "Node.js 18+ (npm engines field) or a modern browser with WebAssembly; current main builds Python 3.14.2 with Emscripten 5.0.3; Web Workers must be module-type",
+    "platforms": "wasm32 in browsers and Node.js; no pthreads",
+    "thread_safety": "Single-threaded: threading, multiprocessing and subprocess raise RuntimeError; run Pyodide in a module Web Worker to keep the main thread responsive.",
+    "drop_in_for_baseline": "partial — it replaces math.js only if you rewrite the maths as Python/NumPy calls behind the FFI; there is no math.js-compatible API"
+  },
+  "gotchas": [
+    "The evidence is one informal post (dvd101x, math.js discussion #2744, 2023-02-11). It gives no machine, browser versions, Pyodide or math.js version, run count or warm-up, and every timed expression includes generating the random matrix. The stable Pyodide release on that date was 0.22.1 (2023-01-25), whose NumPy 1.23.5 recipe was built with --disable-optimization.",
+    "The 20x mostly measures math.js's generic typed-function dispatch: a math.js maintainer named that indirection as the main cause of its slowness in December 2024, and math.js ran 5x slower in Safari than in Chrome. It is not a WebAssembly-vs-JavaScript result: native NumPy is still 2.7x faster than Pyodide on the same inverse, and no plain typed-array JavaScript loop was measured.",
+    "Pyodide's NumPy has no optimized BLAS or LAPACK. It uses the lapack_lite fallback, the OpenBLAS evaluation (issue #3763, open since 2023-04) has not landed, and a NumPy maintainer said in that issue that NumPy is considering dropping lapack-lite, so large matrices fall far behind native.",
+    "Releases are now numbered after the Python version (314.0.7 on 2026-09-14, with 0.29.x and 0.27.x stable branches). Compiled packages must be built for the matching Pyodide ABI."
+  ],
+  "pick_this_over_siblings_when": "Pick Pyodide over single-kernel siblings such as wasm-perf (Emscripten SIMD matmul) or the Rust matmul in JavaScript-vs-WebAssembly-Comparative-Analysis when you need the whole Python scientific stack rather than one hand-written routine. Pick those siblings, or a typed-array JS library, when you need one operation with a small download and no interpreter startup.",
+  "verified_claims_summary": "One informal timing in math.js discussion #2744 (2023-02-11; machine, browser versions and run counts not stated): inverting a freshly generated random 200x200 matrix took 0.024 s with NumPy in Pyodide in the browser, 0.475 s with math.js in Chrome (about 20x, derived from page data) and 2.403 s with math.js in Safari. Native NumPy on Python 3.10 took 0.009 s and Octave 0.005 s. Download and initialization time were not included.",
+  "status_note": "Actively maintained (last commit 2026-09-22, 14.9k stars, MPL-2.0, latest release 314.0.7 on 2026-09-14) and widely used. The only performance evidence is a third-party anecdote that pits NumPy's compiled reference LAPACK against math.js's generic dispatch, and the category fit is loose because Pyodide is a Python runtime, not a wasm language.",
+  "sources_read": [
+    "https://github.com/josdejong/mathjs/discussions/2744",
+    "https://raw.githubusercontent.com/josdejong/mathjs/develop/src/function/matrix/inv.js",
+    "https://github.com/pyodide/pyodide",
+    "https://raw.githubusercontent.com/pyodide/pyodide/HEAD/README.md",
+    "https://github.com/pyodide/pyodide/tree/main/benchmark",
+    "https://raw.githubusercontent.com/pyodide/pyodide/HEAD/benchmark/benchmark.py",
+    "https://raw.githubusercontent.com/pyodide/pyodide/HEAD/Makefile.envs",
+    "https://raw.githubusercontent.com/pyodide/pyodide/HEAD/docs/project/roadmap.md",
+    "https://raw.githubusercontent.com/pyodide/pyodide/HEAD/docs/usage/faq.md",
+    "https://raw.githubusercontent.com/pyodide/pyodide/HEAD/docs/usage/downloading-and-deploying.md",
+    "https://raw.githubusercontent.com/pyodide/pyodide/HEAD/docs/usage/webworker.md",
+    "https://raw.githubusercontent.com/pyodide/pyodide/0.22.1/packages/numpy/meta.yaml",
+    "https://raw.githubusercontent.com/pyodide/pyodide-recipes/HEAD/packages/numpy/meta.yaml",
+    "https://github.com/pyodide/pyodide/issues?q=is%3Aissue%20BLAS",
+    "https://github.com/pyodide/pyodide/issues/1120",
+    "https://github.com/pyodide/pyodide/issues/1574",
+    "https://github.com/pyodide/pyodide/issues/3763",
+    "https://raw.githubusercontent.com/numpy/numpy/main/meson.options",
+    "https://raw.githubusercontent.com/numpy/numpy/main/numpy/linalg/meson.build",
+    "https://raw.githubusercontent.com/numpy/numpy/main/numpy/linalg/umath_linalg.cpp",
+    "https://pypi.org/pypi/pyodide-py/json",
+    "https://registry.npmjs.org/pyodide",
+    "https://github.com/BertrandBev/eigen-js"
+  ],
+  "confidence": 0.75
+}

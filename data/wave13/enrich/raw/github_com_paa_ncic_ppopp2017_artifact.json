@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/paa-ncic/ppopp2017_artifact",
+  "one_liner": "Kepler (sm_35) SASS assembler plus hand-scheduled SGEMM kernels that beat cuBLAS 7.0 by up to 1.15x on a Tesla K20m.",
+  "what_it_does": "The PPoPP 2017 artifact has three parts: Solver, shell scripts that crack NVIDIA ISA bit encodings (opcodes, modifiers, operands) by flipping bits of cuobjdump/nvdisasm output; KeplerAs, a Perl assembler forked from Scott Gray's MaxAs that encodes Kepler sm_35 SASS and inserts it into an nvcc-built template cubin; and SGEMM kernels written in that SASS (12x12 and 8x8 register blocking, NN/NT/TN/TT layouts) with small cuBLAS comparison harnesses. The kernels are loaded with the CUDA driver API (cuModuleLoad/cuLaunchKernel) and take their own parameter block; there is no BLAS-style API.",
+  "how_it_is_fast": "Bare-metal scheduling that nvcc/ptxas did not do on Kepler: control codes set so that FFMA pairs dual-issue (the paper's pattern issues six FFMAs per four clocks), registers allocated to avoid register-bank conflicts (four-aligned quads for LDS.128), non-FFMA instructions placed where they cost little, and global/shared load widths (LDG.128, LDS.64 versus LDS.128) chosen to stay off the shared-memory roofline. Blocking is two-level, 192x192 shared-memory tiles with 12x12 register tiles (or 128x128 with 8x8), double-buffered in shared memory and registers, the same structure as MaxAs's Maxwell SGEMM it derives from.",
+  "when_to_use": [
+    "Studying or teaching GPU microarchitecture-level tuning: dual-issue control codes, register-bank conflicts and load-width choices, with a worked SGEMM and the paper's microbenchmark methodology.",
+    "Squeezing single-precision GEMM on legacy GK110-class Kepler (sm_35) GPUs such as the Tesla K20m, where the paper reports 3.1 versus 2.7 Tflop/s over cuBLAS 7.0 for large square matrices.",
+    "Reverse-engineering another NVIDIA ISA encoding: the Solver scripts ship sm_35 and sm_52 inputs and are the reusable part of the toolchain.",
+    "Large matrices (the paper's gains grow with size; 12x12 blocking wins above about 1000, 8x8 at small sizes)."
+  ],
+  "when_not_to_use": [
+    "Any GPU newer than Kepler: KeplerAs refuses cubins that are not sm_35 ('Cubin not in sm_35'), and Maxwell and later use different encodings; use MaxAs (Maxwell/Pascal) or TuringAs (Volta/Turing/Ampere) instead.",
+    "As a cuBLAS replacement in an application: no BLAS API, fixed 192x192/128x128 tiles, kernel-specific parameter blocks (lda8-style strides), and edge handling for sizes that are not tile multiples is not documented (all tested sizes are multiples of 192 or 128).",
+    "Convolution: the kernels behind the 39-62% over cuDNN v4.0 claim are not in the repository.",
+    "Small matrices on a 13-SM K20m: a 384x384 problem launches only 4 thread blocks and is load-imbalanced, per the paper.",
+    "Anything needing support or a modern toolchain: code last changed 2017-05-24, CUDA 7.0 and cuDNN 4.0 era."
+  ],
+  "integration": {
+    "form": "source-drop (SASS kernel files assembled with the KeplerAs Perl tool into a cubin, loaded via the CUDA driver API)",
+    "dependencies": "Perl 5.10+ with Carp and Data::Dumper (KeplerAs/Makefile.PL, installed with 'perl Makefile.PL; make; sudo make install'); CUDA toolkit with nvcc to build the template cubin (nvcc -arch sm_35 -m 64 -cubin) and cuobjdump/nvdisasm for the solver and test modes; cuBLAS and the CUDA driver/runtime for the harness (nvcc -o sgemm sgemm.cpp -lcudart -lcuda -lcublas)",
+    "min_toolchain": "Perl 5.10; CUDA 7.0 was the paper's baseline toolkit; newer toolkits not documented",
+    "platforms": "NVIDIA Kepler sm_35 only (tested on Tesla K20m); Linux shell scripts",
+    "thread_safety": "not documented (stateless GPU kernels; the harnesses are single-threaded host programs)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw: each sgemm.cpp times a single launch of each side (iterations = 1 in the NN and NT harnesses, 10 in TN) with CUDA events and no warm-up, the cuBLAS call is the first one after cublasCreate, and NT/sgemm.sh runs every size in a fresh process ('sleep 5' between sizes), so every number is one cold sample; GPU clocks are not pinned or stated (the paper's 88% uses a 3520 Gflop/s peak).",
+    "Baseline layout asymmetry: the NN harness computes its row-major C with cublasSgemm(CUBLAS_OP_T, CUBLAS_OP_T, ...) writing a column-major C (checked through transposed indexing) instead of the operand-swapped CUBLAS_OP_N/CUBLAS_OP_N call, so cuBLAS ran a different transposition variant than the kernel; its speed relative to cuBLAS's NN path is not shown. The NN 8x8 harness passes lda = M and ldb = K to that transposed call, which does not fit the transposed shapes when M < K or K < N (three of the paper's four rectangular shapes), and no harness checks the cuBLAS return status.",
+    "The correctness check requires bitwise-equal floats against cuBLAS (C[index] != cublasC[indexT]) and only prints 'Passed' or 'Error'; the paper does not report its outcome.",
+    "KeplerAs constraints: it patches an existing nvcc-compiled template cubin whose kernel signature must match the SASS parameter mapping; kernel size must be a multiple of 8 instructions, at most 255 registers and 16 barriers; LDS.128 destinations need a register index divisible by 4 or the GPU raises illegal-instruction errors (paper, Section 4.1). Its POD still calls it an 'Assembler for NVIDIA Maxwell architecture', inherited from MaxAs."
+  ],
+  "pick_this_over_siblings_when": "Among the SASS assemblers already listed, MaxAs covers Maxwell/Pascal and TuringAs covers Volta/Turing/Ampere; pick KeplerAs only for sm_35 Kepler hardware or for its ISA-encoding solver, which neither sibling ships.",
+  "verified_claims_summary": "PPoPP 2017 paper (sgemm.pdf in the repo) on an NVIDIA Tesla K20m against cuBLAS from CUDA 7.0: the 12x12-blocked SASS SGEMM reaches 3.1 Tflop/s (88% of a 3520 Gflop/s peak) versus 2.7 Tflop/s (76%) at 12288x12288x12288, 1.15x, and beats cuBLAS 'in most cases' over square sizes 384-12288 (step 384) and four rectangular shapes; convolution kernels average 39%, 46% and 62% above cuDNN v4.0 on AlexNet, VGG-A and OverFeat layers (batch 128). The public harness behind the SGEMM figures times one cold launch per size with CUDA events.",
+  "status_note": "Abandoned research artifact (code last changed 2017-05-24, README edits 2019-10-08) for obsolete Kepler hardware; corrections to the record: a timing harness does exist (SGEMM/*/sgemm.cpp with Makefiles and NT/sgemm.sh), and every kernel file opened (NN and TN, 12x12 and 8x8, plus the common include) carries an Apache-2.0 header (copyright Nervana Systems 2014 and Xiuxia Zhang 2015-2017), with KeplerAs and Solver under MIT, so the code is copyable rather than mixed.",
+  "sources_read": [
+    "https://github.com/PAA-NCIC/PPoPP2017_artifact",
+    "https://github.com/PAA-NCIC/PPoPP2017_artifact/commits/master",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/README.md",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/sgemm.pdf",
+    "https://github.com/PAA-NCIC/PPoPP2017_artifact/tree/master/KeplerAs",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/KeplerAs/README.md",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/KeplerAs/LICENSE",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/KeplerAs/Makefile.PL",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/KeplerAs/Install.sh",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/KeplerAs/bin/KeplerAs.pl",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/KeplerAs/lib/KeplerAs/KeplerAs.pm",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/KeplerAs/lib/KeplerAs/Cubin.pm",
+    "https://github.com/PAA-NCIC/PPoPP2017_artifact/tree/master/Solver",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/Solver/LICENSE",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/Solver/Readme.md",
+    "https://github.com/PAA-NCIC/PPoPP2017_artifact/tree/master/SGEMM",
+    "https://github.com/PAA-NCIC/PPoPP2017_artifact/tree/master/SGEMM/NN",
+    "https://github.com/PAA-NCIC/PPoPP2017_artifact/tree/master/SGEMM/NN/12x12",
+    "https://github.com/PAA-NCIC/PPoPP2017_artifact/tree/master/SGEMM/NT",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/SGEMM/NN/12x12/Makefile",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/SGEMM/NN/12x12/sgemm.cpp",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/SGEMM/NN/12x12/sgemm_nn_192x192.cu",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/SGEMM/NN/12x12/sgemm_nn_192x192.sass",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/SGEMM/NN/12x12/sgemm_common_192x192.sass",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/SGEMM/NN/8x8/sgemm.cpp",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/SGEMM/NN/8x8/Makefile",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/SGEMM/NN/8x8/sgemm_nn_128x128.sass",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/SGEMM/TN/12x12/sgemm.cpp",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/SGEMM/TN/12x12/sgemm_tn_192x192.sass",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/SGEMM/TN/8x8/sgemm.cpp",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/SGEMM/TN/8x8/sgemm_tn_128x128.sass",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/SGEMM/NT/sgemm.sh",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/SGEMM/NT/sgemm.cpp",
+    "https://raw.githubusercontent.com/PAA-NCIC/PPoPP2017_artifact/HEAD/SGEMM/NT/Makefile"
+  ],
+  "confidence": 0.8
+}

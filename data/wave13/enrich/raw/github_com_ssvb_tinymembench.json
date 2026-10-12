@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/ssvb/tinymembench",
+  "one_liner": "Memory bandwidth and latency benchmark whose NEON, ARM and SSE2 copy/fill kernels beat old ARM libc memcpy up to 2.2x.",
+  "what_it_does": "tinymembench is a single command-line program (main.c, util.c, asm-opt.c plus per-ISA .S files) that times sequential copy and fill over two 32 MiB aligned buffers and random-read latency over buffers up to 64 MiB. Each bandwidth row runs one kernel (libc memcpy/memset, C loops, NEON, VFP, ARM LDM/STM, SSE2, MOVSB/MOVSD, non-temporal and 2-pass variants with different prefetch steps) and prints the best MB/s of up to 10 runs of at least 0.5 s. It is a diagnostic tool, not a library: the kernels have the signature f(int64_t *dst, int64_t *src, int size) and no memcpy-compatible entry point.",
+  "how_it_is_fast": "The faster rows use software prefetch a fixed 256 bytes ahead (pld on ARM, prefetchnta on x86, prfm on AArch64), wide NEON vld1/vst1 transfers of 32-128 bytes per iteration with 256-bit alignment hints, and non-temporal stores (movntdq, stnp) that skip the read-for-ownership of the destination. On 2012-2017 Cortex-A8 and Allwinner A13 boards the libc memcpy issued no prefetch, so a prefetching loop roughly doubled copy bandwidth; the 2-pass rows stage 2 KB blocks through L1 to test whether separating reads and writes helps.",
+  "when_to_use": [
+    "Characterising a new ARM, AArch64, MIPS or x86 board: it shows in one run whether the system libc memcpy/memset reaches the memory bus's achievable bandwidth or leaves a 1.5-2x gap that a prefetching or NEON copy would close.",
+    "Choosing a copy strategy (prefetch distance, NEON vs LDM/STM, non-temporal vs cached stores) before writing or picking a memcpy for an embedded Linux image or a framebuffer driver; it also measures uncached framebuffer readback on ARM.",
+    "Comparing against the 68 community result pages on the project wiki, which use the same harness and output format across boards from the Raspberry Pi 1 to recent desktop CPUs.",
+    "Measuring random-access latency with and without transparent huge pages (MADV_HUGEPAGE) to see TLB costs."
+  ],
+  "when_not_to_use": [
+    "As a memcpy or memset replacement: the kernels assume sizes in whole blocks and aligned pointers, have no small-copy, misalignment or overlap handling, and are not exported as a library.",
+    "Modern x86 with a current glibc: on the i7-8700T libc memcpy is within 4% of the best kernel (non-temporal copy) and on the Ryzen 9800X3D libc memcpy ties the best SSE2 copy, so there is nothing to copy across.",
+    "Machines whose last-level cache holds 64 MiB or more: the two 32 MiB buffers are fixed at compile time, so the 'memory bandwidth' rows measure cache bandwidth there (see gotchas).",
+    "Multi-threaded bandwidth: the program is single-threaded (multi-thread support is an open request, issue #22), so it understates total DRAM bandwidth on multi-core parts.",
+    "Clang or MSVC toolchains: clang fails to assemble the .S files (issue #20, open), and Windows builds go only through mingw/msys (Win64 via mingw64 since 2017-02-13)."
+  ],
+  "integration": {
+    "form": "source-drop (standalone benchmark program built with make)",
+    "dependencies": "libc and libm; Linux /dev/fb0 optional for framebuffer tests",
+    "min_toolchain": "GCC with GNU as (C89-style C plus GNU assembler macros); clang assembly fails per issue #20",
+    "platforms": "x86 and x86-64 (SSE2; Linux and mingw Win64), 32-bit ARM (ARMv4 to ARMv7, VFP, NEON), AArch64, MIPS32",
+    "thread_safety": "single-threaded benchmark; not applicable as a library",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw on large-cache CPUs: main.c fixes the buffers at #define SIZE (32 * 1024 * 1024) with no compile-time override (unlike MAXREPEATS), so src plus dst is 64 MiB. The Ryzen 7 9800X3D has 96 MB of L3, and its wiki page reports libc memcpy at 81381.2 MB/s copied (about 163 GB/s of read plus write traffic) and memset at 156460.7 MB/s, both above the 96 GB/s peak of the page's dual-channel DDR5-6000 (derived from page data). That page measures L3, not DRAM, and its 'non-temporal copy 2.5x slower than libc' result reflects non-temporal stores going to DRAM while cached copies stay in L3, not a general verdict on modern x86.",
+    "C-kernel rows are compiler-sensitive: issue #7 showed forward and backward C copies swapping 3.5-4x between gcc 4.6.3 and 4.7.2 on a Cortex-A7, and store order was only forced with volatile on 2016-03-29 (v0.4). The Allwinner A13 run (v0.2.9) and the Raspberry Pi runs (v0.3.9) predate that fix, and no wiki page records compiler, flags or libc version, so cite the NEON/ARM assembly rows rather than the C rows.",
+    "Kernels are not safe on arbitrary input: loops are do-while style (subs/jg), so size 0 still writes one block; sizes are processed in 32, 64 or 128-byte steps and the NEON unrolled copy rounds size down with bic #127, silently dropping a tail; NEON stores carry :256 alignment hints and SSE2 uses movdqa, which fault on unaligned pointers; the non-temporal SSE2 kernels end without sfence.",
+    "Baselines vary per page: the overclocked Raspberry Pi run on a custom 4.1.15 kernel shows libc memcpy at 307.9 MB/s, below the stock run's 387.6 MB/s despite higher clocks, so the libc (or preloaded copy routines) differed between runs on the same page; issue #30 (open) reports a segfault in aligned_block_copy_movsb under MSYS2 gcc 13.3 on Windows."
+  ],
+  "pick_this_over_siblings_when": "Pick tinymembench to diagnose whether a board's libc copy is leaving bandwidth on the table; to actually ship faster copies, use a packaged replacement such as copies-and-fills (libcofi_rpi) or arm-mem on 32-bit ARM, or Arm Optimized Routines on AArch64. rvv-bench plays the same benchmark-program role for RISC-V Vector boards, which tinymembench does not support (RISC-V is an open request, issue #31).",
+  "verified_claims_summary": "Community wiki runs of the project's own harness (best MB/s over 32 MiB aligned buffers, compiler, flags and libc not recorded) show NEON prefetched copy at 563.5 MB/s against 258.3 MB/s for libc memcpy on a 1 GHz Cortex-A8 BeagleBone Black (2.18x) and NEON unrolled copy at 499.9 vs 249.8 MB/s on an Allwinner A13 (2.0x). Libc memset ties every custom fill on those ARM boards; on x86 the only gains are 1.04x (non-temporal copy) and 1.25x (non-temporal fill) on an i7-8700T, and on the Ryzen 9800X3D libc ties in a run that fits in L3.",
+  "status_note": "Abandoned since 2017-02-14 (71 commits, 418 stars, 102 forks, 12 open issues, 9 open PRs) but MIT-licensed, small and still used: the wiki keeps receiving runs from current CPUs; build with GCC and treat the numbers as diagnostics, not as a library recommendation.",
+  "sources_read": [
+    "https://github.com/ssvb/tinymembench",
+    "https://github.com/ssvb/tinymembench/commits/master",
+    "https://github.com/ssvb/tinymembench/issues?q=is%3Aissue",
+    "https://github.com/ssvb/tinymembench/issues/7",
+    "https://github.com/ssvb/tinymembench/issues/30",
+    "https://raw.githubusercontent.com/ssvb/tinymembench/HEAD/readme.txt",
+    "https://raw.githubusercontent.com/ssvb/tinymembench/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/ssvb/tinymembench/HEAD/Makefile",
+    "https://raw.githubusercontent.com/ssvb/tinymembench/HEAD/version.h",
+    "https://raw.githubusercontent.com/ssvb/tinymembench/HEAD/main.c",
+    "https://raw.githubusercontent.com/ssvb/tinymembench/HEAD/util.c",
+    "https://raw.githubusercontent.com/ssvb/tinymembench/HEAD/util.h",
+    "https://raw.githubusercontent.com/ssvb/tinymembench/HEAD/asm-opt.c",
+    "https://raw.githubusercontent.com/ssvb/tinymembench/HEAD/asm-opt.h",
+    "https://raw.githubusercontent.com/ssvb/tinymembench/HEAD/arm-neon.S",
+    "https://raw.githubusercontent.com/ssvb/tinymembench/HEAD/x86-sse2.S",
+    "https://raw.githubusercontent.com/ssvb/tinymembench/HEAD/aarch64-asm.S",
+    "https://raw.githubusercontent.com/ssvb/tinymembench/HEAD/mips-32.S",
+    "https://raw.githubusercontent.com/wiki/ssvb/tinymembench/BeagleBone-Black-(AM3358).md",
+    "https://raw.githubusercontent.com/wiki/ssvb/tinymembench/Allwinner-A13.md",
+    "https://raw.githubusercontent.com/wiki/ssvb/tinymembench/Intel-Core-i7-8700T-6-Core-Processor.md",
+    "https://raw.githubusercontent.com/wiki/ssvb/tinymembench/Raspberry-Pi-(BCM2835).md",
+    "https://raw.githubusercontent.com/wiki/ssvb/tinymembench/AMD-Ryzen-9800x3D-DDR5-6000.md",
+    "WebSearch: AMD Ryzen 7 9800X3D L3 cache 96MB (retailer spec snippets: 96 MB L3, 8 MB L2)"
+  ],
+  "confidence": 0.75
+}

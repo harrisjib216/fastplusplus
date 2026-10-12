@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/sessamekesh/wasm-3d-animation-demo",
+  "one_liner": "2017 WebGL demo running one naive skeletal-animation system in TypeScript and in Emscripten-compiled C++/Wasm; Wasm hit 60 FPS where JS managed 5-10.",
+  "what_it_does": "A browser demo that animates a configurable number of skinned characters (run plus three dance clips, blended) and lets the user switch the per-frame pose computation between a TypeScript manager and a C++ manager compiled to WebAssembly. It is an application, not a library: the Wasm side exports getSingleAnimation/getBlendedAnimation over C structs that the TypeScript loader serializes into the Wasm heap once at load, and each call writes 4x4 bone matrices that WebGL reads through a Float32Array view.",
+  "how_it_is_fast": "Nothing algorithmic: both managers sample keyframes by binary search, slerp/lerp position, rotation and scale, and recompute every bone's whole parent chain recursively. The Wasm gain comes from AOT-compiled C++ (emcc -O3) working on packed float32 structs and stack temporaries with no garbage collection, against TypeScript that allocates new Mat4/Vec3/Float32Array objects per bone per call and looks bones up by string in Maps. Model and animation data stay resident in the Wasm heap, so no per-frame copy is needed.",
+  "when_to_use": [
+    "As a reading example of moving a whole CPU-bound per-frame subsystem into Wasm: serialize data into the Wasm heap once, make one export call per mesh per frame, read results through a zero-copy typed-array view",
+    "Teaching or presenting JS vs Wasm, since the same naive algorithm sits side by side in ts/model/naivejsanimationmanager.ts and cc/naivewasmanimationmanager.cc",
+    "As a starting skeleton for keyframe sampling, quaternion slerp and bone-hierarchy evaluation in C++ for the browser, after fixing the keyframe search noted under gotchas"
+  ],
+  "when_not_to_use": [
+    "As a production animation runtime: no asset pipeline, character assets are not in the repo (no redistribution rights), and every bone recomputes its full parent chain each call (bones x depth work, no cached hierarchy)",
+    "As evidence of today's JS-vs-Wasm gap: the numbers are 2017 browsers, unnamed engine, frames per second capped at 60 by requestAnimationFrame, and no recorded timings",
+    "When the fair baseline is optimized JavaScript: package.json and the URL parser name 'speedyjs'/'speedywasm' and an 'optimized JavaScript' system, but none was ever implemented, so pre-allocated typed-array JS was never measured",
+    "With a current Emscripten without rewriting the hand-built loader (see gotchas)"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Emscripten (2017 'incoming' branch with binaryen-master, SIDE_MODULE build), TypeScript ^2.2, webpack 2 with ts-loader, stats.js and dat.gui served from webroot; character model and animation files you must supply yourself",
+    "min_toolchain": "Emscripten 2017 incoming/fastcomp (side-module ABI before 1.38.18), TypeScript 2.2 targeting ES6, a browser with WebAssembly MVP and WebGL 1",
+    "platforms": "web browsers with WebAssembly and WebGL",
+    "thread_safety": "not documented; single-threaded main-thread demo, and the Wasm manager reuses one result buffer for every call",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The keyframe binary search (the same code in TypeScript and C++) returns a stale index when the loop ends on low == high: with keyframe times 0..7 and a sample at 2.5 it interpolates keyframes 1 and 2 with ratio 1.5, extrapolating the pose. The C++ copy also does `high = idx - 1u` on uint32, so when the search probes index 0 with the sample at the first keyframe time (for example a two-keyframe channel sampled at its start) it wraps to 0xFFFFFFFF and keeps searching out of bounds, while the TypeScript copy exits at -1. Both sides do the same work, so the speed comparison stays like-for-like, but some poses are wrong.",
+    "The data structures differ in both directions, not only in Wasm's favour: TypeScript allocates per bone and uses string-keyed Map lookups, while C++ finds each static and animated bone by a linear scan over all bones and copies the StaticBone (with its Mat4) by value. The Wasm module also imports sinf, acosf and fmodf from JavaScript (Math.sin, Math.acos, a % b), so every slerp and keyframe wrap crosses the Wasm-JS boundary.",
+    "The loader hand-builds the 2017 side-module imports (memoryBase, tableBase, underscore-prefixed _sinf/_acosf/_fmodf), uses a bump allocator from 1 MB with a guessed 1 MB 'stack' (the code says it will not fail gracefully on overflow) and fixes memory at 512 pages (32 MB) with no growth. Emscripten 1.38.18 (Nov 2018) renamed memoryBase/tableBase to __memory_base/__table_base.",
+    "Every Wasm result is a Float32Array view at the same heap address, so it is valid only until the next call; the demo renders each one immediately, so this holds there. The page's Stats.js 'Anim' panel times getAnimationData with performance.now() each frame, but the README reports only the FPS observation."
+  ],
+  "pick_this_over_siblings_when": "Pick it over wasm-perf (Emscripten SIMD matrix multiply vs Node, timed table) or Speedy.js (TypeScript subset compiled to Wasm, Chrome 58 charts) when you want an end-to-end browser app that keeps a whole subsystem's data in the Wasm heap; for actual numbers those siblings are better evidence.",
+  "verified_claims_summary": "The author watched the demo on one PC (third-generation Intel i3, GTX 980 Ti, browser and version not named, spring 2017): with 15 characters the TypeScript manager gave about 5-10 FPS and the emcc -O3 Wasm manager an easy 60 FPS, at least 6-12x per frame (derived from page data). 60 FPS is the requestAnimationFrame vsync cap and the frame time also includes WebGL rendering, so the true animation-only ratio is unknown, and no timing log exists in the repo.",
+  "status_note": "Abandoned since April 2017 (26 commits; only 2 issues, both closed); MIT-licensed, but it cannot run as shipped (no assets, 2017 Emscripten glue), and the hosted S3 demo returned HTTP 503 when fetched on 2026-10-12, so it is useful only as code to read.",
+  "sources_read": [
+    "https://github.com/sessamekesh/wasm-3d-animation-demo",
+    "https://github.com/sessamekesh/wasm-3d-animation-demo/commits/master",
+    "https://github.com/sessamekesh/wasm-3d-animation-demo/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/sessamekesh/wasm-3d-animation-demo/HEAD/README.md",
+    "https://raw.githubusercontent.com/sessamekesh/wasm-3d-animation-demo/HEAD/license.md",
+    "https://raw.githubusercontent.com/sessamekesh/wasm-3d-animation-demo/HEAD/makefile",
+    "https://raw.githubusercontent.com/sessamekesh/wasm-3d-animation-demo/HEAD/package.json",
+    "https://raw.githubusercontent.com/sessamekesh/wasm-3d-animation-demo/HEAD/tsconfig.json",
+    "https://raw.githubusercontent.com/sessamekesh/wasm-3d-animation-demo/HEAD/cc/naivewasmanimationmanager.cc",
+    "https://raw.githubusercontent.com/sessamekesh/wasm-3d-animation-demo/HEAD/cc/include/math.h",
+    "https://raw.githubusercontent.com/sessamekesh/wasm-3d-animation-demo/HEAD/ts/model/naivejsanimationmanager.ts",
+    "https://raw.githubusercontent.com/sessamekesh/wasm-3d-animation-demo/HEAD/ts/model/naivewasmanimationmanager.ts",
+    "https://raw.githubusercontent.com/sessamekesh/wasm-3d-animation-demo/HEAD/ts/model/animation.ts",
+    "https://raw.githubusercontent.com/sessamekesh/wasm-3d-animation-demo/HEAD/ts/model/animationmanager.ts",
+    "https://raw.githubusercontent.com/sessamekesh/wasm-3d-animation-demo/HEAD/ts/model/dancingentity.ts",
+    "https://raw.githubusercontent.com/sessamekesh/wasm-3d-animation-demo/HEAD/ts/math/mat4.ts",
+    "https://raw.githubusercontent.com/sessamekesh/wasm-3d-animation-demo/HEAD/ts/demoapp.ts",
+    "https://raw.githubusercontent.com/sessamekesh/wasm-3d-animation-demo/HEAD/webroot/index.html",
+    "https://raw.githubusercontent.com/emscripten-core/emscripten/main/ChangeLog.md",
+    "http://aws-website-webassemblyskeletalanimation-ffaza.s3-website-us-east-1.amazonaws.com/"
+  ],
+  "confidence": 0.75
+}

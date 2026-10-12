@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/scala-js/scala-js",
+  "one_liner": "Scala.js's WasmGC backend: the same Scala code linked to WebAssembly instead of JavaScript, claimed 30% lower geomean run time.",
+  "what_it_does": "An alternative linker backend in the Scala.js compiler that emits WebAssembly (WasmGC, exception handling, JS String Builtins) plus an ES-module loader instead of plain JavaScript. It is switched on with one linker setting (ESModule output, ES2022, withUseWebAssembly(true)) and keeps the JS backend's module layout and interface, so for many projects it is a drop-in swap. It has been experimental since 1.17.0 and was declared stable in 1.22.0 (2026-06-20), with no breaking changes promised for the rest of 1.x.",
+  "how_it_is_fast": "The emitter compiles the same linked and optimized Scala.js IR to WasmGC: objects are GC structs dispatched through vtables and itables, and primitives map to Wasm i32/i64/f32/f64, so Long becomes a native i64 instead of the JS backend's software RuntimeLong (a lo/hi Int pair). Strings stay JS strings manipulated through the JS String Builtins, and the backend never uses linear memory. Boxing an Int uses ref.i31 when the value fits in 31 bits and only otherwise calls a JS helper across the Wasm-JS boundary. That boundary is the cost centre, which is why interop-heavy code can be slower than the JS output.",
+  "when_to_use": [
+    "Scala.js applications whose hot path is computation inside Scala code (algorithms, collections, numeric loops) rather than DOM or JS-library calls.",
+    "Long-heavy code (hashing, 64-bit arithmetic, bignum-style work): Wasm runs Long as a native i64, while the JS backend emulates it with RuntimeLong.",
+    "Projects already on ES modules with a single output module and no @JSExport, where switching is a config change: build both outputs and A/B them on your own workload.",
+    "Targets limited to current engines (Node.js 25, Chrome 137, Firefox 134, Safari 26 or newer)."
+  ],
+  "when_not_to_use": [
+    "JS-interop-heavy code such as DOM-driven UIs or thin wrappers over JS libraries: the docs warn that the Wasm output may be significantly slower than the JS output there, and the benchmarks behind the speed claim do not exercise interop in any significant way.",
+    "Download-size-sensitive pages: the Wasm output is about twice the size of the JS backend's fullLink output, and wasm-opt is not applied yet.",
+    "Code that needs @JSExport (JS calling Scala methods), module splitting, several @JSExportTopLevel module names or js.dynamicImport: none of these are supported, and multi-module output is still an open issue (#5390).",
+    "Audiences on older browsers or older Node.js lines: Wasm 3.0 (GC, exnref, JS String Builtins) is mandatory, 1.22.0 removed the string-builtins polyfills, and js.async/js.await additionally needs JSPI.",
+    "Standalone Wasm runtimes (wasmtime, WASI): released versions need a JavaScript host. A minimal WasmModule kind with @WasmImport/@WasmExport was merged for the v1.23.0 milestone (#5333) but is not in a release yet."
+  ],
+  "integration": {
+    "form": "compiler backend (sbt-scalajs linker option) emitting an ES module loader plus WebAssembly",
+    "dependencies": "Scala.js (sbt-scalajs plugin for sbt 1.x, or sbt 2.x from 1.22.0); a JavaScript host with ES2022 and a Wasm 3.0 engine; JSPI only for js.async/js.await",
+    "min_toolchain": "Scala.js 1.22.0 for the stable backend (experimental from 1.17.0, configured then with the now-deprecated withExperimentalUseWebAssembly); ModuleKind.ESModule and ESVersion.ES2022 required",
+    "platforms": "JS hosts only: Node.js 25, Chrome 137, Firefox 134, Safari 26 or later; JSPI on Node.js 25, Chrome 137, Firefox 143 and Safari Technology Preview 238 at the time the docs were written",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — one linker setting switches backends and the emitted ES modules keep the same layout and interface, but @JSExport is silently ignored, only one output module is allowed, ESModule plus ES2022 are mandatory, and js.async needs JSPI"
+  },
+  "gotchas": [
+    "@JSExport and @JSExportAll are silently ignored rather than rejected. JavaScript cannot call exported Scala methods and cannot stringify Scala objects (toString is an export), including in JS-side string concatenation; the build still succeeds.",
+    "Boxing an Int that does not fit in 31 bits falls back to a JS helper call (bIFallback/uIFallback) across the Wasm-JS boundary, which the emitter README describes as having significant cost in itself. Generic code that boxes many large values can therefore lose some of the Wasm advantage.",
+    "The headline number has no published data. It grew from 15% (1.19.0 post, 2025-04-21) to 30% on the undated docs page, while the JS baseline kept getting faster for Longs: 1.20.2 stopped boxing them in fields, arrays and arguments and made division and remainder 3x faster, and 1.22.0 sped up add, subtract, divide and toString. The gap on Long-heavy code therefore depends on which Scala.js version you compare.",
+    "The likely public suite (sjrd/scalajs-benchmarks) is not a reproducible record of the claim. In its build.sbt, bignumsJVM and bignumsJS are defined as queens.jvm and queens.js, so bignumsJS/run runs queens and the BigInteger benchmark is never measured. run.sh still expects scala-2.12 target directories and old fastopt/fullopt file names. The Wasm settings use the deprecated withExperimentalUseWebAssembly with Node flags for exnref and imported strings, and esVersionToString has no ES2022 case even though 1.22.0 requires ES2022 for Wasm, so the build pins Scala.js 1.20.2 by default."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings are per-language WasmGC backends measured against their own JS output: J2CL WasmGC (about 2x on the Google Sheets calculation worker), Kotlin/Wasm (chart against Kotlin/JS) and MoonBit. Pick Scala.js Wasm when the code is already Scala.js; its claimed gain (30% geomean) is smaller and less documented than J2CL's production report, but trying it costs one linker setting.",
+  "verified_claims_summary": "The Scala.js team's WebAssembly docs page states that, for computation-dominated code, the Wasm output has a 30% lower geomean run time than the same program linked by the Scala.js JS backend across 'our benchmarks' (about 1.43x, derived from page data); the 1.19.0 announcement said 15%. Neither figure names the benchmark list, engine version, hardware or raw results. The probable suite, sjrd/scalajs-benchmarks (richards, deltablue, tracer, sha512, json, kmeans, nbody and others; mean of at least 20 runs over at least 3 s after a warm-up), publishes no results and does not exercise JS interop significantly. The baseline is Scala.js's own JS output, not hand-written JavaScript.",
+  "status_note": "Very active (commits through 2026-10-11, Wasm backend declared stable in 1.22.0, standalone WasmModule kind merged for v1.23.0), Apache-2.0 with 4.7k stars, so it is safe to adopt behind a config flag, but measure both backends on your own workload before switching.",
+  "sources_read": [
+    "https://github.com/scala-js/scala-js",
+    "https://github.com/scala-js/scala-js/commits",
+    "https://github.com/scala-js/scala-js/issues?q=is%3Aissue%20wasm%20performance",
+    "https://github.com/scala-js/scala-js/issues?q=is%3Aissue%20label%3Awasm",
+    "https://github.com/scala-js/scala-js/issues/5333",
+    "https://raw.githubusercontent.com/scala-js/scala-js/main/linker/shared/src/main/scala/org/scalajs/linker/backend/wasmemitter/README.md",
+    "https://raw.githubusercontent.com/scala-js/scala-js/main/linker-private-library/src/main/scala/org/scalajs/linker/runtime/RuntimeLong.scala",
+    "https://raw.githubusercontent.com/scala-js/scala-js-website/HEAD/doc/project/webassembly.md",
+    "https://raw.githubusercontent.com/scala-js/scala-js-website/HEAD/_posts/news/2025-04-21-announcing-scalajs-1.19.0.md",
+    "https://raw.githubusercontent.com/scala-js/scala-js-website/HEAD/_posts/news/2025-09-06-announcing-scalajs-1.20.1.md",
+    "https://raw.githubusercontent.com/scala-js/scala-js-website/HEAD/_posts/news/2026-01-05-announcing-scalajs-1.20.2.md",
+    "https://raw.githubusercontent.com/scala-js/scala-js-website/HEAD/_posts/news/2026-06-20-announcing-scalajs-1.22.0.md",
+    "https://github.com/sjrd/scalajs-benchmarks",
+    "https://raw.githubusercontent.com/sjrd/scalajs-benchmarks/master/README.md",
+    "https://raw.githubusercontent.com/sjrd/scalajs-benchmarks/HEAD/build.sbt",
+    "https://raw.githubusercontent.com/sjrd/scalajs-benchmarks/HEAD/project/plugins.sbt",
+    "https://raw.githubusercontent.com/sjrd/scalajs-benchmarks/HEAD/run.sh",
+    "https://raw.githubusercontent.com/sjrd/scalajs-benchmarks/HEAD/common/benchmark-runner.sh",
+    "https://raw.githubusercontent.com/sjrd/scalajs-benchmarks/HEAD/common/js/src/main/scala/org/scalajs/benchmark/Benchmark.scala",
+    "https://virtuslab.com/blog/scala/scala-to-web-assembly/ (fetch failed, DNS blocked; WebSearch snippet only: up to 3.3x over JS on Marr et al.'s cross-language benchmarks)",
+    "https://contributors.scala-lang.org/t/compile-to-llvm-or-wasm/6154/55 (fetch failed, DNS blocked)"
+  ],
+  "confidence": 0.75
+}

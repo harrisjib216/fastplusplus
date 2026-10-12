@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/sebadob/spow",
+  "one_liner": "Self-hosted Hashcash-style proof-of-work captcha in Rust with a browser WASM solver, about 20x faster than its own async-WebCrypto JS solver.",
+  "what_it_does": "A captcha replacement: the server (Rust crate with the `server` feature, or the prebuilt server WASM for Node) issues a signed challenge string `1:<difficulty>:<expires>:<salt>:<mac>:`, the client appends a decimal counter until SHA-256 of the whole string has `difficulty` leading zero bits, and the server checks version, difficulty range, expiry, the secret-keyed challenge hash and the leading zeros with one SHA-256. The browser side is one function in either flavour: `pow_work_wasm(challenge)` (synchronous, prebuilt/browser/wasm, wasm-bindgen bundler target) or `powWorkJs(challenge)` (async, prebuilt/browser/js/spowJs.js); both return the solved string that is posted back to `Pow::validate`.",
+  "how_it_is_fast": "There is no special algorithm: the WASM solver is the RustCrypto `sha2` software SHA-256 compiled to wasm32 (wasm-builder profile opt-level \"s\", LTO, one codegen unit) running a tight synchronous loop, while the JS baseline it beats awaits one `crypto.subtle.digest('SHA-256')` promise per candidate and allocates a new TextEncoder and ArrayBuffer slice each iteration. The 20x therefore comes from removing per-hash async WebCrypto round trips, not from faster hashing. Neither solver caches the SHA-256 midstate of the constant 64-byte challenge prefix, so each candidate costs two compression blocks where one would do.",
+  "when_to_use": [
+    "Self-hosted bot friction on login, registration or contact forms where you want no third-party captcha service and can add a Rust (axum, leptos) or Node backend.",
+    "Browser clients that can load WASM: use the WASM solver at the default difficulty 20 and run it in a Web Worker (examples/svelte-wasm/src/lib/pow.ts) so the synchronous call does not freeze the page.",
+    "Rust mobile or desktop clients, which can call `Pow::work` natively and solve the same challenge 2.5-3x faster than browser WASM (author's single run).",
+    "Per-action difficulty tuning: validation cost is one SHA-256 regardless of difficulty, so heavier challenges for registration and lighter ones for cheap actions cost the server nothing extra."
+  ],
+  "when_not_to_use": [
+    "As real protection against a motivated attacker: the challenge is plain SHA-256 leading-zero search, which native SHA-NI or GPU code solves orders of magnitude faster than browser WASM; it only raises cost for naive bots.",
+    "JS-only clients at difficulty 20: the author's own example machine needed about 13.6 s for a lucky challenge (230,290 hashes), against about 1.05 million expected hashes on average; the code comment says JS needs a much lower difficulty.",
+    "When you need replay protection without your own cache: a solved PoW validates again until it expires; the docs only advise a short validity.",
+    "Low-end phones with a fixed latency budget: solve time is a geometric random variable (lucky and unlucky challenges differ by large factors) and the README gives no device data; the maintainer suggests measuring 100 challenges on your slowest target device (issue #6)."
+  ],
+  "integration": {
+    "form": "crate (spow 0.7.0, features `server` and `client`) plus prebuilt wasm-bindgen modules in prebuilt/browser/wasm and prebuilt/server/wasm and a plain ES module in prebuilt/browser/js",
+    "dependencies": "nom 8 and sha2 0.11 always; base64 0.23, chrono 0.4, serde, thiserror 2 and getrandom 0.4 with `server`; the browser WASM glue imports the .wasm as an ES module, so it needs a bundler with WASM support (the example uses vite-plugin-wasm and vite-plugin-top-level-await)",
+    "min_toolchain": "Rust 1.85.1 (edition 2024); wasm32 builds need `--cfg getrandom_backend=\"wasm_js\"` in .cargo/config.toml",
+    "platforms": "any Rust target, wasm32-unknown-unknown; browsers with WebAssembly for the WASM solver, any browser with WebCrypto (secure context) for the JS solver",
+    "thread_safety": "Pow::work and Pow::validate are pure functions; the secret lives in a OnceLock, so concurrent validation is safe; the browser WASM call is synchronous and blocks its thread",
+    "drop_in_for_baseline": "partial: pow_work_wasm takes and returns the same challenge strings as powWorkJs, but it is synchronous (block a Web Worker, not the page) and returns undefined silently on bad input where powWorkJs also logs an error"
+  },
+  "gotchas": [
+    "Measurement provenance: the README ratios come from one solve of one difficulty-20 challenge on an unnamed machine, recorded in a comment in examples/svelte-wasm/src/routes/+page.svelte (backend ~250 ms, WASM ~680 ms, JS ~13,600 ms, counter 230289, December 2023); timing is a single Date difference, the WASM run goes first and cold, and no browser is named.",
+    "Harness flaw behind the 20x: spowJs.js awaits crypto.subtle.digest once per candidate (about 59 us per hash in that run, derived from page data, against about 2.95 us for WASM), so the baseline is dominated by async WebCrypto overhead; a synchronous pure-JS SHA-256 loop was never compared and would likely close much of the gap.",
+    "The 2.5-3x native-vs-WASM ratio is stale: it was measured in December 2023, when the sha2 `asm` feature was still on by default (made opt-in in v0.3.0, removed in v0.7.0 with the move to sha2 0.11), and the WASM is built at opt-level \"s\" for size; the native Criterion bench (benches/main.rs) never runs the WASM or JS solvers.",
+    "Small correctness and security nits: validate_difficulty uses the range 10..99, so difficulty 99 is rejected although the README and the bin target allow 10-99; the challenge MAC is compared with a non-constant-time string ==; a second Pow::init call is silently ignored; the README calls the scheme 'Hashcat' where Hashcash is meant."
+  ],
+  "pick_this_over_siblings_when": "Pick spow when you need a whole self-hosted PoW captcha protocol (signed challenge, expiry, difficulty, server validation, browser solver); if you only need fast SHA-256 or other hashes in the browser, hash-wasm (SHA-256 426 MB/s vs noble-hashes 110 MB/s at 1 MB) or awasm-noble are general-purpose and benchmarked.",
+  "verified_claims_summary": "One author run on an unnamed machine and browser, difficulty-20 challenge solved at counter 230289: optimised native Rust (sha2 crate) about 250 ms, the prebuilt WASM solver about 680 ms (2.7x native) and the async WebCrypto JS solver about 13,600 ms (20x the WASM time); no compiler flags, hardware, browser version or repeat count are given, and the native Criterion bench covers only Pow::work at difficulty 14 and Pow::validate.",
+  "status_note": "Active small single-maintainer project (v0.7.0 on 2026-08-25, 76 commits, 43 stars, about 32,000 crates.io downloads, 0 open issues), Apache-2.0 and a few hundred lines, so easy to vendor; its speed claim rests on one 2023 example run against a deliberately weak async JS baseline.",
+  "sources_read": [
+    "https://github.com/sebadob/spow",
+    "https://github.com/sebadob/spow/commits",
+    "https://github.com/sebadob/spow/issues?q=is%3Aissue",
+    "https://github.com/sebadob/spow/issues/6",
+    "https://github.com/sebadob/spow/issues/20",
+    "https://github.com/sebadob/spow/tree/main/wasm-builder",
+    "https://github.com/sebadob/spow/tree/main/prebuilt/browser",
+    "https://raw.githubusercontent.com/sebadob/spow/HEAD/README.md",
+    "https://raw.githubusercontent.com/sebadob/spow/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/sebadob/spow/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/sebadob/spow/HEAD/justfile",
+    "https://raw.githubusercontent.com/sebadob/spow/HEAD/.cargo/config.toml",
+    "https://raw.githubusercontent.com/sebadob/spow/HEAD/benches/main.rs",
+    "https://raw.githubusercontent.com/sebadob/spow/HEAD/src/pow.rs",
+    "https://raw.githubusercontent.com/sebadob/spow/HEAD/src/wasm.rs",
+    "https://raw.githubusercontent.com/sebadob/spow/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/sebadob/spow/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/sebadob/spow/HEAD/prebuilt/browser/js/spowJs.js",
+    "https://raw.githubusercontent.com/sebadob/spow/HEAD/prebuilt/browser/wasm/spow-wasm.js",
+    "https://raw.githubusercontent.com/sebadob/spow/HEAD/prebuilt/browser/wasm/spow-wasm.d.ts",
+    "https://raw.githubusercontent.com/sebadob/spow/HEAD/wasm-builder/Cargo.toml",
+    "https://raw.githubusercontent.com/sebadob/spow/HEAD/wasm-builder/src/lib.rs",
+    "https://raw.githubusercontent.com/sebadob/spow/HEAD/wasm-builder/tests/web.rs",
+    "https://raw.githubusercontent.com/sebadob/spow/HEAD/examples/svelte-wasm/src/routes/+page.svelte",
+    "https://raw.githubusercontent.com/sebadob/spow/HEAD/examples/svelte-wasm/src/lib/pow.ts",
+    "https://raw.githubusercontent.com/sebadob/spow/HEAD/examples/svelte-wasm/vite.config.js",
+    "https://raw.githubusercontent.com/sebadob/spow/HEAD/examples/svelte-wasm/package.json",
+    "https://crates.io/api/v1/crates/spow"
+  ],
+  "confidence": 0.7
+}

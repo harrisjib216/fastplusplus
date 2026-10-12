@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/seelabs/nasm",
+  "one_liner": "Learning-project NASM AVX2 kernels that hex-encode 32 bytes and hex-decode 64 digits 5.6x and 8.4x faster than rippled's scalar C++.",
+  "what_it_does": "Two fixed-size x86-64 routines in NASM for the System V ABI: `void encode_hex256(char const* in, char* out)` turns 32 bytes into 64 uppercase hex characters, and `int decode_hex256(char const* in, char* out)` turns exactly 64 hex digits (either case) into 32 bytes, returning 1 on success and 0 on any invalid character without touching the output. They target 256-bit ledger hashes such as rippled's uint256; there is no length parameter, no NUL check and no library packaging, only a C++ test driver (src/main.cpp, src/codec_hex.h) and an unfinished base58 decoder experiment.",
+  "how_it_is_fast": "Both kernels replace per-character table lookups and branches with 32-lane AVX2 byte arithmetic. The encoder zero-extends each byte to a 16-bit word (vpmovzxbw), splits the nibbles with masks and shifts, then adds 48 or 55 per lane chosen by a vpcmpgtb/vpblendvb mask. The decoder upcases letters by clearing bit 5, rejects bad digits with two vptest checks, subtracts 48 or 55 by blend, merges nibble pairs with a 16-bit shift-by-12 and add, and compacts the odd bytes with vpshufb plus vextracti128/vinserti128 lane moves; each call is about 20-30 instructions with no loop.",
+  "when_to_use": [
+    "Reading material: a compact, commented example of table-free AVX2 hex encoding and validating hex decoding, including the lane-crossing fix-up that vpshufb needs.",
+    "As a design reference when writing your own fixed-width (32-byte hash, 64-digit) hex codec for transaction or block IDs on AVX2 x86-64 Linux, where the input length is always known.",
+    "Comparing hand-written AVX2 against an intrinsics or auto-vectorised port of the same algorithm; the repo gives the algorithm, not a reusable library."
+  ],
+  "when_not_to_use": [
+    "Anything you ship: there is no LICENSE file, so the code cannot legally be copied, and the author calls it a learning exercise that is 'not well tested'.",
+    "Variable-length data: only exactly 32 bytes in and 64 digits out (or the reverse) are handled; use a general SIMD hex codec instead.",
+    "Windows or non-AVX2 CPUs: there is no CPU-feature dispatch (SIGILL before Haswell) and the code uses the System V registers RDI/RSI; a Win64 port must also save xmm6-xmm11, which are callee-saved there and clobbered by decode.asm.",
+    "Lowercase output or strict rippled semantics: the encoder emits uppercase only, and unlike rippled's SetHexExact the decoder does not require a NUL after the 64th digit."
+  ],
+  "integration": {
+    "form": "source-drop (src/encode.asm and src/decode.asm, assembled with nasm -felf64 and linked as extern \"C\" functions)",
+    "dependencies": "none for the kernels; the test driver is C++14 and the CMake build also requires Boost (program_options, multiprecision for the base58 experiment)",
+    "min_toolchain": "NASM with AVX2 support (version not documented); C++14 compiler for the driver",
+    "platforms": "x86-64 with AVX2 only, ELF64 System V calling convention (Linux)",
+    "thread_safety": "Reentrant pure functions (constants are only read, though they sit in a writable .data section); not documented by the author",
+    "drop_in_for_baseline": "partial: decode_hex256 matches rippled's SetHexExact for 64-digit inputs (verified by the driver's 1 million random cases with and without bad digits) but skips the terminator check and leaves the output untouched on error; encode_hex256 matches the uppercase table encoder for 32-byte inputs"
+  },
+  "gotchas": [
+    "The committed driver cannot reproduce the README table: in the only commit (2018-05-22) main() returns right after test_base58(), so the hex tests and benchmarks are unreachable; build.sh (g++ -O3, no -mavx2) and CMakeLists.txt (clang, Debug default, -ggdb) disagree, and no compiler version is recorded.",
+    "Harness detail: each benchmark loop reruns one constant input 100 million times and never reads the output; the scalar reference is inlined while the assembly is an out-of-line call, so dead-store elimination, perfect branch prediction and call overhead all favour the C side. The 5.6x and 8.4x look conservative, not inflated, but they compare a SIMD algorithm with scalar table-lookup C built without -mavx2, not hand assembly with the best compiler output.",
+    "Correction to the record's caveat: the benchmark's reference loop is fixed at 32 iterations, just as rippled's SetHexExact is fixed by base_uint's size, so the gap is not from fixed-size specialisation; the harness copy even drops rippled's final terminator check, which slightly helps the C side.",
+    "No correctness bug found on reading both kernels: the decoder's two error masks reject every byte outside 0-9, A-F and a-f (including bytes 0x80-0xFF), and the vpshufb compaction and lane merge place all 32 output bytes in order. The README's prose giving 87 as the letter offset does not match the code, which upcases first and subtracts 55. The separate base58 experiment (decode58.asm, vpgatherdd over a 256-dword alphabet table) gained only about 6% overall per the README."
+  ],
+  "pick_this_over_siblings_when": "Pick it only as a teaching reference: tmthrgd/go-hex (sibling, Go SSE/AVX assembly, any length, 25.6x encode and 24.8x decode at 1 KB vs encoding/hex) is a usable library, and for C or C++ the catalogued zbjornson/fast-hex (AVX2, any length, about 11.5x encode and 12.5x decode over scalar) covers the same job with a licence.",
+  "verified_claims_summary": "Author's single run on a Xeon E3-1505M v6 at 3.00 GHz (Kaby Lake, AVX2), 100 million calls on one constant input, compiler and flags unrecorded (build.sh says g++ -O3 without -mavx2): encode 32 bytes 1790 ms for the scalar rippled-style C++ vs 319 ms for AVX2 assembly (5.6x; about 3.2 ns per call, roughly 10 GB/s of input, derived from page data), decode 64 digits 4694 vs 561 ms (8.4x; about 11.4 GB/s of hex input, derived from page data); the README's 'about 10x' rounds both up.",
+  "status_note": "Abandoned single-commit learning repo from May 2018 with 1 star and no licence, so it is reference-only: read the 73- and 165-line kernels for the technique but do not copy them.",
+  "sources_read": [
+    "https://github.com/seelabs/nasm",
+    "https://github.com/seelabs/nasm/commits/master",
+    "https://raw.githubusercontent.com/seelabs/nasm/master/readme.md",
+    "https://raw.githubusercontent.com/seelabs/nasm/master/build.sh",
+    "https://raw.githubusercontent.com/seelabs/nasm/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/seelabs/nasm/master/src/main.cpp",
+    "https://raw.githubusercontent.com/seelabs/nasm/master/src/codec_hex.h",
+    "https://raw.githubusercontent.com/seelabs/nasm/master/src/codec_base58.h",
+    "https://raw.githubusercontent.com/seelabs/nasm/master/src/encode.asm",
+    "https://raw.githubusercontent.com/seelabs/nasm/master/src/decode.asm",
+    "https://raw.githubusercontent.com/seelabs/nasm/master/src/decode58.asm",
+    "https://raw.githubusercontent.com/seelabs/nasm/master/.gdb",
+    "https://raw.githubusercontent.com/seelabs/nasm/master/.gitignore",
+    "https://raw.githubusercontent.com/XRPLF/rippled/1.0.0/src/ripple/basics/strHex.h",
+    "https://raw.githubusercontent.com/XRPLF/rippled/1.0.0/src/ripple/basics/base_uint.h"
+  ],
+  "confidence": 0.78
+}

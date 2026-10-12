@@ -1271,5 +1271,105 @@
       "https://github.com/phi-ag/argon2/issues/923",
       "https://github.com/phi-ag/argon2/blob/main/bench/argon2.bench.ts"
     ]
+  },
+  {
+    "id": "https://github.com/paa-ncic/ppopp2017_artifact",
+    "evidence_tier_final": "B",
+    "tier_reason": "Enricher: the repo does hold a timing harness (SGEMM/*/sgemm.cpp, NT/sgemm.sh) and the kernel .sass files carry Apache-2.0 headers, but the harness times one cold launch per size, calls cuBLAS in a different transposition variant (OP_T/OP_T with column-major C) with leading dimensions that do not fit some shapes, never checks the cuBLAS status, and demands bitwise-equal floats. Peer-reviewed PPoPP 2017 paper with a flawed public harness: B stays with usability and caveats corrected.",
+    "corrections": {
+      "usability": "copyable",
+      "caveats": "Peer-reviewed PPoPP 2017 paper ('Understanding the GPU Microarchitecture to Achieve Bare-Metal Performance Tuning'); the repo holds KeplerAs, the SGEMM kernels (.sass files with Apache-2.0 headers) and a timing harness (SGEMM/*/sgemm.cpp with Makefiles and NT/sgemm.sh), but not the convolution kernels behind the cuDNN claim. Harness flaws: each sgemm.cpp times a single launch of each side with CUDA events and no warm-up (iterations = 1 in the NN and NT harnesses, 10 in TN), the cuBLAS call is the first after cublasCreate, NT/sgemm.sh runs every size in a fresh process, and GPU clocks are not pinned or stated (the paper's 88% uses a 3520 Gflop/s peak). Baseline layout asymmetry: the NN harness computes its row-major C with cublasSgemm(CUBLAS_OP_T, CUBLAS_OP_T, ...) writing a column-major C instead of the operand-swapped OP_N/OP_N call, so cuBLAS ran a different transposition variant, and the NN 8x8 harness passes lda = M and ldb = K, which do not fit the transposed shapes when M < K or K < N; the cuBLAS status is never checked and the correctness check requires bitwise-equal floats and only prints 'Passed' or 'Error' (outcome not reported in the paper). The paper says the 12x12 and 8x8 kernels beat cuBLAS 'in most cases' (8x8 better at small sizes, the gain grows with matrix size), so 1.15x is the best large-matrix figure. cuBLAS 7.0 and cuDNN 4.0 (2015) have long been superseded. KeplerAs patches an nvcc-compiled template cubin whose kernel signature must match the SASS parameter mapping (kernel size a multiple of 8 instructions, at most 255 registers and 16 barriers; LDS.128 destinations need a register index divisible by 4); its POD still calls it an assembler for Maxwell, inherited from MaxAs."
+    },
+    "urls_opened": [
+      "https://github.com/PAA-NCIC/PPoPP2017_artifact/blob/master/SGEMM/NN/sgemm.cpp",
+      "https://github.com/PAA-NCIC/PPoPP2017_artifact/blob/master/SGEMM/NT/sgemm.sh",
+      "https://github.com/PAA-NCIC/PPoPP2017_artifact/blob/master/KeplerAs/LICENSE"
+    ]
+  },
+  {
+    "id": "https://github.com/piotr-oles/as-proto",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the README numbers date from the initial commit a70d19f, where the generated packed-repeated decoder computed its end before reading the length varint, so the decoding and combined rows timed an incorrect decode that dropped fields and read past the buffer; the encode row is unaffected. First-party, C stays with the decode rows struck and the measured build recorded.",
+    "corrections": {
+      "compiler_and_flags": "Build behind the README numbers: initial commit a70d19f (2022-01-04), AssemblyScript asc ^0.19.20, release target with converge false, noAssert; the current bench/data/assembly/asconfig.json (asc ^0.24.1, optimizeLevel 3, shrinkLevel 0, converge, noAssert, incremental runtime, ESM bindings) describes today's bench, which was never re-run. protobuf.js and google-protobuf on Node (version unstated).",
+      "claimed_speedup": "Encoding: as-proto 1,295,297 ops/sec vs protobuf.js (static) 589,866 and (reflect) 589,073 (about 2.2x, derived from page data). The decoding (889,283 vs 1,375,425 and 1,308,310 ops/sec, as-proto slower) and combined encode+decode (548,291 vs 439,242 and 421,963 ops/sec) rows are struck: at the measured commit a70d19f the generated packed-repeated decoder computed its end as reader.ptr + reader.uint32() (reading ptr before the length varint), so the bench decode stopped one bool early, read the 7th bool byte as a fixed64 tag, skipped the double and the outer float field and read one byte past the buffer under noAssert; those rows timed an incorrect decode.",
+      "caveats": "Mixed result even where valid: as-proto wins encoding (about 2.2x) while its decoding rows measured a buggy decode and the README blames AssemblyScript's GC for the decode loss. The as-proto cases encode and decode a message pre-built inside wasm and discard the result (no JS-to-wasm marshalling), while protobuf.js and google-protobuf encode a JS object, so this is not a like-for-like JS API comparison; the payloads differ slightly (Enum.ONE is a proto3 default that is not written). The README numbers were never re-run after the initial commit; InnerInner was @unmanaged then, leaking one object per decode (issue #47, fixed in v1.2.1). Current main still has the same end bug in the explicit-packed and map-entry decoders and cannot read proto3 default-packed repeated scalars (issue #55, fix PR #56 open since 2026-02-19); FixedSizer.varint64 uses half the correct limits for 5- to 9-byte varints, so 64-bit values in several ranges are sized one byte too long and corrupt output (fix PR #57 unmerged). Release builds with noAssert remove FixedReader's bounds checks."
+    },
+    "urls_opened": [
+      "https://github.com/piotr-oles/as-proto/commit/a70d19f",
+      "https://github.com/piotr-oles/as-proto/issues/55",
+      "https://github.com/piotr-oles/as-proto/pull/57",
+      "https://github.com/piotr-oles/as-proto/blob/main/bench/data/assembly/asconfig.json"
+    ]
+  },
+  {
+    "id": "https://github.com/sbstndb/vectorized_find",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the ~49.7 and ~32.2 G-elements/s rows are full-array counts with wrong reductions (4096 and 4094 instead of 4095), the intrinsic variants over-read and over-count at small sizes, and nothing validates results; only the FIND_IntrinsicFind row (about 3.2x over libstdc++'s scalar std::find) is a valid find. First-party, C stays with the claim corrected.",
+    "corrections": {
+      "claimed_speedup": "README table (4096 int elements, target in the last slot, G-elements/s, rounded, compiler unstated): std::find on a raw array about 7.7 and on std::vector about 8.1 vs FIND_IntrinsicFind (AVX2 cmpeq + movemask, 2x unrolled) about 24.9, about 3.2x over raw-array std::find (derived from page data), and FIND_IntrinsicFloatFind about 25.3; naive loop about 4.6. The FIND_Intrinsic2Find row (about 49.7) and the compare_find row (about 32.2) are struck: both are full-array counts with no early exit (lower_bound semantics on sorted input, not std::find), Intrinsic2's reduction returns twice the sum of lanes 0-3 and ignores lanes 4-7 (4096 instead of 4095 on the benchmark input), and compare_find's counter starts at -1 (4094). The archived docs/perf_results/results.txt gives IntrinsicFind/4096 at 21.06 G/s, not about 24.9.",
+      "caveats": "Personal experiment with no licence file and no hardware stated; the archived docs/perf_results/results.txt is an older run with different names and lower numbers, and the README's std::find rows have no raw output in the repo. Harness flaws: intrinsic_find always loads 16 elements per step with no tail loop, so the benchmark bumps sizes 2 and 4 up to 8, reads 8 ints past an 8-int malloc at sizes 2, 4 and 8, and counts 8 items processed for the 2- and 4-element cases (inflating the small-size rows); every row is a worst case on an all-zero 16 KiB L1-resident array rescanned in a loop; no result is validated; the std::find array is 64-byte aligned via aligned_alloc while the intrinsic arrays use malloc. The 3.2x holds only against libstdc++'s scalar std::find: libc++ routes int find to wmemchr and the MSVC STL to __std_find_trivial_4, both vectorised."
+    },
+    "urls_opened": [
+      "https://github.com/sbstndb/vectorized_find/blob/main/src/intrinsics/intrinsic_find.cpp",
+      "https://github.com/sbstndb/vectorized_find/blob/main/docs/perf_results/results.txt",
+      "https://github.com/sbstndb/vectorized_find/blob/main/README.md"
+    ]
+  },
+  {
+    "id": "https://github.com/sebadob/spow",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: the README ratios come from one December 2023 solve recorded in a code comment, with a single cold Date timing; the JS baseline awaits crypto.subtle.digest once per candidate (about 59 us per hash against about 2.95 us for WASM), so the 20x measures async WebCrypto overhead rather than JavaScript hashing (crippled baseline with no valid measurement); the 2.5-3x native ratio predates the removal of the sha2 asm feature. C to D.",
+    "corrections": {
+      "claimed_speedup": "README: the wasm version 'is up to ~20 times faster than JS only' and needs 'roughly 2.5 - 3 times the amount of time' of optimised native Rust ('first tests'). Source of the ratios (a comment in examples/svelte-wasm/src/routes/+page.svelte, December 2023, one solve of one difficulty-20 challenge, counter 230289, unnamed machine and browser): backend about 250 ms, WASM about 680 ms, JS about 13,600 ms; the JS solver awaits crypto.subtle.digest per candidate, so the 20x is WebCrypto call overhead, not a JS hashing comparison.",
+      "caveats": "The README gives ratios only ('first tests') with no table, hardware, browser, difficulty or sample count; the only provenance is a code comment recording one solve of one difficulty-20 challenge in December 2023, timed with a single Date difference with the WASM run first and cold. Harness flaw: spowJs.js awaits crypto.subtle.digest('SHA-256') once per candidate and allocates a new TextEncoder each iteration (about 59 us per hash against about 2.95 us for WASM, derived from page data), so the ~20x measures per-hash async WebCrypto and promise overhead; a synchronous pure-JS SHA-256 loop was never compared. The 2.5-3x native-vs-WASM ratio is stale: measured while the sha2 'asm' feature was still on by default (opt-in in v0.3.0, removed in v0.7.0), and the WASM is built at opt-level 's' for size; benches/main.rs is a native-only Criterion bench that never runs the WASM or JS solvers; no solver caches the SHA-256 midstate (two blocks per hash where one would do). Small bugs: validate_difficulty's 10..99 range rejects 99; the challenge MAC is compared with a non-constant-time ==; a second Pow::init call is silently ignored; replay is allowed until expiry."
+    },
+    "urls_opened": [
+      "https://github.com/sebadob/spow/blob/main/examples/svelte-wasm/src/routes/+page.svelte",
+      "https://github.com/sebadob/spow/blob/main/examples/svelte-wasm/src/lib/spowJs.js",
+      "https://github.com/sebadob/spow/blob/main/benches/main.rs",
+      "https://github.com/sebadob/spow/blob/main/CHANGELOG.md"
+    ]
+  },
+  {
+    "id": "https://github.com/seelabs/nasm",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: both kernels are correct and the harness flaws (inlined scalar reference, output never read, one constant input, out-of-line asm call) favour the C side, so the 5.6x and 8.4x are conservative; the earlier 'fixed-size specialisation' caveat was wrong because rippled's SetHexExact is also fixed-size. First-party single run without -mavx2 on the C side, C stays with corrections.",
+    "corrections": {
+      "caveats": "The README's 'about 10x faster' is not matched by its own table (5.6x encode, 8.4x decode). Single machine, single run, the same constant input every iteration, no compiler version; the C reference is scalar table-lookup code built without -mavx2 (build.sh: g++ -std=c++14 -O3), so this compares an AVX2 SIMD algorithm with scalar C, not hand assembly with the best compiler output. Harness flaws favour the C side: each loop reruns one constant input 100 million times and never reads the output, the scalar reference is inlined while the assembly is an out-of-line call, and the harness copy drops rippled's final terminator check; the ratios therefore look conservative rather than inflated. The committed driver cannot reproduce the table: in the only commit (2018-05-22) main() returns right after test_base58(), so the hex benchmarks are unreachable, and build.sh and CMakeLists.txt (clang, Debug default) disagree. The kernels handle a fixed 32-byte/64-digit input, as does rippled's SetHexExact (base_uint is fixed-size) and the harness reference loop (32 iterations), so the gap is not from fixed-size specialisation. No correctness bug found on reading both kernels (the decoder's masks reject every byte outside 0-9, A-F and a-f); the README's '87' letter offset does not match the code (upcase then subtract 55); a Win64 port would clobber callee-saved xmm6-xmm11. The separate base58 experiment gained only about 6%."
+    },
+    "urls_opened": [
+      "https://github.com/seelabs/nasm/blob/master/src/main.cpp",
+      "https://github.com/seelabs/nasm/blob/master/src/hex.asm",
+      "https://github.com/seelabs/nasm/blob/master/build.sh",
+      "https://github.com/XRPLF/rippled/blob/1.0.0/src/ripple/basics/base_uint.h"
+    ]
+  },
+  {
+    "id": "https://github.com/sessamekesh/wasm-3d-animation-demo",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: the only evidence is a 2017 FPS observation with no harness or log, the 60 FPS side is probably vsync-capped, both animation managers share a stale-index keyframe bug (the C++ copy also reads out of bounds), and the data layouts differ in both directions. Directional claim with no valid measurement: C to D.",
+    "corrections": {
+      "caveats": "Informal one-machine observation from a 2017 browser and engine generation with no timing harness or FPS log in the repo; 60 FPS is probably vsync-capped, so the true gap is unknown (the page's Stats.js 'Anim' panel times getAnimationData per frame but the README reports only FPS). Both managers use the same naive algorithm, and both share a correctness bug: the keyframe binary search returns a stale index when the loop ends on low == high (keyframe times 0..7 sampled at 2.5 interpolate keyframes 1 and 2 with ratio 1.5, extrapolating the pose), and the C++ copy also wraps high = idx - 1u to 0xFFFFFFFF and keeps searching out of bounds when it probes index 0 at the first keyframe time; the same work runs on both sides, so the poses are wrong rather than the comparison skewed. Data layouts differ in both directions: TypeScript allocates per bone per frame and uses string-keyed Map lookups, while C++ finds each bone by a linear scan, copies StaticBone by value, and imports sinf, acosf and fmodf from JavaScript, so every slerp and keyframe wrap crosses the Wasm-JS boundary. The promised 'speedyjs' optimized-JS baseline was never written. The loader is tied to pre-1.38.18 Emscripten (memoryBase/tableBase), uses a bump allocator with a guessed 1 MB stack and fixed 32 MB memory; every Wasm result is a Float32Array view valid only until the next call. The hosted demo returned HTTP 503."
+    },
+    "urls_opened": [
+      "https://github.com/sessamekesh/wasm-3d-animation-demo/blob/master/cc/naivewasmanimationmanager.cc",
+      "https://github.com/sessamekesh/wasm-3d-animation-demo/blob/master/src/animation/naivejsanimationmanager.ts",
+      "https://github.com/sessamekesh/wasm-3d-animation-demo/blob/master/README.md"
+    ]
+  },
+  {
+    "id": "https://github.com/ssvb/tinymembench",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the 32 MiB fixed buffer (64 MiB src plus dst) fits inside the Ryzen 7 9800X3D's 96 MB L3, so that wiki page's figures exceed the DDR5 peak and measure cache rather than DRAM, which makes its 'non-temporal stores 2.5x slower than libc' row a cache artifact; the C rows are compiler-sensitive and the ARM runs predate the volatile fix. Community wiki results without compiler or libc versions, C stays with corrections.",
+    "corrections": {
+      "caveats": "The harness is the project's own benchmark program, and the wiki pages (68 pages, community-submitted) record neither compiler, flags nor libc version, so the baseline is whatever libc memcpy each OS image shipped. The ARM wins come from 2012-2017 era boards (Cortex-A8, Allwinner A13) whose glibc memcpy lacked prefetching or NEON loops and may not hold for current glibc, Bionic or Arm optimized-routines; stock Raspbian already matches the best kernel. Harness flaw on large-cache CPUs: main.c fixes the buffers at #define SIZE 32 MiB with no override, so src plus dst (64 MiB) fits the Ryzen 7 9800X3D's 96 MB L3, and that page's libc memcpy 81381.2 MB/s copied (about 163 GB/s of traffic) and memset 156460.7 MB/s both exceed the 96 GB/s peak of its dual-channel DDR5-6000 (derived from page data), so it measures L3, not DRAM, and its 'non-temporal 2.5x slower than libc' row is a cache artifact rather than evidence about streaming stores. C-kernel rows are compiler-sensitive (issue #7: forward and backward C copies swapping 3.5-4x between gcc 4.6.3 and 4.7.2 on a Cortex-A7), and store order was only forced with volatile on 2016-03-29 (v0.4), after the Allwinner A13 (v0.2.9) and Raspberry Pi (v0.3.9) runs, so cite the NEON/ARM assembly rows rather than the C rows. Baselines vary within a page (the overclocked Raspberry Pi run shows libc memcpy at 307.9 MB/s against 387.6 MB/s stock). Kernels are not memcpy-safe: do-while loops write one block even at size 0, tails are rounded away (bic #127), NEON stores carry :256 alignment hints and SSE2 uses movdqa, and the non-temporal SSE2 kernels end without sfence; issue #30 (open) reports a segfault in aligned_block_copy_movsb under MSYS2 gcc 13.3."
+    },
+    "urls_opened": [
+      "https://github.com/ssvb/tinymembench/blob/master/main.c",
+      "https://github.com/ssvb/tinymembench/wiki/AMD-Ryzen-7-9800X3D",
+      "https://github.com/ssvb/tinymembench/issues/7",
+      "https://github.com/ssvb/tinymembench/issues/30"
+    ]
   }
 ]
