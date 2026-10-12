@@ -1,0 +1,68 @@
+{
+  "id": "lang:java/xemantic/java-2-times-faster-than-c#almost-pseudo-random",
+  "one_liner": "Java Math.sin loop 1.26x faster than gcc -O3 C with glibc sin, on huge arguments only.",
+  "what_it_does": "Two single-file programs, almost_pseudo_random.c and AlmostPseudoRandom.java, sum fmod(sin(i * 100000.0) + 1.0, 1.0) (Java writes % for fmod) over 1,000,000,000 iterations and print the checksum; the function is the GLSL 'almost random' hash from The Book of Shaders. It is a microbenchmark, not a library: there is nothing to link, the C side is built by build-gcc.sh (gcc -O3 -lm) and the Java side by the Gradle wrapper. Contributed Go, Rust, C#, Kotlin and JavaScript ports sit in the same repo.",
+  "how_it_is_fast": "The loop is one libm call per iteration, so the result compares two sin implementations. Every argument with i >= 1055 is at least 1.054e8, past glibc's 0x419921FB threshold in s_sin.c, so glibc sends nearly all 1e9 calls to its slow large-argument reduction __branred (the issue #13 gprof profile of the repo's other C program puts __branred at 47.88% of run time and __sin_fma at 17.32%). HotSpot replaces Math.sin with a hand-written x86-64 stub derived from Intel LIBM (generate_libmSin, on by default via UseLibmIntrinsic in JDK 15); its main path covers only |x| < 90112, and larger arguments go through an inline Payne-Hanek-style reduction against a 2/pi bit table (PI_INV_TABLE), which was faster here. The author's hypotheses about inlining and Java's double % are not needed to explain the gap.",
+  "when_to_use": [
+    "JVM code whose hot loops call Math.sin or Math.cos on very large arguments (above about 1e8 radians), such as GLSL-style fract(sin(x * k)) noise ported from shaders: HotSpot's x86-64 intrinsic beat glibc by about 1.26x there.",
+    "As a two-file test to rerun on your own JDK and glibc before trusting either for trig-heavy code; both versions print the same checksum to the printed digits (4.9999999712235045E8 vs 499999997.122350).",
+    "As a teaching example that the math library, not the language or the JIT, decides trig-bound microbenchmarks (Rust on glibc 67.9 s matches C; Go's own sin 28.2 s beats both)."
+  ],
+  "when_not_to_use": [
+    "As evidence that HotSpot generates faster code than gcc: the timed work is almost entirely inside sin, so code generation barely enters.",
+    "For ordinary angles: below about 1.05e8 glibc uses its cheaper reduce_sincos path and HotSpot stays on its main path below 90112, so the measured ratio does not carry over (not measured in the repo).",
+    "As a pseudo-random generator: fract(sin(x)) costs about 64 ns per call in C here and differs across libraries (Go's checksum is 4.999999924931206e+08); open PR #9 proposes xorshift64*, which its author reports is about 35x faster and identical across languages.",
+    "When C code can switch implementation: Go's own sin finished in 28.2 s on the same machine, faster than both Java and glibc, so the gap is a library choice rather than a language property.",
+    "On non-x86-64 platforms: only HotSpot's x86-64 Intel LIBM stub and glibc's x86-64 ifunc variant (__sin_fma) were involved."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "C: libm only. Java: none at run time; the provided build uses the Gradle 6.8 wrapper with the Kotlin JVM plugin 1.4.21 and still lists the Bintray Kotlin EAP repository (dl.bintray.com).",
+    "min_toolchain": "JDK 15 (Gradle source and target level 15) and any C compiler with libm; the README results used gcc -O3.",
+    "platforms": "Measured only on x86-64 Linux (Intel Core i7-8550U); the Java advantage depends on HotSpot's x86-64 sin intrinsic and on the glibc version, both platform-specific.",
+    "thread_safety": "not applicable (single-threaded benchmark programs)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw in what is measured: i * 100000.0 puts all but about 1,054 of the 1e9 arguments above glibc's 1.05e8 threshold, so the benchmark measures only large-argument range reduction (glibc __branred against HotSpot's PI_INV_TABLE path), a regime real code rarely hits.",
+    "The result depends on the glibc and JDK builds, and neither version is stated (Gradle targets Java 15; the README mentions 'the newest JVM of Java 15'); glibc picks __sin_fma at run time on FMA-capable CPUs such as the i7-8550U.",
+    "One shell 'time' run per language on a laptop CPU without frequency locking; the 'Clang' row (1m4.878s) comes from build-clang.sh, which calls gcc, so there is no clang measurement.",
+    "Java's 51.235 s includes JVM start-up and JIT warm-up, which count against Java; user time (51.193 s) is close to real time, so extra JVM threads do not explain the gap."
+  ],
+  "pick_this_over_siblings_when": "Use this only as evidence about sin on huge arguments (HotSpot's Intel LIBM stub against glibc's __branred). For claims about JIT code generation, the LangArena and benchLANG HotSpot entries state their toolchains and measure more than one library call; the sibling ring entry from the same repo is about allocation but inherits this sin cost.",
+  "verified_claims_summary": "On an Intel Core i7-8550U laptop, one shell 'time' run each: the Java loop (HotSpot of the Java 15 era, default flags) took 51.235 s and the same loop in C built with gcc -O3 -lm took 1m4.433s (1m4.878s for a second gcc build labelled Clang), about 1.26x (derived from page data); Rust on glibc took 1m7.944s and Go with its own sin 28.191 s. gcc, glibc and JDK versions are not stated, and the time is almost all large-argument sin.",
+  "status_note": "Abandoned since February 2021 (last commit 2021-02-06; open PR #9, which replaces the sin-based generator with xorshift64*, was never merged), GPL-3.0 and trivial to rerun, but the result reflects glibc's large-argument sin against HotSpot's intrinsic, not JIT code generation.",
+  "sources_read": [
+    "https://github.com/xemantic/java-2-times-faster-than-c",
+    "https://github.com/xemantic/java-2-times-faster-than-c/commits",
+    "https://github.com/xemantic/java-2-times-faster-than-c/commits/main",
+    "https://github.com/xemantic/java-2-times-faster-than-c/commit/25d2bd81fe60a9ef8bc9ef962d50333e217a8f2d",
+    "https://github.com/xemantic/java-2-times-faster-than-c/issues?q=is%3Aissue",
+    "https://github.com/xemantic/java-2-times-faster-than-c/issues/1",
+    "https://github.com/xemantic/java-2-times-faster-than-c/issues/2",
+    "https://github.com/xemantic/java-2-times-faster-than-c/issues/13",
+    "https://github.com/xemantic/java-2-times-faster-than-c/pulls?q=is%3Apr",
+    "https://github.com/xemantic/java-2-times-faster-than-c/pull/7",
+    "https://github.com/xemantic/java-2-times-faster-than-c/pull/9",
+    "https://github.com/xemantic/java-2-times-faster-than-c/pull/9/files",
+    "https://github.com/xemantic/java-2-times-faster-than-c/pull/10",
+    "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/README.md",
+    "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/build-gcc.sh",
+    "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/build-clang.sh",
+    "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/build-rs.sh",
+    "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/build.gradle.kts",
+    "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/gradle/wrapper/gradle-wrapper.properties",
+    "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/src/main/c/almost_pseudo_random.c",
+    "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/src/main/java/com/xemantic/test/howfast/AlmostPseudoRandom.java",
+    "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/src/main/c/java_2_times_faster_than_c.c",
+    "https://raw.githubusercontent.com/xemantic/java-2-times-faster-than-c/HEAD/src/main/java/com/xemantic/test/howfast/Java2TimesFasterThanC.java",
+    "https://raw.githubusercontent.com/tritoke/java-2-times-faster-than-c/xorshift_rng/README.md",
+    "https://raw.githubusercontent.com/tritoke/java-2-times-faster-than-c/xorshift_rng/src/main/java/com/xemantic/test/howfast/Java2TimesFasterThanC.java",
+    "https://raw.githubusercontent.com/openjdk/jdk/master/src/hotspot/cpu/x86/stubGenerator_x86_64_sin.cpp",
+    "https://raw.githubusercontent.com/openjdk/jdk15u/master/src/hotspot/cpu/x86/macroAssembler_x86_sin.cpp",
+    "https://raw.githubusercontent.com/openjdk/jdk15u/master/src/hotspot/cpu/x86/stubGenerator_x86_64.cpp",
+    "https://raw.githubusercontent.com/openjdk/jdk15u/master/src/hotspot/cpu/x86/globals_x86.hpp",
+    "https://raw.githubusercontent.com/bminor/glibc/master/sysdeps/ieee754/dbl-64/s_sin.c"
+  ],
+  "confidence": 0.75
+}

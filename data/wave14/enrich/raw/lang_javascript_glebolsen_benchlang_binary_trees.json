@@ -1,0 +1,55 @@
+{
+  "id": "lang:javascript/glebolsen/benchlang#binary-trees",
+  "one_liner": "Plain JavaScript on Bun 1.3.13 runs benchLANG binary trees 1.24x faster than per-node malloc/free C at -O3.",
+  "what_it_does": "A row from benchLANG, a 19-language micro-benchmark, not a library. Its binary-trees workload builds about 68.3 million individually allocated nodes (a depth-19 stretch tree, a depth-18 long-lived tree, then 2^(22-d) trees for each even depth 4 to 18), sums each tree with a recursive check and discards it. The JS version (languages/JS/bench.js) uses object literals {left, right, item} with one hidden shape and is run unmodified by `bun bench.js` and `node bench.js`; nothing here can be linked into a C++ program, so the takeaway is about allocation strategy, not a component to adopt.",
+  "how_it_is_fast": "Memory management, not code generation, decides this column. JavaScriptCore's Riptide collector is non-moving and generational through sticky mark bits: eden collections visit only new objects plus write-barrier-remembered ones, and most marking runs concurrently and in parallel on up to eight logical CPUs (WebKit's Riptide description, read as search snippets). Dropping a tree therefore costs the JS program nothing at the drop site, while the C and C++ programs call malloc or operator new per node and then walk every tree a second time (free_tree) to free or delete each node inside the timer. That works out to about 11.9 ns per node for Bun against 14.8 ns for C and 16.8 ns for C++ (derived from page data over 68,332,206 nodes).",
+  "when_to_use": [
+    "You ship a Bun service and wonder whether to move an allocation-heavy tree or graph builder into a native addon: with per-node malloc/free on the native side, Bun already wins on this shape.",
+    "Workloads that create many small, same-shaped, short-lived objects and drop them wholesale (parse trees, temporary graphs, per-request object churn).",
+    "Throughput or batch jobs on a multi-core machine where spare cores can absorb concurrent GC marking and peak memory is cheap.",
+    "As a data point that per-node glibc malloc/free, not the language, is the bottleneck in a naive C or C++ tree builder."
+  ],
+  "when_not_to_use": [
+    "As evidence that JavaScript beats tuned C or C++: an arena or pool (std::pmr::monotonic_buffer_resource, a per-tree bump allocator) removes both the per-node free calls and the second traversal; benchLANG has no arena variant, so that comparison is untested here (inference).",
+    "Memory-constrained deployments: whole-process peak RSS was 336.1 MiB for Bun against 33.3 MiB for C (about 10x).",
+    "On Node.js: the same bench.js takes 1.444 s on Node v26.8.1, 1.43x slower than C, so the win is specific to Bun's JavaScriptCore and does not generalise to JavaScript.",
+    "Compute-bound code: Bun loses every other benchLANG column to C (Fibonacci(45) 7.735 s vs 1.694 s, strings 3.129 s vs 2.132 s) and the suite overall (16.732 s vs 9.762 s).",
+    "If you need the largest managed-runtime gain on allocation churn: Java (0.347 s) and Nim (0.809 s) are faster in the same table, and Bun's margin over C is about 24% from one run."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Bun 1.3.13 from nixpkgs-unstable (flake.lock pins nixpkgs rev e8be7818, dated 2026-08-29); no npm packages",
+    "min_toolchain": "Bun 1.3.13 as measured; the script is plain ES2015+ (performance.now, template literals) and also runs on Node",
+    "platforms": "Measured on x86-64 Linux only (flake.nix pins x86_64-linux); Bun on other platforms not tested here",
+    "thread_safety": "Not applicable: single-threaded program; JavaScriptCore uses extra threads for concurrent GC marking and JIT compilation",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness asymmetry by design: C and C++ run free_tree inside the timer (a second full traversal plus 68.3M free or delete calls), while bench.js only drops references, and garbage left at the end of the timed function is never collected inside the timer. The README states this ('native code frees inside the timer, GC runtimes collect when they like'); the free pass's share of C's 1.010 s is not measured.",
+    "Single-core versus multi-core: the C program runs on one core, but Riptide marks concurrently on helper threads of the 12-core Ryzen 9 5900X, so wall time hides GC CPU. The runner records CPUx = (user+sys)/wall per language, but the README table omits it and .gitignore keeps the benchmark_results_*.txt files out of the repo, so Bun's whole-process CPU time is unpublished.",
+    "One run per language (3 September 2026); run_benchmarks.sh supports --runs N averaging, but the table does not use it, and Bun's 0.194 s margin over C is not much larger than the 0.137 s gap between the near-identical C (malloc/free) and C++ (new/delete) programs.",
+    "No correctness problem found: bench.js does the same depth schedule and item arithmetic as bench.c (values stay far below 2^53), and analyze_results.sh exits non-zero and marks the ranking invalid if any language's checksum differs."
+  ],
+  "pick_this_over_siblings_when": "Among benchLANG's binary-trees rows Bun (0.816 s) beats C# (0.931 s) and OCaml (0.865 s) but is more than twice as slow as Java (0.347 s), so cite it only when the question is specifically Bun or JavaScript; the LangArena Binarytrees::Obj entry shows Bun about 2x ahead of make_unique C++ and the alya-lang entry about 1.28x ahead of -O2 C with a median of 10 runs, which is better-repeated evidence for the same effect.",
+  "verified_claims_summary": "benchLANG's 3 September 2026 run on a Ryzen 9 5900X locked at 3.5 GHz (Arch Linux, i3-wm, 48 GB DDR4-3600) timed binary trees at 0.816 s for bench.js on Bun 1.3.13 (default JIT) against 1.010 s for C and 1.147 s for C++, both built with GCC 16.2.0 -O3 -march=native -flto -funroll-loops -ffp-contract=off and allocating each node with malloc/free or new/delete; that is about 1.24x faster than C and 1.41x faster than C++ (derived from page data). Times are in-program monotonic-clock wall times from one run, with JIT warm-up inside the timed region.",
+  "status_note": "Small single-author MIT repo (8 stars, 0 forks, 42 commits, no issues; results and code last updated 2026-09-03) with Nix-pinned toolchains and a checksum check, easy to rerun, but the result is one run of one micro-workload and a statement about allocators rather than something to adopt.",
+  "sources_read": [
+    "https://github.com/GlebOlsen/benchLANG",
+    "https://github.com/GlebOlsen/benchLANG/commits/main",
+    "https://github.com/GlebOlsen/benchLANG/commits/main/languages/JS/bench.js",
+    "https://github.com/GlebOlsen/benchLANG/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/README.md",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/JS/bench.js",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/C/bench.c",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/C++/bench.cpp",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/run_benchmarks.sh",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/analyze_results.sh",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/clean.sh",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/flake.nix",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/flake.lock",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/.gitignore",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/CITATION.cff",
+    "WebSearch: WebKit Riptide garbage collector (snippets from webkit.org/blog/7122 and the WebKit 'Marking should be generational' commit; pages not opened)"
+  ],
+  "confidence": 0.75
+}
