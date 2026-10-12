@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/azeemba/wasm-runtime-performance",
+  "one_liner": "2017 browser benchmark: Boost.Graph Floyd-Warshall compiled to wasm by Emscripten versus graphlib.js; std::priority_queue loses to JS heaps.",
+  "what_it_does": "A small study, not a library: main.cpp exports C functions (initGraph, addEdge, floydWarshall, insert, top, pop, bulkInsert, bulkPops) wrapping a Boost adjacency_list and a std::priority_queue, compiled by emcc into an HTML page whose JS harness (shell_call.js) times them against graphlib.js alg.floydWarshall, FastPriorityQueue.js and Heap.js with performance.now, averaged over 100 iterations after one warmup. The exported floydWarshall() returns only the largest finite distance, not the distance matrix, so it cannot replace graphlib as is.",
+  "how_it_is_fast": "The wasm side runs boost::floyd_warshall_all_pairs_shortest_paths over an int boost::multi_array distance matrix, a contiguous N x N array of machine integers, while graphlib's runFloydWarshall walks an object of objects keyed by string node ids, allocates a {distance, predecessor} object per pair and loops with nested forEach closures. The gain is data layout plus ahead-of-time optimisation by emcc -O3; without -O3 the same wasm is about 20x slower than the JS. The priority-queue test shows the opposite: per-element JS-to-wasm calls and even an all-in-wasm loop lose to JIT-compiled JS heaps.",
+  "when_to_use": [
+    "As a historical data point (2017, wasm MVP, Emscripten fastcomp era) on porting an O(V^3) dense graph kernel from a generic JS library to C++ in wasm.",
+    "As a template for wiring Boost.Graph or STL containers into a browser page through EMSCRIPTEN_KEEPALIVE exports and Module.cwrap.",
+    "To show that -O3 is not optional for Emscripten builds of template-heavy C++ (about 122x between the unoptimised and -O3 builds, derived from page data).",
+    "As a cautionary example that fine-grained JS-to-wasm calls (one call per heap push or pop) can make wasm slower than a good JS data structure."
+  ],
+  "when_not_to_use": [
+    "As evidence of current wasm versus JS speed: browser, JS engine, CPU and emsdk version are not stated, and engines and toolchains have changed since 2017.",
+    "As a graph library: it handles one global graph, exposes only Floyd-Warshall, and returns only the largest finite distance.",
+    "For priority-queue workloads: std::priority_queue in wasm was 3.9-5.9x slower on inserts and 1.02-1.46x slower on peek+pop than FastPriorityQueue.js and Heap.js in the README run (derived from page data).",
+    "Where licensing matters: the repository has no licence file, so reuse rights are unclear.",
+    "For sparse graphs or large V, where Dijkstra or Johnson per source beats any O(V^3) Floyd-Warshall in either language."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Boost headers (graph, multi_array; README links the 1.64 docs; generate_output.sh points at /home/azeem/temp/include), emsdk; the JS side vendors graphlib 0.8.1-pre, FastPriorityQueue.js and Heap.js (CoffeeScript 1.8.0 build) in external_js/",
+    "min_toolchain": "C++11 (-std=c++11), an emcc from a 2017 emsdk (version not documented)",
+    "platforms": "WebAssembly in a browser (engine not documented); main.cpp also has a native timing path when built without COMPILING_TO_WASM, with no published numbers",
+    "thread_safety": "not thread-safe: the graph G and queue Q are globals and the exports mutate them",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw, unequal graphs: pi_minus_3.js stores the digits in a String.raw template literal that begins with a newline and keeps its line breaks, so node ids read two characters at a time that straddle a break ('\\n1', '6\\n', and so on) become 11 extra graphlib nodes. The JS run therefore solves a 111-vertex graph (25 of the 500 edges touch the extra nodes), while the wasm side parseInt()s the same strings back into vertices 0-99. graphlib's triple loop does 111^3 / 100^3, about 1.37x, as many relaxations, so a like-for-like ratio would be nearer 4.4x than 6.0x (estimate derived from the code, assuming time scales with V^3).",
+    "Harness flaw, different answers: the JS graph is created with {directed: false}, but alg.floydWarshall is called without an edgeFn, so it uses g.outEdges, which for an undirected graphlib graph lists each edge only under its lexicographically smaller endpoint. The JS run therefore computes paths in a one-way orientation of the graph, not in the undirected graph Boost solves. Neither result is checked: wasmLargest is computed but never printed or compared with the JS 'largest'.",
+    "Both timed regions include graph construction (string slicing of the pi digits, 500 setEdge calls in JS versus 500 cwrap addEdge calls into wasm) and a pass over the result, and doFloydWarshall takes the Boost graph by value, so each wasm iteration also copies the graph.",
+    "The README's '3 orders of magnitude' from -O0 to -O3 is about 122x (1235.41 ms to 10.16 ms), and each published number is one pasted console run with no variance reported."
+  ],
+  "pick_this_over_siblings_when": "Prefer wasm-perf (Emscripten SIMD matmul versus JS, Node 16, stated versions) or JavaScript-vs-WebAssembly-Comparative-Analysis (median of 20 reps in Chromium) for numeric kernels with stated environments; this repo is only of interest for STL and Boost data-structure code under Emscripten, and like Speedy.js it documents 2017-era engines.",
+  "verified_claims_summary": "In one unnamed 2017 browser on unstated hardware, averaged over 100 runs, building a 100-vertex, 500-edge graph and running Floyd-Warshall took 10.16 ms with Boost.Graph compiled by emcc -O3 versus 61.11 ms with graphlib.js (about 6.0x, derived from page data), but the JS side actually processed a 111-vertex graph because of newline characters in the digit source, and the two sides computed different paths. In the same setup, 300,000 std::priority_queue inserts took 58.44 ms (51.99 ms with the loop inside wasm) versus 9.86 ms for FastPriorityQueue.js and 13.42 ms for Heap.js.",
+  "status_note": "Abandoned since 7 May 2017 (10 commits, no licence file, 6 stars); a reference data point with the harness flaws above, not reusable code, and its 6.0x headline compares unequal graph sizes and different path problems, which may justify a downgrade to D.",
+  "sources_read": [
+    "https://github.com/azeemba/wasm-runtime-performance",
+    "https://github.com/azeemba/wasm-runtime-performance/commits/master",
+    "https://github.com/azeemba/wasm-runtime-performance/tree/master/external_js",
+    "https://raw.githubusercontent.com/azeemba/wasm-runtime-performance/HEAD/README.md",
+    "https://raw.githubusercontent.com/azeemba/wasm-runtime-performance/HEAD/generate_output.sh",
+    "https://raw.githubusercontent.com/azeemba/wasm-runtime-performance/HEAD/main.cpp",
+    "https://raw.githubusercontent.com/azeemba/wasm-runtime-performance/HEAD/graph_work.h",
+    "https://raw.githubusercontent.com/azeemba/wasm-runtime-performance/HEAD/fw.cpp",
+    "https://raw.githubusercontent.com/azeemba/wasm-runtime-performance/HEAD/shell_call.js",
+    "https://raw.githubusercontent.com/azeemba/wasm-runtime-performance/HEAD/shell_call.html",
+    "https://raw.githubusercontent.com/azeemba/wasm-runtime-performance/HEAD/pi_minus_3.js",
+    "https://raw.githubusercontent.com/azeemba/wasm-runtime-performance/HEAD/pi.h",
+    "https://raw.githubusercontent.com/azeemba/wasm-runtime-performance/HEAD/external_js/graphlib.js",
+    "https://raw.githubusercontent.com/azeemba/wasm-runtime-performance/HEAD/external_js/FastPriorityQueue.js",
+    "https://raw.githubusercontent.com/azeemba/wasm-runtime-performance/HEAD/external_js/heap.js"
+  ],
+  "confidence": 0.75
+}
