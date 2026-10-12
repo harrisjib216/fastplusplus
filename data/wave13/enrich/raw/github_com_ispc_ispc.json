@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/ispc/ispc",
+  "one_liner": "LLVM-based compiler for an SPMD C dialect that runs kernels on CPU SIMD lanes; 3-7x one-core speedups over serial C++ in Intel's examples.",
+  "what_it_does": "ispc compiles .ispc files, written in a C variant with uniform/varying qualifiers, foreach loops and task launch, into object files plus a generated C/C++ header, so C and C++ code calls exported ispc functions directly and shares data through plain pointers. It targets x86 SSE2/SSE4/AVX/AVX2/AVX-512/AVX10.2 (with multi-target runtime dispatch), Arm NEON and Intel Xe GPUs. It is not an intrinsics library or a drop-in for anything: hot loops have to be rewritten as ispc kernels and an extra compiler joins the build.",
+  "how_it_is_fast": "The SPMD-on-SIMD model maps a gang of program instances (4 to 64 depending on target, e.g. avx2-i32x16) onto SIMD lanes and turns divergent control flow into masked execution, so complex data-dependent loops vectorize where auto-vectorizers give up. 'uniform' values stay in scalar registers and control flow on them stays scalar; coherent-control-flow checks and 'all lanes on' specializations skip masking when lanes agree; a late pass turns varying-index gathers and scatters into plain vector loads and stores when access is actually linear; SOA types avoid gathers. The paper's ablation (Table 1, geomean over the examples) loses 0.45x without uniform data and control flow, 0.73x without all-on mask handling and 0.79x without the gather/scatter pass.",
+  "when_to_use": [
+    "Compute-bound float or int kernels with data-dependent branches (ray tracing, volume rendering, options pricing, noise, image filters) that compilers fail to auto-vectorize and that you do not want to hand-write in intrinsics.",
+    "One kernel source compiled for SSE4, AVX2, AVX-512 and NEON in one go, with the generated dispatcher picking the best target at run time.",
+    "Workloads that want both SIMD and multicore from one model: task launch scales across cores through a task system you supply (or examples/common/tasksys.cpp).",
+    "Projects with C or C++ hosts that can add a compiler step: CMake 3.19.2+ has native ISPC language support with Make and Ninja generators, and release binaries exist for Linux, Windows and macOS.",
+    "Code that will run on Intel GPUs as well, using the same language and the Xe targets."
+  ],
+  "when_not_to_use": [
+    "You need a header-only C++ SIMD library with no extra toolchain: ispc is a separate LLVM-based compiler, and building it from source needs a patched LLVM (v1.31.0 is pinned to an LLVM 23 commit).",
+    "Short, simple loops that clang or gcc already auto-vectorize at -O3 -march=native; the published speedups are against non-SIMD serial code, and the paper's only intrinsics comparisons are user anecdotes at 0.99x-1.05x.",
+    "Code where bit-exact agreement with libm matters and you cannot pass --math-lib=system: the default math library is ispc's own vector approximations (sin max abs error about 1.45e-6), and the fast-math modes trade further precision.",
+    "Memory-bound or gather/scatter-heavy kernels on AVX2 and NEON: open Performance issues include a NEON gather regression (#3721), an about 20% regression tied to LLVM after 18.1 (#3649) and inefficient shuffle and popcnt codegen (#3771, #3676).",
+    "You need SVE or wide RISC-V support in production: rvv-x4 and PowerPC targets are experimental and excluded from official binaries."
+  ],
+  "integration": {
+    "form": "compiler (build tool) emitting object files and a C/C++ header; also usable as a C++ library with an experimental JIT since v1.28.0",
+    "dependencies": "none at run time for non-task code; task launches need user-supplied ISPCAlloc/ISPCLaunch/ISPCSync with C linkage (examples/common/tasksys.cpp provides one); Windows binaries need the Visual C++ redistributable",
+    "min_toolchain": "ispc release binary (v1.31.0 current); any C/C++ compiler that links the objects; CMake 3.19.2+ for native ISPC language support; source builds need a patched LLVM (LLVM 18 and 19 dropped in v1.31.0)",
+    "platforms": "hosts Windows, macOS, Linux, FreeBSD; targets x86 SSE2 to AVX-512 and AVX10.2 (avx10.2nvl/dmr enable APX by default), Arm NEON (ARMv7/ARMv8), Intel Xe GPUs; experimental rvv-x4 and ppc64le",
+    "thread_safety": "not documented as a library property; exported functions are ordinary C-callable code, and the task-system hooks take per-caller handles so launches from several threads can be told apart",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness asymmetry in the examples behind the numbers: the serial C++ references call scalar libm expf/logf/powf while the ispc kernels use ispc's own vectorized default math library, so options-pricing speedups mix SIMD with a math-library swap; the current examples' CMake also builds the C++ reference with only -m64 and the Release defaults (no -march), and on Windows with /fp:fast /Oi.",
+    "The two Intel tables on the same 4-core iMac disagree by more than the paper admits: it says gcc gave 'essentially the same results' as the clang baseline, yet the perf page's gcc 4.2.1 baseline gives Binomial 7.94x vs the paper's 4.39x and Ray Tracer 4.31x vs 6.85x (about 1.8x and 0.63x apart, derived from page data); Black-Scholes reaches 8.45x on one core with 8-wide AVX, more than the lane count.",
+    "The options example prices 128k identical options (S=100, X=98, T=2, r=0.02, v=5 for every element), so lanes never diverge, and it checks results only by printing averages; each example reports the minimum of 3 rdtsc-timed runs.",
+    "Multi-core figures fold in tasks and hyper-threading: the 40-core table reaches 243.18x against MSVC 2010 serial code, above the 160x ideal, and the paper attributes the excess mostly to hyper-threading."
+  ],
+  "pick_this_over_siblings_when": "Pick ispc over C++ SIMD wrappers such as Pure SIMD or std::experimental::simd (marcelcases/simd) when kernels are long and branchy and you want one source to retarget across SSE4/AVX2/AVX-512/NEON with runtime dispatch; stay with a wrapper or intrinsics (or Vectis-style hand kernels) for small hot loops where an extra compiler in the build is not worth it.",
+  "verified_claims_summary": "The InPar 2012 paper by ispc's Intel authors reports single-core speedups of 3.24x (volume rendering) to 7.43x (Black-Scholes) over serial non-SIMD C++ built with clang on the same LLVM, on a 4-core 3.4 GHz Core i7 iMac with 8-wide AVX (unnamed model, flags unstated), 12.03x-34.82x on 4 cores with 8 threads, and 9.40x-243.18x on an 80-thread 40-core Xeon E7-8870 with SSE4 against MSVC 2010 serial code; nothing newer has been published, and no comparison against intrinsics or SIMD libraries was measured.",
+  "status_note": "Very active (v1.31.0 June 2026 on LLVM 23, frequent releases adding AVX10.2, Granite Rapids, Nova Lake and Zen targets, 3k stars, 269 open issues), BSD-3-Clause and copyable, but the speedup evidence is 2011-2012 first-party data on Sandy Bridge-era hardware.",
+  "sources_read": [
+    "https://github.com/ispc/ispc",
+    "https://raw.githubusercontent.com/ispc/ispc/main/README.md",
+    "https://raw.githubusercontent.com/ispc/ispc/main/docs/ispc.rst",
+    "https://raw.githubusercontent.com/ispc/ispc.github.com/main/papers/ispc_inpar_2012.pdf",
+    "https://raw.githubusercontent.com/ispc/ispc.github.com/main/perf.html",
+    "https://github.com/ispc/ispc/tree/main/examples/cpu",
+    "https://raw.githubusercontent.com/ispc/ispc/main/examples/cpu/README.txt",
+    "https://raw.githubusercontent.com/ispc/ispc/main/examples/cpu/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ispc/ispc/main/examples/cpu/cmake/AddISPCExample.cmake",
+    "https://raw.githubusercontent.com/ispc/ispc/main/examples/cpu/cmake/AddISPCExampleModern.cmake",
+    "https://raw.githubusercontent.com/ispc/ispc/main/examples/cpu/options/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ispc/ispc/main/examples/cpu/options/options.cpp",
+    "https://raw.githubusercontent.com/ispc/ispc/main/examples/cpu/options/options.ispc",
+    "https://raw.githubusercontent.com/ispc/ispc/main/examples/cpu/options/options_serial.cpp",
+    "https://raw.githubusercontent.com/ispc/ispc/main/examples/cpu/options/options_defs.h",
+    "https://raw.githubusercontent.com/ispc/ispc/main/examples/common/timing.h",
+    "https://github.com/ispc/ispc/releases",
+    "https://github.com/ispc/ispc/issues?q=is%3Aissue+is%3Aopen+label%3APerformance",
+    "https://www.intel.com/content/dam/develop/external/us/en/documents/simd-made-easy-with-intel-ispc.pdf (not reachable: ENOTFOUND)"
+  ],
+  "confidence": 0.75
+}

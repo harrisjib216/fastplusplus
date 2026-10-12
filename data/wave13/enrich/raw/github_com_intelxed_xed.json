@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/intelxed/xed",
+  "one_liner": "Intel's own x86/x86-64 decoder and encoder in C; decodes faster than full-mode Zydis, roughly ties or trails Capstone once formatting is included.",
+  "what_it_does": "A C library that turns 1-15 instruction bytes plus a machine mode into a xed_decoded_inst_t describing iclass, iform, ISA set, operands, implicit resources and flags, and formats it as Intel, AT&T or a detailed internal syntax via xed_format_context(). It also ships a generic encoder, a much faster function-per-instruction encoder (enc2), an instruction-length-only decoder (ILD) and a command-line tool. It is not a drop-in replacement for Capstone: the API, data structures and output strings are different.",
+  "how_it_is_fast": "Decoder tables and enumerations are generated at build time by Python generators from text datafiles that describe an internal grammar of nonterminals, so decoding is a table-driven pipeline: an instruction length decode (ILD) pass, a static lookup of the xed_inst_t template, then generated nonterminal functions that capture operands. All decode state lives in the caller's xed_decoded_inst_t, with no allocation per instruction. Its strength is completeness and detail rather than raw speed; in both disas-bench runs the leaner decoders (iced, yaxpeax, diStorm) are several times faster.",
+  "when_to_use": [
+    "You need the most complete and earliest coverage of new Intel ISA extensions: releases in 2025-2026 track APX, AVX10.2, AMX and ACE specification revisions and new chip configurations (Diamond Rapids, Nova Lake).",
+    "You need detailed per-operand semantics (read/write actions, implicit and suppressed operands, flags, ISA set and CPUID-based chip checks) for binary analysis, instrumentation or emulation, not just a text disassembly.",
+    "You need both a decoder and an encoder from one library, including the enc2 fast encoder for JIT-style code generation.",
+    "You only need instruction lengths: the ILD API (examples/xed-dec-ild.c, ILD-only builds) skips full operand decoding.",
+    "Your project is C or C++ and can accept Apache-2.0 and a static libxed.a."
+  ],
+  "when_not_to_use": [
+    "Raw decode or disassembly throughput is the goal: iced decodes about 4.6x and diStorm about 1.7x faster in the 2021 run, and in the 2025 runs bddisasm and Zydis (min) also decode faster than XED.",
+    "You want to replace Capstone for decode+format speed: the 2025 runs on Ryzen 9 9950X and i9-13900K put XED at about 0.77x of Capstone.",
+    "You need non-x86 architectures (Capstone covers ARM, RISC-V and others).",
+    "Your build cannot run Python: libxed is produced by the mbuild Python build system (python 3.9 or later per docsrc/xed-build.txt), not CMake or a plain Makefile.",
+    "You need decoding that matches other disassemblers by default on recent XED: since v2025.03.02 LZCNT, TZCNT and PAUSE are off unless enabled, so F3 0F BD decodes as BSR."
+  ],
+  "integration": {
+    "form": "static lib (shared with --shared; installable kit with headers via 'mfile.py install')",
+    "dependencies": "build: Python 3.9+ and the separate intelxed/mbuild repository; runtime: only a few libc functions (memcmp, memset, memcpy, strcmp, strncat, strlen, fprintf, abort)",
+    "min_toolchain": "C compiler: GCC, Clang (Clang 17-20 named in 2025-2026 release notes) or MSVC; Python 3.9+ for the build",
+    "platforms": "Linux, Windows (with or without cygwin), FreeBSD per the docs; decodes IA-32 and Intel 64 code only; an open issue (#358) carries a macOS build fix",
+    "thread_safety": "Reentrant after a single xed_tables_init() call made before threads start; all decode/encode state lives in caller-provided structures.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Call xed_tables_init() once before use, and re-initialise the decoded-instruction struct before every decode (xed_decoded_inst_zero_keep_mode() or xed_decoded_inst_zero_set_mode()); the benchmarks use xed_decoded_inst_zero plus set_mode each time.",
+    "Since v2025.03.02, PAUSE, LZCNT and TZCNT are disabled by default unless enabled through the decoder mode/chip-feature APIs (xed_set_decoder_modes, xed_chip_features_t), and unsupported PREFETCH decodes as NOP; default output therefore differs from other disassemblers on modern binaries.",
+    "No benchmark measures current XED: the 2021 icedland run used a decoder-only (--no-encoder) LTO build, the 2025 athre0z run used v2025.06.08 (submodule dc6bdbe) at --opt=3 without LTO, and v2026.02.17 later added systematic API input validation (disable with --no-api-check) whose cost is unmeasured.",
+    "Harness detail: the 2021 icedland bench/xed/main.c ignores xed_decode's error return and still calls xed_format_context and advances by the reported length on invalid bytes; the 2025 upstream version skips one byte per bad instruction and counts them. Each library is timed with clock() in one subprocess run, MB/s computed as MiB, so small gaps (XED 15.67 vs Capstone 14.02 MB/s) are within run-to-run noise."
+  ],
+  "pick_this_over_siblings_when": "Pick XED over iced, diStorm, yaxpeax-x86 or Zydis when Intel-authoritative ISA coverage, chip/ISA-set checks and an encoder matter more than speed; pick iced (Rust) or diStorm for the fastest decode, bddisasm or Zydis (min) for faster C decode with full operand info, and Zydis for faster decode+format with a permissive C API.",
+  "verified_claims_summary": "In icedland/disas-bench (2021, i5-6600K, gcc 10.3.0, LTO builds, Firefox 86 xul.dll code section) XED decoded 55.39 MB/s against Zydis 34.19 and bddisasm 35.48 MB/s and did decode+format at 15.67 MB/s against Capstone's 14.02 MB/s; the upstream athre0z/disas-bench charts of October 2025 (Ryzen 9 9950X with GCC 13.3, i9-13900K with GCC 14.2, XED v2025.06.08 without LTO) show XED at about 0.77x of Capstone in decode+format and behind bddisasm and Zydis (min) in decode only, ahead only of full-mode Zydis.",
+  "status_note": "Actively maintained by Intel (v2026.08.23, frequent ISA-alignment releases, 1.6k stars, 41 open issues including a few long-open decoder bugs such as #233 and #275); Apache-2.0 and copyable, but it is a mid-pack performer whose catalogue case rests on coverage rather than speed.",
+  "sources_read": [
+    "https://github.com/intelxed/xed",
+    "https://raw.githubusercontent.com/intelxed/xed/HEAD/README.md",
+    "https://raw.githubusercontent.com/intelxed/xed/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/intelxed/xed/HEAD/mfile.py",
+    "https://raw.githubusercontent.com/intelxed/xed/HEAD/VERSION",
+    "https://raw.githubusercontent.com/intelxed/xed/HEAD/Security.md",
+    "https://raw.githubusercontent.com/intelxed/xed/HEAD/src/dec/xed-decode.c",
+    "https://raw.githubusercontent.com/intelxed/xed/HEAD/include/public/xed/xed-decoded-inst-api.h",
+    "https://raw.githubusercontent.com/intelxed/xed/HEAD/docsrc/xed-doc-top.txt",
+    "https://raw.githubusercontent.com/intelxed/xed/HEAD/docsrc/xed-build.txt",
+    "https://raw.githubusercontent.com/intelxed/xed/HEAD/docsrc/external-requirements.txt",
+    "https://github.com/intelxed/xed/tree/main",
+    "https://github.com/intelxed/xed/tree/main/docsrc",
+    "https://github.com/intelxed/xed/issues",
+    "https://github.com/intelxed/xed/issues?q=is%3Aissue+performance+OR+slow+OR+speed",
+    "https://github.com/intelxed/xed/releases",
+    "https://github.com/intelxed/xed/releases/tag/v2025.03.02",
+    "https://github.com/intelxed/xed/releases/tag/v2026.02.17",
+    "https://github.com/intelxed/xed/commit/dc6bdbe",
+    "https://raw.githubusercontent.com/icedland/disas-bench/HEAD/README.md",
+    "https://raw.githubusercontent.com/icedland/disas-bench/HEAD/bench/xed/main.c",
+    "https://raw.githubusercontent.com/icedland/disas-bench/HEAD/bench/cs/main.c",
+    "https://raw.githubusercontent.com/icedland/disas-bench/HEAD/make-all.sh",
+    "https://raw.githubusercontent.com/icedland/disas-bench/HEAD/bench.py",
+    "https://raw.githubusercontent.com/athre0z/disas-bench/HEAD/README.md",
+    "https://raw.githubusercontent.com/athre0z/disas-bench/HEAD/bench/xed/main.c",
+    "https://raw.githubusercontent.com/athre0z/disas-bench/HEAD/bench/xed/Makefile",
+    "https://raw.githubusercontent.com/athre0z/disas-bench/HEAD/make-all.sh",
+    "https://raw.githubusercontent.com/athre0z/disas-bench/HEAD/bench.py",
+    "https://github.com/athre0z/disas-bench/tree/master/libs"
+  ],
+  "confidence": 0.8
+}
