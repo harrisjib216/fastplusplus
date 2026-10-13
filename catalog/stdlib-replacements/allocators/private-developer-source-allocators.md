@@ -16,7 +16,7 @@
 | **Compiler and flags** | gcc 13.3.0, -O2 -march=native (docs/allocators.md); results/fastest.json run 2026-09-03-third-party used -O2 -g -DNDEBUG -std=c++20 -march=native (RelWithDebInfo) |
 | **Adoption** | 0 stars (private repo) |
 | **Last commit** | 2026-09-04 |
-| **Links** | [repository](private:developer-source) · [benchmark](private:developer-source/blob/main/docs/allocators.md) |
+| **Links** | private repository, not published yet |
 
 ## Verdict
 
@@ -82,52 +82,52 @@ The repo (private:developer-source) is PRIVATE, readable only with granted acces
 - **Verifier notes:** Every number checks out. docs/allocators.md has 3.45 vs 18.68 (5.4x), 2.74 vs 13.03 (the page says 4.8x) and 11.74 vs 4.33 (2.7x); results/fastest.json has 3.451/18.682 (5.41x), 2.742/13.028 (4.75x), 3.965 under jemalloc and 11.738/4.33 (2.71x). An older, independent row (arena_allocator, bench_doing_less.cpp, run 2026-09-02-core) corroborates the result: 3.76 vs 17.777ns (4.73x) on a 20k-node list. I added libstdc++ to baseline_stdlib (gcc 13.3 on Ubuntu, new/delete and std::pmr), plus the std::pmr near-parity, the run provenance mismatch and the -O3 drift to caveats. MIT, last commit 2026-09-04, 0 stars, private: all confirmed.
 - **Fields the verifier corrected:** `baseline_stdlib`, `caveats`
 - **Pages the verifier opened:**
-  - <private:developer-source>
-  - <private:developer-source/commits/main>
-  - <private:developer-source/blob/main/docs/allocators.md>
-  - <private:developer-source/blob/main/results/fastest.json>
-  - <private:developer-source/blob/main/bench/bench_allocator.cpp>
-  - <private:developer-source/blob/main/bench/bench_harness.hpp>
-  - <private:developer-source/blob/main/bench/bench_doing_less.cpp>
-  - <private:developer-source/blob/main/include/fastcpp/memory/arena.hpp>
-  - <private:developer-source/blob/main/CMakeLists.txt>
-  - <private:developer-source/blob/main/CMakePresets.json>
-  - <private:developer-source/blob/main/README.md>
-  - <private:developer-source/blob/main/LICENSE>
-  - <private:developer-source/commits/main/bench/bench_allocator.cpp>
-  - <private:developer-source/commits/main/CMakeLists.txt>
+  - private:developer-source
+  - private:developer-source/commits/main
+  - private:developer-source/blob/main/docs/allocators.md
+  - private:developer-source/blob/main/results/fastest.json
+  - private:developer-source/blob/main/bench/bench_allocator.cpp
+  - private:developer-source/blob/main/bench/bench_harness.hpp
+  - private:developer-source/blob/main/bench/bench_doing_less.cpp
+  - private:developer-source/blob/main/include/fastcpp/memory/arena.hpp
+  - private:developer-source/blob/main/CMakeLists.txt
+  - private:developer-source/blob/main/CMakePresets.json
+  - private:developer-source/blob/main/README.md
+  - private:developer-source/blob/main/LICENSE
+  - private:developer-source/commits/main/bench/bench_allocator.cpp
+  - private:developer-source/commits/main/CMakeLists.txt
 - **Sources the enricher read:**
-  - <private:developer-source>
-  - <private:developer-source/tree/main>
-  - <private:developer-source/blob/main/README.md>
-  - <private:developer-source/blob/main/docs/allocators.md>
-  - <private:developer-source/blob/main/include/fastcpp/memory/arena.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/core/macros.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/core/bits.hpp>
-  - <private:developer-source/blob/main/bench/bench_allocator.cpp>
-  - <private:developer-source/blob/main/bench/bench_harness.hpp>
-  - <private:developer-source/blob/main/bench/bench_doing_less.cpp>
-  - <private:developer-source/blob/main/bench/CMakeLists.txt>
-  - <private:developer-source/blob/main/results/fastest.json>
-  - <private:developer-source/blob/main/tests/test_containers.cpp>
-  - <private:developer-source/blob/main/tests/test_core.cpp>
-  - <private:developer-source/blob/main/tests/test_strings.cpp>
-  - <private:developer-source/blob/main/tests/test_sort.cpp>
-  - <private:developer-source/blob/main/tests/test_phf.cpp>
-  - <private:developer-source/blob/main/CMakeLists.txt>
-  - <private:developer-source/blob/main/CMakePresets.json>
-  - <private:developer-source/blob/main/.github/workflows/ci.yml>
-  - <private:developer-source/blob/main/third_party/simdjson/CMakeLists.txt>
-  - <private:developer-source/blob/main/third_party/yyjson/CMakeLists.txt>
-  - <private:developer-source/blob/main/third_party/croaring/CMakeLists.txt>
-  - <private:developer-source/blob/main/LICENSE>
-  - <private:developer-source/commits/main>
-  - <private:developer-source/commits/main/include/fastcpp/memory/arena.hpp>
-  - <private:developer-source/commits/main/bench/bench_allocator.cpp>
-  - <private:developer-source/issues?q=is%3Aissue>
-  - <private:developer-source/pulls?q=is%3Apr>
-  - <private:developer-source/actions>
-  - <private:developer-source/actions/runs/33828450197>
+  - private:developer-source
+  - private:developer-source/tree/main
+  - private:developer-source/blob/main/README.md
+  - private:developer-source/blob/main/docs/allocators.md
+  - private:developer-source/blob/main/include/fastcpp/memory/arena.hpp
+  - private:developer-source/blob/main/include/fastcpp/core/macros.hpp
+  - private:developer-source/blob/main/include/fastcpp/core/bits.hpp
+  - private:developer-source/blob/main/bench/bench_allocator.cpp
+  - private:developer-source/blob/main/bench/bench_harness.hpp
+  - private:developer-source/blob/main/bench/bench_doing_less.cpp
+  - private:developer-source/blob/main/bench/CMakeLists.txt
+  - private:developer-source/blob/main/results/fastest.json
+  - private:developer-source/blob/main/tests/test_containers.cpp
+  - private:developer-source/blob/main/tests/test_core.cpp
+  - private:developer-source/blob/main/tests/test_strings.cpp
+  - private:developer-source/blob/main/tests/test_sort.cpp
+  - private:developer-source/blob/main/tests/test_phf.cpp
+  - private:developer-source/blob/main/CMakeLists.txt
+  - private:developer-source/blob/main/CMakePresets.json
+  - private:developer-source/blob/main/.github/workflows/ci.yml
+  - private:developer-source/blob/main/third_party/simdjson/CMakeLists.txt
+  - private:developer-source/blob/main/third_party/yyjson/CMakeLists.txt
+  - private:developer-source/blob/main/third_party/croaring/CMakeLists.txt
+  - private:developer-source/blob/main/LICENSE
+  - private:developer-source/commits/main
+  - private:developer-source/commits/main/include/fastcpp/memory/arena.hpp
+  - private:developer-source/commits/main/bench/bench_allocator.cpp
+  - private:developer-source/issues?q=is%3Aissue
+  - private:developer-source/pulls?q=is%3Apr
+  - private:developer-source/actions
+  - private:developer-source/actions/runs/33828450197
 - **Raw records:** [data/wave1-phf/verified.json](../../../data/wave1-phf/verified.json) (id `private:developer-source#allocators`) · [data/wave1-phf/enrich/raw/private_developer_source_allocators.json](../../../data/wave1-phf/enrich/raw/private_developer_source_allocators.json) (enrichment confidence 0.88)
 
 </details>

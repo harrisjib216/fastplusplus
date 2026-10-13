@@ -42,8 +42,10 @@ those outputs. Reader docs are in `docs/` (the build history is `docs/build-log.
   it forward. Its first section, "Unfinished work", is the open backlog of the wave loop (deferred
   searches, retier checks, seed passes); resume from there and keep it current.
 - **Developer source repo:** it is private for now (the user will make it public when ready), so its entries are
-  capped at tier C and link to a 404 until then. Do not change its visibility or modify its checkout
-  without an explicit instruction.
+  capped at tier C. Its 8 entries carry ids `private:developer-source[#category]`,
+  `repo_url` and `benchmark_url` read `private:developer-source...`, and pages show "private
+  repository, not published yet". When it is published, record `repo_url` overrides and re-check the tier. Do
+  not change its visibility or modify its checkout without an explicit instruction.
 - Hard-to-reverse actions need the user's confirmation.
 
 ## Privacy and security (repeat these in every agent prompt)

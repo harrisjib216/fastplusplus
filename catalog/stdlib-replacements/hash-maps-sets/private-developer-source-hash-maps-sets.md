@@ -16,7 +16,7 @@
 | **Compiler and flags** | gcc 13.3.0, -O2 -g -DNDEBUG -std=c++20 -march=native (RelWithDebInfo). String row: run 2026-09-02-core, commit dfa74f2. 1M rows: re-measured with bench_vs_libraries at commit 2e21aae (run 2026-09-02-libraries, same flags), although the rows are tagged 2026-09-02-core. |
 | **Adoption** | 0 stars (private repo) |
 | **Last commit** | 2026-09-04 |
-| **Links** | [repository](private:developer-source) · [benchmark](private:developer-source/blob/main/results/fastest.json) |
+| **Links** | private repository, not published yet |
 
 ## Verdict
 
@@ -82,59 +82,59 @@ The repo (private:developer-source) is PRIVATE, so readers need access to see th
 - **Verifier notes:** All figures (5.52x, 2.18x, 18.911/33.687, 9.723/44.665, phmap 1.29x/1.39x, 38.07ns) match results/fastest.json and README; the derived 1.78x/4.59x are correct. Git history shows the 1M rows came from bench_vs_libraries (which reserves before building), not bench_hash_map, so I reworded the build claim, workload and compiler_and_flags and added the superseded original figures to caveats. MIT, last commit 2026-09-04, 0 stars, private: confirmed.
 - **Fields the verifier corrected:** `claimed_speedup`, `workload`, `compiler_and_flags`, `caveats`
 - **Pages the verifier opened:**
-  - <private:developer-source>
-  - <private:developer-source/commits/main>
-  - <private:developer-source/blob/main/results/fastest.json>
-  - <private:developer-source/blob/b89b9dc/results/fastest.json>
-  - <private:developer-source/blob/main/bench/bench_hash_map.cpp>
-  - <private:developer-source/blob/main/bench/bench_vs_libraries.cpp>
-  - <private:developer-source/blob/main/bench/bench_harness.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/container/flat_hash_map.hpp>
-  - <private:developer-source/blob/main/third_party/parallel-hashmap/VENDORING.md>
-  - <private:developer-source/commit/2e21aae>
-  - <private:developer-source/blob/main/README.md>
-  - <private:developer-source/blob/main/LICENSE>
-  - <private:developer-source/blob/main/CMakeLists.txt>
-  - <private:developer-source/blob/main/CMakePresets.json>
-  - <private:developer-source/commits/main/bench/bench_hash_map.cpp>
-  - <private:developer-source/commits/main/bench/bench_vs_libraries.cpp>
-  - <private:developer-source/commits/main/results/fastest.json>
+  - private:developer-source
+  - private:developer-source/commits/main
+  - private:developer-source/blob/main/results/fastest.json
+  - private:developer-source/blob/b89b9dc/results/fastest.json
+  - private:developer-source/blob/main/bench/bench_hash_map.cpp
+  - private:developer-source/blob/main/bench/bench_vs_libraries.cpp
+  - private:developer-source/blob/main/bench/bench_harness.hpp
+  - private:developer-source/blob/main/include/fastcpp/container/flat_hash_map.hpp
+  - private:developer-source/blob/main/third_party/parallel-hashmap/VENDORING.md
+  - private:developer-source/commit/2e21aae
+  - private:developer-source/blob/main/README.md
+  - private:developer-source/blob/main/LICENSE
+  - private:developer-source/blob/main/CMakeLists.txt
+  - private:developer-source/blob/main/CMakePresets.json
+  - private:developer-source/commits/main/bench/bench_hash_map.cpp
+  - private:developer-source/commits/main/bench/bench_vs_libraries.cpp
+  - private:developer-source/commits/main/results/fastest.json
 - **Sources the enricher read:**
-  - <private:developer-source>
-  - <private:developer-source/blob/main/README.md>
-  - <private:developer-source/blob/main/include/fastcpp/container/flat_hash_map.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/hash/hash.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/hash/hashers.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/hash/mix.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/core/cpu.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/core/bits.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/core/macros.hpp>
-  - <private:developer-source/blob/main/CMakeLists.txt>
-  - <private:developer-source/blob/main/CMakePresets.json>
-  - <private:developer-source/blob/main/results/fastest.json>
-  - <private:developer-source/blob/main/bench/bench_hash_map.cpp>
-  - <private:developer-source/blob/main/bench/bench_harness.hpp>
-  - <private:developer-source/blob/main/bench/bench_vs_libraries.cpp>
-  - <private:developer-source/blob/main/bench/bench_phf.cpp>
-  - <private:developer-source/blob/main/bench/bench_doing_less.cpp>
-  - <private:developer-source/blob/main/bench/bench_ordered_map.cpp>
-  - <private:developer-source/blob/main/bench/CMakeLists.txt>
-  - <private:developer-source/blob/main/third_party/parallel-hashmap/VENDORING.md>
-  - <private:developer-source/blob/main/.github/workflows/ci.yml>
-  - <private:developer-source/blob/main/tests/test_containers.cpp>
-  - <private:developer-source/commits/main>
-  - <private:developer-source/commits/main/include/fastcpp/container/flat_hash_map.hpp>
-  - <private:developer-source/commits/main/include/fastcpp/hash/hash.hpp>
-  - <private:developer-source/issues>
-  - <private:developer-source/pulls>
-  - <private:developer-source/releases>
-  - <private:developer-source/tags>
-  - <private:developer-source/actions>
-  - <private:developer-source/actions/runs/33828450197>
-  - <private:developer-source/actions/runs/33699193714>
-  - <private:developer-source/actions/runs/33687120995>
-  - <private:developer-source/actions/runs/33691577660>
-  - <private:developer-source/actions/runs/33697167443>
+  - private:developer-source
+  - private:developer-source/blob/main/README.md
+  - private:developer-source/blob/main/include/fastcpp/container/flat_hash_map.hpp
+  - private:developer-source/blob/main/include/fastcpp/hash/hash.hpp
+  - private:developer-source/blob/main/include/fastcpp/hash/hashers.hpp
+  - private:developer-source/blob/main/include/fastcpp/hash/mix.hpp
+  - private:developer-source/blob/main/include/fastcpp/core/cpu.hpp
+  - private:developer-source/blob/main/include/fastcpp/core/bits.hpp
+  - private:developer-source/blob/main/include/fastcpp/core/macros.hpp
+  - private:developer-source/blob/main/CMakeLists.txt
+  - private:developer-source/blob/main/CMakePresets.json
+  - private:developer-source/blob/main/results/fastest.json
+  - private:developer-source/blob/main/bench/bench_hash_map.cpp
+  - private:developer-source/blob/main/bench/bench_harness.hpp
+  - private:developer-source/blob/main/bench/bench_vs_libraries.cpp
+  - private:developer-source/blob/main/bench/bench_phf.cpp
+  - private:developer-source/blob/main/bench/bench_doing_less.cpp
+  - private:developer-source/blob/main/bench/bench_ordered_map.cpp
+  - private:developer-source/blob/main/bench/CMakeLists.txt
+  - private:developer-source/blob/main/third_party/parallel-hashmap/VENDORING.md
+  - private:developer-source/blob/main/.github/workflows/ci.yml
+  - private:developer-source/blob/main/tests/test_containers.cpp
+  - private:developer-source/commits/main
+  - private:developer-source/commits/main/include/fastcpp/container/flat_hash_map.hpp
+  - private:developer-source/commits/main/include/fastcpp/hash/hash.hpp
+  - private:developer-source/issues
+  - private:developer-source/pulls
+  - private:developer-source/releases
+  - private:developer-source/tags
+  - private:developer-source/actions
+  - private:developer-source/actions/runs/33828450197
+  - private:developer-source/actions/runs/33699193714
+  - private:developer-source/actions/runs/33687120995
+  - private:developer-source/actions/runs/33691577660
+  - private:developer-source/actions/runs/33697167443
 - **Raw records:** [data/wave1-phf/verified.json](../../../data/wave1-phf/verified.json) (id `private:developer-source#hash-maps-sets`) · [data/wave1-phf/enrich/raw/private_developer_source_hash_maps_sets.json](../../../data/wave1-phf/enrich/raw/private_developer_source_hash_maps_sets.json) (enrichment confidence 0.82)
 
 </details>

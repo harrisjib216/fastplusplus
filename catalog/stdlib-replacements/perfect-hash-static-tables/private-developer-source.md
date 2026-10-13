@@ -16,7 +16,7 @@
 | **Compiler and flags** | gcc 13.3.0, -O2 -g -DNDEBUG -std=c++20 -march=native (CMake RelWithDebInfo, 'release' preset) |
 | **Adoption** | 0 stars (private repo, not independently discoverable) |
 | **Last commit** | 2026-09-04 |
-| **Links** | [repository](private:developer-source) · [benchmark](private:developer-source/blob/main/results/fastest.json) |
+| **Links** | private repository, not published yet |
 
 ## Verdict
 
@@ -86,50 +86,50 @@ The repo is currently private, so the public gets a 404, and it has 0 stars, no 
 - **Verifier notes:** All three std::unordered_map numbers match results/fastest.json exactly. bench/bench_phf.cpp at commit dfa74f2 is identical to HEAD. The phmap 3.7x figure is 19.787/5.322 ns (3.72x). The orchestrator should decide whether a private repo can go in COPYABLE at all. It has an MIT license, but the public cannot get the code.
 - **Fields the verifier corrected:** `caveats`
 - **Pages the verifier opened:**
-  - <private:developer-source>
-  - <private:developer-source/blob/main/results/fastest.json>
-  - <private:developer-source/blob/main/bench/bench_phf.cpp>
-  - <private:developer-source/blob/dfa74f2328b4dc52c99cc64352d20f063818e3d2/bench/bench_phf.cpp>
-  - <private:developer-source/blob/main/bench/bench_vs_libraries.cpp>
-  - <private:developer-source/blob/2e21aae/bench/bench_vs_libraries.cpp>
-  - <private:developer-source/blob/main/bench/CMakeLists.txt>
-  - <private:developer-source/blob/main/CMakeLists.txt>
-  - <private:developer-source/blob/main/CMakePresets.json>
-  - <private:developer-source/blob/main/include/fastcpp/phf/keyword_sets.hpp>
-  - <private:developer-source/blob/main/README.md>
-  - <private:developer-source/blob/main/LICENSE>
-  - <private:developer-source/commit/dfa74f2328b4dc52c99cc64352d20f063818e3d2>
+  - private:developer-source
+  - private:developer-source/blob/main/results/fastest.json
+  - private:developer-source/blob/main/bench/bench_phf.cpp
+  - private:developer-source/blob/dfa74f2328b4dc52c99cc64352d20f063818e3d2/bench/bench_phf.cpp
+  - private:developer-source/blob/main/bench/bench_vs_libraries.cpp
+  - private:developer-source/blob/2e21aae/bench/bench_vs_libraries.cpp
+  - private:developer-source/blob/main/bench/CMakeLists.txt
+  - private:developer-source/blob/main/CMakeLists.txt
+  - private:developer-source/blob/main/CMakePresets.json
+  - private:developer-source/blob/main/include/fastcpp/phf/keyword_sets.hpp
+  - private:developer-source/blob/main/README.md
+  - private:developer-source/blob/main/LICENSE
+  - private:developer-source/commit/dfa74f2328b4dc52c99cc64352d20f063818e3d2
 - **Sources the enricher read:**
-  - <private:developer-source>
-  - <private:developer-source/blob/main/README.md>
-  - <private:developer-source/blob/main/include/fastcpp/phf/perfect_hash_table.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/phf/builder.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/phf/character_selection.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/phf/keyword_sets.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/hash/hashers.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/hash/crc32c.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/hash/lehmer.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/hash/mix.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/core/bits.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/core/cpu.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/core/macros.hpp>
-  - <private:developer-source/blob/main/bench/bench_phf.cpp>
-  - <private:developer-source/blob/main/bench/bench_vs_libraries.cpp>
-  - <private:developer-source/blob/2e21aae/bench/bench_vs_libraries.cpp>
-  - <private:developer-source/commit/2e21aae>
-  - <private:developer-source/blob/main/bench/CMakeLists.txt>
-  - <private:developer-source/blob/main/results/fastest.json>
-  - <private:developer-source/blob/main/CMakeLists.txt>
-  - <private:developer-source/blob/dfa74f2328b4dc52c99cc64352d20f063818e3d2/CMakeLists.txt>
-  - <private:developer-source/commit/dfa74f2328b4dc52c99cc64352d20f063818e3d2>
-  - <private:developer-source/blob/main/CMakePresets.json>
-  - <private:developer-source/blob/main/.github/workflows/ci.yml>
-  - <private:developer-source/blob/main/tests/test_phf.cpp>
-  - <private:developer-source/blob/main/support/corpus.hpp>
-  - <private:developer-source/blob/main/third_party/parallel-hashmap/VENDORING.md>
-  - <private:developer-source/issues/1>
-  - <private:developer-source/actions>
-  - <private:developer-source/actions/runs/33828450197>
+  - private:developer-source
+  - private:developer-source/blob/main/README.md
+  - private:developer-source/blob/main/include/fastcpp/phf/perfect_hash_table.hpp
+  - private:developer-source/blob/main/include/fastcpp/phf/builder.hpp
+  - private:developer-source/blob/main/include/fastcpp/phf/character_selection.hpp
+  - private:developer-source/blob/main/include/fastcpp/phf/keyword_sets.hpp
+  - private:developer-source/blob/main/include/fastcpp/hash/hashers.hpp
+  - private:developer-source/blob/main/include/fastcpp/hash/crc32c.hpp
+  - private:developer-source/blob/main/include/fastcpp/hash/lehmer.hpp
+  - private:developer-source/blob/main/include/fastcpp/hash/mix.hpp
+  - private:developer-source/blob/main/include/fastcpp/core/bits.hpp
+  - private:developer-source/blob/main/include/fastcpp/core/cpu.hpp
+  - private:developer-source/blob/main/include/fastcpp/core/macros.hpp
+  - private:developer-source/blob/main/bench/bench_phf.cpp
+  - private:developer-source/blob/main/bench/bench_vs_libraries.cpp
+  - private:developer-source/blob/2e21aae/bench/bench_vs_libraries.cpp
+  - private:developer-source/commit/2e21aae
+  - private:developer-source/blob/main/bench/CMakeLists.txt
+  - private:developer-source/blob/main/results/fastest.json
+  - private:developer-source/blob/main/CMakeLists.txt
+  - private:developer-source/blob/dfa74f2328b4dc52c99cc64352d20f063818e3d2/CMakeLists.txt
+  - private:developer-source/commit/dfa74f2328b4dc52c99cc64352d20f063818e3d2
+  - private:developer-source/blob/main/CMakePresets.json
+  - private:developer-source/blob/main/.github/workflows/ci.yml
+  - private:developer-source/blob/main/tests/test_phf.cpp
+  - private:developer-source/blob/main/support/corpus.hpp
+  - private:developer-source/blob/main/third_party/parallel-hashmap/VENDORING.md
+  - private:developer-source/issues/1
+  - private:developer-source/actions
+  - private:developer-source/actions/runs/33828450197
 - **Raw records:** [data/wave1-phf/verified.json](../../../data/wave1-phf/verified.json) (id `private:developer-source`) · [data/wave1-phf/enrich/raw/private_developer_source.json](../../../data/wave1-phf/enrich/raw/private_developer_source.json) (enrichment confidence 0.85)
 
 </details>

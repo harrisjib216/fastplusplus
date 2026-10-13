@@ -16,7 +16,7 @@
 | **Compiler and flags** | gcc 13.3.0, -O3 -march=native -std=c++23 (benchmarks force -O3 via fastcpp_bench_opt in root CMakeLists; run label 2026-09-04-algorithms) |
 | **Adoption** | 0 stars (private repository, not publicly discoverable) |
 | **Last commit** | 2026-09-04 |
-| **Links** | [repository](private:developer-source) · [benchmark](private:developer-source/blob/main/results/fastest.json) |
+| **Links** | private repository, not published yet |
 
 ## Verdict
 
@@ -82,37 +82,37 @@ Active but brand new: the repo is private (private:developer-source, 0 stars) an
 - **Verifier notes:** The main numbers check out exactly against fastest.json: 6.63/3.42/2.28/2.86/4.30 recompute from the page's ns values, and 0.93x is the inverse of the page's 1.07x std::sort win. The only precision fix is where 2.33x/1.71x/1.55x come from: the commit message and README, not benchmark_url. Metadata is confirmed via gh: MIT (spdx MIT), not a fork, not archived, private, 0 stars, last commit 2026-09-04 (active). The sort is a first-party pdqsort-style reimplementation crediting Edelkamp & Weiss BlockQuicksort; it is not a vendored copy of pdqsort.
 - **Fields the verifier corrected:** `claimed_speedup`, `caveats`
 - **Pages the verifier opened:**
-  - <private:developer-source>
-  - <private:developer-source/blob/main/results/fastest.json>
-  - <private:developer-source/blob/main/bench/bench_sort.cpp>
-  - <private:developer-source/blob/main/README.md>
-  - <private:developer-source/blob/main/CMakeLists.txt>
-  - <private:developer-source/blob/main/CMakePresets.json>
-  - <private:developer-source/blob/main/bench/CMakeLists.txt>
-  - <private:developer-source/blob/main/LICENSE>
-  - <private:developer-source/blob/main/include/fastcpp/algo/sort.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/algo/radix_sort.hpp>
-  - <private:developer-source/commit/2fa7d3df006a9e4bc58c863c651d5fefe721f9e3>
+  - private:developer-source
+  - private:developer-source/blob/main/results/fastest.json
+  - private:developer-source/blob/main/bench/bench_sort.cpp
+  - private:developer-source/blob/main/README.md
+  - private:developer-source/blob/main/CMakeLists.txt
+  - private:developer-source/blob/main/CMakePresets.json
+  - private:developer-source/blob/main/bench/CMakeLists.txt
+  - private:developer-source/blob/main/LICENSE
+  - private:developer-source/blob/main/include/fastcpp/algo/sort.hpp
+  - private:developer-source/blob/main/include/fastcpp/algo/radix_sort.hpp
+  - private:developer-source/commit/2fa7d3df006a9e4bc58c863c651d5fefe721f9e3
 - **Sources the enricher read:**
-  - <private:developer-source>
-  - <private:developer-source/blob/main/README.md>
-  - <private:developer-source/blob/main/include/fastcpp/algo/sort.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/algo/radix_sort.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/algo/sorting_network.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/core/macros.hpp>
-  - <private:developer-source/blob/main/bench/bench_sort.cpp>
-  - <private:developer-source/blob/main/bench/bench_harness.hpp>
-  - <private:developer-source/blob/main/bench/CMakeLists.txt>
-  - <private:developer-source/blob/main/tests/test_sort.cpp>
-  - <private:developer-source/blob/main/results/fastest.json>
-  - <private:developer-source/blob/main/CMakeLists.txt>
-  - <private:developer-source/blob/main/CMakePresets.json>
-  - <private:developer-source/blob/main/.github/workflows/ci.yml>
-  - <private:developer-source/commit/2fa7d3df006a9e4bc58c863c651d5fefe721f9e3>
-  - <private:developer-source/commits/main>
-  - <private:developer-source/issues>
-  - <private:developer-source/actions>
-  - <private:developer-source/actions/runs/33828450197>
+  - private:developer-source
+  - private:developer-source/blob/main/README.md
+  - private:developer-source/blob/main/include/fastcpp/algo/sort.hpp
+  - private:developer-source/blob/main/include/fastcpp/algo/radix_sort.hpp
+  - private:developer-source/blob/main/include/fastcpp/algo/sorting_network.hpp
+  - private:developer-source/blob/main/include/fastcpp/core/macros.hpp
+  - private:developer-source/blob/main/bench/bench_sort.cpp
+  - private:developer-source/blob/main/bench/bench_harness.hpp
+  - private:developer-source/blob/main/bench/CMakeLists.txt
+  - private:developer-source/blob/main/tests/test_sort.cpp
+  - private:developer-source/blob/main/results/fastest.json
+  - private:developer-source/blob/main/CMakeLists.txt
+  - private:developer-source/blob/main/CMakePresets.json
+  - private:developer-source/blob/main/.github/workflows/ci.yml
+  - private:developer-source/commit/2fa7d3df006a9e4bc58c863c651d5fefe721f9e3
+  - private:developer-source/commits/main
+  - private:developer-source/issues
+  - private:developer-source/actions
+  - private:developer-source/actions/runs/33828450197
 - **Raw records:** [data/wave1-phf/verified.json](../../../data/wave1-phf/verified.json) (id `private:developer-source#sorting`) · [data/wave1-phf/enrich/raw/private_developer_source_sorting.json](../../../data/wave1-phf/enrich/raw/private_developer_source_sorting.json) (enrichment confidence 0.82)
 
 </details>

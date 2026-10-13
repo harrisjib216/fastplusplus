@@ -16,7 +16,7 @@
 | **Compiler and flags** | gcc 13.3.0, -O2 -g -DNDEBUG -std=c++20 -march=native (RelWithDebInfo; run label 2026-09-02-core) |
 | **Adoption** | 0 stars (private repository) |
 | **Last commit** | 2026-09-04 |
-| **Links** | [repository](private:developer-source) · [benchmark](private:developer-source/blob/main/results/fastest.json) |
+| **Links** | private repository, not published yet |
 
 ## Verdict
 
@@ -81,37 +81,37 @@ The repo is private (0 stars; only readable with access) and saw a single 13-com
 - **Verifier notes:** All numbers (5.83x, 1.91x, 80.132ns, 3.96x vs 317.093ns, derived 5.34x) match results/fastest.json and the bench source. I only added the repo's own instability flags and the missing Eytzinger checksum validation to caveats, and made the workload precise (20k queries, n = 4,194,304).
 - **Fields the verifier corrected:** `workload`, `caveats`
 - **Pages the verifier opened:**
-  - <private:developer-source>
-  - <private:developer-source/commits/main>
-  - <private:developer-source/blob/main/results/fastest.json>
-  - <private:developer-source/blob/main/bench/bench_doing_less.cpp>
-  - <private:developer-source/blob/main/bench/bench_harness.hpp>
-  - <private:developer-source/blob/main/README.md>
-  - <private:developer-source/blob/main/LICENSE>
-  - <private:developer-source/blob/main/include/fastcpp/algo/binary_search.hpp>
+  - private:developer-source
+  - private:developer-source/commits/main
+  - private:developer-source/blob/main/results/fastest.json
+  - private:developer-source/blob/main/bench/bench_doing_less.cpp
+  - private:developer-source/blob/main/bench/bench_harness.hpp
+  - private:developer-source/blob/main/README.md
+  - private:developer-source/blob/main/LICENSE
+  - private:developer-source/blob/main/include/fastcpp/algo/binary_search.hpp
 - **Sources the enricher read:**
-  - <private:developer-source>
-  - <private:developer-source/blob/main/README.md>
-  - <private:developer-source/blob/main/include/fastcpp/algo/binary_search.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/core/macros.hpp>
-  - <private:developer-source/blob/main/bench/bench_doing_less.cpp>
-  - <private:developer-source/blob/main/bench/bench_harness.hpp>
-  - <private:developer-source/blob/main/bench/CMakeLists.txt>
-  - <private:developer-source/blob/main/results/fastest.json>
-  - <private:developer-source/blob/main/tests/test_containers.cpp>
-  - <private:developer-source/blob/main/tests/test_core.cpp>
-  - <private:developer-source/blob/main/tests/test_sort.cpp>
-  - <private:developer-source/blob/main/tests/test_strings.cpp>
-  - <private:developer-source/blob/main/tests/test_phf.cpp>
-  - <private:developer-source/blob/main/CMakeLists.txt>
-  - <private:developer-source/blob/main/.github/workflows/ci.yml>
-  - <private:developer-source/blob/main/LICENSE>
-  - <private:developer-source/issues>
-  - <private:developer-source/commits/main>
-  - <private:developer-source/commits/main/include/fastcpp/algo/binary_search.hpp>
-  - <private:developer-source/commit/6c81a90>
-  - <private:developer-source/actions>
-  - <private:developer-source/actions/runs/33828450197>
+  - private:developer-source
+  - private:developer-source/blob/main/README.md
+  - private:developer-source/blob/main/include/fastcpp/algo/binary_search.hpp
+  - private:developer-source/blob/main/include/fastcpp/core/macros.hpp
+  - private:developer-source/blob/main/bench/bench_doing_less.cpp
+  - private:developer-source/blob/main/bench/bench_harness.hpp
+  - private:developer-source/blob/main/bench/CMakeLists.txt
+  - private:developer-source/blob/main/results/fastest.json
+  - private:developer-source/blob/main/tests/test_containers.cpp
+  - private:developer-source/blob/main/tests/test_core.cpp
+  - private:developer-source/blob/main/tests/test_sort.cpp
+  - private:developer-source/blob/main/tests/test_strings.cpp
+  - private:developer-source/blob/main/tests/test_phf.cpp
+  - private:developer-source/blob/main/CMakeLists.txt
+  - private:developer-source/blob/main/.github/workflows/ci.yml
+  - private:developer-source/blob/main/LICENSE
+  - private:developer-source/issues
+  - private:developer-source/commits/main
+  - private:developer-source/commits/main/include/fastcpp/algo/binary_search.hpp
+  - private:developer-source/commit/6c81a90
+  - private:developer-source/actions
+  - private:developer-source/actions/runs/33828450197
 - **Raw records:** [data/wave1-phf/verified.json](../../../data/wave1-phf/verified.json) (id `private:developer-source#searching`) · [data/wave1-phf/enrich/raw/private_developer_source_searching.json](../../../data/wave1-phf/enrich/raw/private_developer_source_searching.json) (enrichment confidence 0.85)
 
 </details>

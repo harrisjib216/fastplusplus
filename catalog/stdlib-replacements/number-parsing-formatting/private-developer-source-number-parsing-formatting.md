@@ -16,7 +16,7 @@
 | **Compiler and flags** | gcc 13.3.0, -O2 -g -DNDEBUG -std=c++20 -march=native (RelWithDebInfo), commit dfa74f2 (run id '2026-09-02-core') |
 | **Adoption** | 0 stars (private repository) |
 | **Last commit** | 2026-09-04 |
-| **Links** | [repository](private:developer-source) · [benchmark](private:developer-source/blob/main/results/fastest.json) |
+| **Links** | private repository, not published yet |
 
 ## Verdict
 
@@ -81,49 +81,49 @@ Lives in a PRIVATE repository (private:developer-source, 0 stars, not publicly b
 - **Verifier notes:** Every number checks out against results/fastest.json and bench/bench_doing_less.cpp (20k values, min of 7 samples, 30ms budget per bench_harness.hpp). I fixed three things: marked the cross-alternative ratios as derived; the 'HONEST CAVEAT' quote is in results/fastest.json, not the README; the 'single commit in this repo's history' wording was wrong (13 commits exist, only one touches parse.hpp). The UB claim is verified from the CI job log.
 - **Fields the verifier corrected:** `claimed_speedup`, `caveats`
 - **Pages the verifier opened:**
-  - <private:developer-source>
-  - <private:developer-source/commits/main>
-  - <private:developer-source/blob/main/results/fastest.json>
-  - <private:developer-source/blob/main/bench/bench_doing_less.cpp>
-  - <private:developer-source/blob/main/bench/bench_harness.hpp>
-  - <private:developer-source/blob/main/README.md>
-  - <private:developer-source/blob/main/LICENSE>
-  - <private:developer-source/blob/main/include/fastcpp/string/parse.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/string/itoa.hpp>
-  - <private:developer-source/blob/main/tests/test_strings.cpp>
-  - <private:developer-source/blob/main/.github/workflows/ci.yml>
-  - <private:developer-source/blob/main/CMakePresets.json>
-  - <private:developer-source/actions/runs/33828450197>
-  - <private:developer-source/actions/runs/33828450197/job/100886052547>
+  - private:developer-source
+  - private:developer-source/commits/main
+  - private:developer-source/blob/main/results/fastest.json
+  - private:developer-source/blob/main/bench/bench_doing_less.cpp
+  - private:developer-source/blob/main/bench/bench_harness.hpp
+  - private:developer-source/blob/main/README.md
+  - private:developer-source/blob/main/LICENSE
+  - private:developer-source/blob/main/include/fastcpp/string/parse.hpp
+  - private:developer-source/blob/main/include/fastcpp/string/itoa.hpp
+  - private:developer-source/blob/main/tests/test_strings.cpp
+  - private:developer-source/blob/main/.github/workflows/ci.yml
+  - private:developer-source/blob/main/CMakePresets.json
+  - private:developer-source/actions/runs/33828450197
+  - private:developer-source/actions/runs/33828450197/job/100886052547
 - **Sources the enricher read:**
-  - <private:developer-source>
-  - <private:developer-source/tree/main>
-  - <private:developer-source/commits/main>
-  - <private:developer-source/commits/main/include/fastcpp/string/parse.hpp>
-  - <private:developer-source/commits/main/include/fastcpp/string/itoa.hpp>
-  - <private:developer-source/blob/main/README.md>
-  - <private:developer-source/blob/main/include/fastcpp/string/parse.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/string/itoa.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/core/bits.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/core/macros.hpp>
-  - <private:developer-source/blob/main/CMakeLists.txt>
-  - <private:developer-source/blob/main/CMakePresets.json>
-  - <private:developer-source/blob/main/LICENSE>
-  - <private:developer-source/blob/main/results/fastest.json>
-  - <private:developer-source/blob/main/bench/bench_doing_less.cpp>
-  - <private:developer-source/blob/main/bench/bench_harness.hpp>
-  - <private:developer-source/blob/main/tests/test_strings.cpp>
-  - <private:developer-source/blob/main/tests/CMakeLists.txt>
-  - <private:developer-source/blob/main/.github/workflows/ci.yml>
-  - <private:developer-source/actions>
-  - <private:developer-source/actions/runs/33828450197>
-  - <private:developer-source/actions/runs/33828450197/job/100886052547>
-  - <private:developer-source/actions/runs/33828450197/job/100886052702>
-  - <private:developer-source/actions/runs/33828450197/job/100886052824>
-  - <private:developer-source/actions/runs/33828450197/job/100886052892>
-  - <private:developer-source/actions/runs/33828450197/job/100886052902>
-  - <private:developer-source/issues>
-  - <private:developer-source/pulls>
+  - private:developer-source
+  - private:developer-source/tree/main
+  - private:developer-source/commits/main
+  - private:developer-source/commits/main/include/fastcpp/string/parse.hpp
+  - private:developer-source/commits/main/include/fastcpp/string/itoa.hpp
+  - private:developer-source/blob/main/README.md
+  - private:developer-source/blob/main/include/fastcpp/string/parse.hpp
+  - private:developer-source/blob/main/include/fastcpp/string/itoa.hpp
+  - private:developer-source/blob/main/include/fastcpp/core/bits.hpp
+  - private:developer-source/blob/main/include/fastcpp/core/macros.hpp
+  - private:developer-source/blob/main/CMakeLists.txt
+  - private:developer-source/blob/main/CMakePresets.json
+  - private:developer-source/blob/main/LICENSE
+  - private:developer-source/blob/main/results/fastest.json
+  - private:developer-source/blob/main/bench/bench_doing_less.cpp
+  - private:developer-source/blob/main/bench/bench_harness.hpp
+  - private:developer-source/blob/main/tests/test_strings.cpp
+  - private:developer-source/blob/main/tests/CMakeLists.txt
+  - private:developer-source/blob/main/.github/workflows/ci.yml
+  - private:developer-source/actions
+  - private:developer-source/actions/runs/33828450197
+  - private:developer-source/actions/runs/33828450197/job/100886052547
+  - private:developer-source/actions/runs/33828450197/job/100886052702
+  - private:developer-source/actions/runs/33828450197/job/100886052824
+  - private:developer-source/actions/runs/33828450197/job/100886052892
+  - private:developer-source/actions/runs/33828450197/job/100886052902
+  - private:developer-source/issues
+  - private:developer-source/pulls
 - **Raw records:** [data/wave1-phf/verified.json](../../../data/wave1-phf/verified.json) (id `private:developer-source#number-parsing-formatting`) · [data/wave1-phf/enrich/raw/private_developer_source_number_parsing_formatting.json](../../../data/wave1-phf/enrich/raw/private_developer_source_number_parsing_formatting.json) (enrichment confidence 0.85)
 
 </details>

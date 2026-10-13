@@ -85,7 +85,19 @@ def url(u):
 
 
 def link(label, target):
-    return f"[{label}]({url(target)})" if target else label
+    """Markdown link; ids with a non-web scheme (private:, paper:) stay plain text."""
+    if not target or (re.match(r"[a-z][a-z0-9+.-]*:", target) and not re.match(r"https?://", target)):
+        return label
+    return f"[{label}]({url(target)})"
+
+
+def links_cell(e):
+    parts = [link(label, u) for label, u in (("repository", e.get("repo_url")), ("benchmark", e.get("benchmark_url")))
+             if u and re.match(r"https?://", u)]
+    if parts:
+        return " · ".join(parts)
+    return "private repository, not published yet" if str(e.get("repo_url") or "").startswith("private:") \
+        else "paper only"
 
 
 def bullets(items):
@@ -244,9 +256,7 @@ def render_entry(e):
                   ("Same optimization level", yes_no(e.get("same_opt_level"))),
                   ("Why it wins", e.get("why_faster"))]
     facts += [("Adoption", e.get("stars_or_usage")), ("Last commit", e.get("last_commit")),
-              ("Links", " · ".join(filter(None, [link("repository", e.get("repo_url")) if e.get("repo_url") else "",
-                                                 link("benchmark", e.get("benchmark_url"))
-                                                 if e.get("benchmark_url") else ""])) or "paper only")]
+              ("Links", links_cell(e))]
     out.append("| | |\n|---|---|\n" + "\n".join(f"| **{k}** | {val if k == 'Links' else cell(val)} |"
                                                 for k, val in facts if val not in (None, "")))
     sections = [("Verdict", esc(x.get("verified_claims_summary"))),

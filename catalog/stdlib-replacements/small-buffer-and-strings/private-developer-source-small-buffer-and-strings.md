@@ -16,7 +16,7 @@
 | **Compiler and flags** | gcc 13.3.0, -O2 -g -DNDEBUG -std=c++20 -march=native (RelWithDebInfo), commit dfa74f2 (run id '2026-09-02-core') |
 | **Adoption** | 0 stars (private repo) |
 | **Last commit** | 2026-09-04 |
-| **Links** | [repository](private:developer-source) · [benchmark](private:developer-source/blob/main/results/fastest.json) |
+| **Links** | private repository, not published yet |
 
 ## Verdict
 
@@ -82,35 +82,35 @@ The repo is PRIVATE (private:developer-source, 0 stars, readable only with acces
 - **Verifier notes:** The 1.856 vs 39.6ns (21.34x) figure matches results/fastest.json and bench/bench_doing_less.cpp exactly. I added the un-reserved std::vector growth caveat (3 mallocs per baseline vector) and the run commit to compiler_and_flags; nothing else needed changing.
 - **Fields the verifier corrected:** `compiler_and_flags`, `caveats`
 - **Pages the verifier opened:**
-  - <private:developer-source>
-  - <private:developer-source/commits/main>
-  - <private:developer-source/blob/main/results/fastest.json>
-  - <private:developer-source/blob/main/bench/bench_doing_less.cpp>
-  - <private:developer-source/blob/main/bench/bench_harness.hpp>
-  - <private:developer-source/blob/main/README.md>
-  - <private:developer-source/blob/main/LICENSE>
-  - <private:developer-source/blob/main/include/fastcpp/container/small_vector.hpp>
+  - private:developer-source
+  - private:developer-source/commits/main
+  - private:developer-source/blob/main/results/fastest.json
+  - private:developer-source/blob/main/bench/bench_doing_less.cpp
+  - private:developer-source/blob/main/bench/bench_harness.hpp
+  - private:developer-source/blob/main/README.md
+  - private:developer-source/blob/main/LICENSE
+  - private:developer-source/blob/main/include/fastcpp/container/small_vector.hpp
 - **Sources the enricher read:**
-  - <private:developer-source>
-  - <private:developer-source/blob/main/README.md>
-  - <private:developer-source/blob/main/LICENSE>
-  - <private:developer-source/blob/main/include/fastcpp/container/small_vector.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/core/bits.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/core/macros.hpp>
-  - <private:developer-source/blob/main/bench/bench_doing_less.cpp>
-  - <private:developer-source/blob/main/bench/bench_harness.hpp>
-  - <private:developer-source/blob/main/results/fastest.json>
-  - <private:developer-source/blob/main/tests/test_containers.cpp>
-  - <private:developer-source/blob/main/CMakeLists.txt>
-  - <private:developer-source/blob/main/.github/workflows/ci.yml>
-  - <private:developer-source/blob/main/include/fastcpp/io/format.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/container/flat_hash_map.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/memory/arena.hpp>
-  - <private:developer-source/issues>
-  - <private:developer-source/pulls>
-  - <private:developer-source/commits/main>
-  - <private:developer-source/commits/main/include/fastcpp/container/small_vector.hpp>
-  - <private:developer-source/commit/dfa74f2>
+  - private:developer-source
+  - private:developer-source/blob/main/README.md
+  - private:developer-source/blob/main/LICENSE
+  - private:developer-source/blob/main/include/fastcpp/container/small_vector.hpp
+  - private:developer-source/blob/main/include/fastcpp/core/bits.hpp
+  - private:developer-source/blob/main/include/fastcpp/core/macros.hpp
+  - private:developer-source/blob/main/bench/bench_doing_less.cpp
+  - private:developer-source/blob/main/bench/bench_harness.hpp
+  - private:developer-source/blob/main/results/fastest.json
+  - private:developer-source/blob/main/tests/test_containers.cpp
+  - private:developer-source/blob/main/CMakeLists.txt
+  - private:developer-source/blob/main/.github/workflows/ci.yml
+  - private:developer-source/blob/main/include/fastcpp/io/format.hpp
+  - private:developer-source/blob/main/include/fastcpp/container/flat_hash_map.hpp
+  - private:developer-source/blob/main/include/fastcpp/memory/arena.hpp
+  - private:developer-source/issues
+  - private:developer-source/pulls
+  - private:developer-source/commits/main
+  - private:developer-source/commits/main/include/fastcpp/container/small_vector.hpp
+  - private:developer-source/commit/dfa74f2
 - **Raw records:** [data/wave1-phf/verified.json](../../../data/wave1-phf/verified.json) (id `private:developer-source#small-buffer-and-strings`) · [data/wave1-phf/enrich/raw/private_developer_source_small_buffer_and_strings.json](../../../data/wave1-phf/enrich/raw/private_developer_source_small_buffer_and_strings.json) (enrichment confidence 0.85)
 
 </details>

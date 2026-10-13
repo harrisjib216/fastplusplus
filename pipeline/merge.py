@@ -31,6 +31,8 @@ FORGES = {"github.com", "codeberg.org", "bitbucket.org"}
 def canonical(url):
     if not url:
         return None
+    if url.startswith("private:"):  # a repository that is not public yet (the private developer source repo)
+        return url.strip().lower()
     u = urlparse(url.strip().lower() if "://" in url else "https://" + url.strip().lower())
     host = u.netloc.removeprefix("www.")
     path = u.path.rstrip("/")
@@ -50,7 +52,7 @@ def short_name(name):
 
 def entry_key(e):
     # an explicit paper: id keeps separate algorithms that share one repo (e.g. SIEVE and S3-FIFO in libCacheSim)
-    if str(e.get("id", "")).startswith(("paper:", "lang:")):
+    if str(e.get("id", "")).startswith(("paper:", "lang:", "private:")):
         return e["id"]
     return canonical(e.get("repo_url")) or "paper:" + re.sub(r"[^a-z0-9]+", "-", e["name"].lower()).strip("-")
 
@@ -82,7 +84,7 @@ def known_urls(exclude_wave_dir=None):
     for f in list(DATA.glob("wave*/merged.json")) + list(DATA.glob("wave*/rejected.json")):
         if exclude_wave_dir and f.parent.resolve() == exclude_wave_dir.resolve():
             continue
-        urls |= {e["id"].split("#")[0] for e in json.loads(f.read_text()) if not e["id"].startswith(("paper:", "lang:"))}
+        urls |= {e["id"].split("#")[0] for e in json.loads(f.read_text()) if not e["id"].startswith(("paper:", "lang:", "private:"))}
     return urls
 
 

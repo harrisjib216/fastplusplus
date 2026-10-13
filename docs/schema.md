@@ -17,7 +17,7 @@ agents; numbers inside them are quoted from the cited source unless marked "(der
 
 | Field | Type | Meaning |
 |---|---|---|
-| `id` | string | Stable id: the canonical repository URL (lowercase), `paper:<slug>` for papers or second claims on a listed repository, or `lang:<language>/<owner>/<repo>#<benchmark>` for cross-language benchmark rows. |
+| `id` | string | Stable id: the canonical repository URL (lowercase), `paper:<slug>` for papers or second claims on a listed repository, `lang:<language>/<owner>/<repo>#<benchmark>` for cross-language benchmark rows, or `private:<name>#<category>` for a repository that is not public yet. |
 | `name` | string | Display name, often with the component that was measured. |
 | `domain` | string | One of the 14 domains, for example `stdlib-replacements`. |
 | `category` | string | Category slug within the domain, for example `hash-maps-sets`. |
@@ -49,7 +49,7 @@ agents; numbers inside them are quoted from the cited source unless marked "(der
 | `license` | string or null | SPDX-style license as found in the repository. |
 | `language` | string | Implementation language, sometimes with detail. |
 | `maintenance_status` | string | `active`, `stale`, `abandoned`, `finished` or `unknown`, sometimes with a note. |
-| `repo_url` | string or null | Repository; null for paper-only entries. |
+| `repo_url` | string or null | Repository; null for paper-only entries, `private:<name>` for a repository that is not public yet. |
 | `benchmark_url` | string or null | The page the numbers come from. |
 | `stars_or_usage` | string | Stars and notable users, as text. |
 | `last_commit` | string | Date of the last commit seen (YYYY-MM-DD). |

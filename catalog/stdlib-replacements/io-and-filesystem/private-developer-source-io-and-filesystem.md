@@ -16,7 +16,7 @@
 | **Compiler and flags** | gcc 13.3.0, -O2 -g -DNDEBUG -std=c++20 -march=native (RelWithDebInfo), commit dfa74f2 (run id '2026-09-02-core') |
 | **Adoption** | 0 stars (private repository) |
 | **Last commit** | 2026-09-04 |
-| **Links** | [repository](private:developer-source) · [benchmark](private:developer-source/blob/main/results/fastest.json) |
+| **Links** | private repository, not published yet |
 
 ## Verdict
 
@@ -82,53 +82,53 @@ Private repo (private:developer-source, readable only with access; 0 stars, 13 c
 - **Verifier notes:** The numbers (2.93 vs 196.803ns, 67.17x, 40,010 -&gt; 4 calls, \~112ns write and \~100ns getppid) all match results/fastest.json and the README. Tracing buffered_writer with capacity 1 accounts for exactly 40,010 calls: 20,000 'line ' writes, 19,999 per-line flushes, 10 extra flushes for single-digit lines and 1 final flush. So the baseline is \~2 syscalls per line, not one, and I corrected baseline, workload and claimed_speedup. It also overruns a 1-byte heap buffer (UB). Tier C is unchanged; MIT, last commit 2026-09-04 and 0 stars are confirmed.
 - **Fields the verifier corrected:** `baseline`, `claimed_speedup`, `workload`, `caveats`
 - **Pages the verifier opened:**
-  - <private:developer-source>
-  - <private:developer-source/commits/main>
-  - <private:developer-source/blob/main/results/fastest.json>
-  - <private:developer-source/blob/main/bench/bench_doing_less.cpp>
-  - <private:developer-source/blob/main/include/fastcpp/io/buffered_writer.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/string/itoa.hpp>
-  - <private:developer-source/blob/main/bench/bench_syscall.cpp>
-  - <private:developer-source/blob/main/bench/bench_harness.hpp>
-  - <private:developer-source/commit/ab9259f>
-  - <private:developer-source/blob/main/README.md>
-  - <private:developer-source/blob/main/LICENSE>
-  - <private:developer-source/blob/main/CMakeLists.txt>
-  - <private:developer-source/blob/main/CMakePresets.json>
-  - <private:developer-source/commits/main/include/fastcpp/io/buffered_writer.hpp>
-  - <private:developer-source/commits/main/bench/bench_doing_less.cpp>
+  - private:developer-source
+  - private:developer-source/commits/main
+  - private:developer-source/blob/main/results/fastest.json
+  - private:developer-source/blob/main/bench/bench_doing_less.cpp
+  - private:developer-source/blob/main/include/fastcpp/io/buffered_writer.hpp
+  - private:developer-source/blob/main/include/fastcpp/string/itoa.hpp
+  - private:developer-source/blob/main/bench/bench_syscall.cpp
+  - private:developer-source/blob/main/bench/bench_harness.hpp
+  - private:developer-source/commit/ab9259f
+  - private:developer-source/blob/main/README.md
+  - private:developer-source/blob/main/LICENSE
+  - private:developer-source/blob/main/CMakeLists.txt
+  - private:developer-source/blob/main/CMakePresets.json
+  - private:developer-source/commits/main/include/fastcpp/io/buffered_writer.hpp
+  - private:developer-source/commits/main/bench/bench_doing_less.cpp
 - **Sources the enricher read:**
-  - <private:developer-source>
-  - <private:developer-source/blob/main/README.md>
-  - <private:developer-source/blob/main/LICENSE>
-  - <private:developer-source/blob/main/include/fastcpp/io/buffered_writer.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/io/format.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/string/itoa.hpp>
-  - <private:developer-source/blob/main/include/fastcpp/core/macros.hpp>
-  - <private:developer-source/blob/main/bench/bench_doing_less.cpp>
-  - <private:developer-source/blob/main/bench/bench_syscall.cpp>
-  - <private:developer-source/blob/main/bench/bench_harness.hpp>
-  - <private:developer-source/blob/main/bench/CMakeLists.txt>
-  - <private:developer-source/blob/main/results/fastest.json>
-  - <private:developer-source/blob/main/tests/test_strings.cpp>
-  - <private:developer-source/blob/main/tests/test_core.cpp>
-  - <private:developer-source/blob/main/tests/test_containers.cpp>
-  - <private:developer-source/blob/main/tests/test_phf.cpp>
-  - <private:developer-source/blob/main/tests/test_sort.cpp>
-  - <private:developer-source/blob/main/tests/test_simdjson_dispatch.cpp>
-  - <private:developer-source/blob/main/tests/CMakeLists.txt>
-  - <private:developer-source/blob/main/CMakeLists.txt>
-  - <private:developer-source/blob/main/CMakePresets.json>
-  - <private:developer-source/blob/main/.github/workflows/ci.yml>
-  - <private:developer-source/commits/main>
-  - <private:developer-source/commits/main/include/fastcpp/io/buffered_writer.hpp>
-  - <private:developer-source/commits/main/bench/bench_doing_less.cpp>
-  - <private:developer-source/commit/ab9259f>
-  - <private:developer-source/commit/dfa74f2>
-  - <private:developer-source/issues>
-  - <private:developer-source/pull/1>
-  - <private:developer-source/actions>
-  - <private:developer-source/actions/runs/33828450197>
+  - private:developer-source
+  - private:developer-source/blob/main/README.md
+  - private:developer-source/blob/main/LICENSE
+  - private:developer-source/blob/main/include/fastcpp/io/buffered_writer.hpp
+  - private:developer-source/blob/main/include/fastcpp/io/format.hpp
+  - private:developer-source/blob/main/include/fastcpp/string/itoa.hpp
+  - private:developer-source/blob/main/include/fastcpp/core/macros.hpp
+  - private:developer-source/blob/main/bench/bench_doing_less.cpp
+  - private:developer-source/blob/main/bench/bench_syscall.cpp
+  - private:developer-source/blob/main/bench/bench_harness.hpp
+  - private:developer-source/blob/main/bench/CMakeLists.txt
+  - private:developer-source/blob/main/results/fastest.json
+  - private:developer-source/blob/main/tests/test_strings.cpp
+  - private:developer-source/blob/main/tests/test_core.cpp
+  - private:developer-source/blob/main/tests/test_containers.cpp
+  - private:developer-source/blob/main/tests/test_phf.cpp
+  - private:developer-source/blob/main/tests/test_sort.cpp
+  - private:developer-source/blob/main/tests/test_simdjson_dispatch.cpp
+  - private:developer-source/blob/main/tests/CMakeLists.txt
+  - private:developer-source/blob/main/CMakeLists.txt
+  - private:developer-source/blob/main/CMakePresets.json
+  - private:developer-source/blob/main/.github/workflows/ci.yml
+  - private:developer-source/commits/main
+  - private:developer-source/commits/main/include/fastcpp/io/buffered_writer.hpp
+  - private:developer-source/commits/main/bench/bench_doing_less.cpp
+  - private:developer-source/commit/ab9259f
+  - private:developer-source/commit/dfa74f2
+  - private:developer-source/issues
+  - private:developer-source/pull/1
+  - private:developer-source/actions
+  - private:developer-source/actions/runs/33828450197
 - **Raw records:** [data/wave1-phf/verified.json](../../../data/wave1-phf/verified.json) (id `private:developer-source#io-and-filesystem`) · [data/wave1-phf/enrich/raw/private_developer_source_io_and_filesystem.json](../../../data/wave1-phf/enrich/raw/private_developer_source_io_and_filesystem.json) (enrichment confidence 0.85)
 
 </details>
