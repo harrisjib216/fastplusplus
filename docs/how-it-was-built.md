@@ -146,7 +146,7 @@ the reason not to trust it in the same place.
 - **A date bump restamped history.** Bumping a closed wave's `today` value restamped every verification date in
   it; the rule now is to keep each wave's original date.
 
-The full set of lessons, as the orchestrating session wrote them down, is in [CLAUDE.md](../CLAUDE.md); the
+The rules and lessons agent sessions follow are in [CLAUDE.md](../CLAUDE.md); the
 per-wave history is in [build-log.md](build-log.md).
 
 ## Reproduce or extend it
