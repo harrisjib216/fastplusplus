@@ -80,7 +80,7 @@ Actively maintained (last commit 2026-07-15, current release 2.0.1) and public-d
 - **Tier reason:** The project's own rpmalloc-benchmark suite (code public, benchmark/ with crt, jemalloc, and others) plots rpmalloc against crt (glibc malloc) on Ubuntu 16.10. CPU model, compiler, and flags are not stated, and results are chart images only, so it is C.
 - **Verifier notes:** The claim text matches BENCHMARKS.md, but no numbers vs crt appear in text. The crt ratios come from 2 of the chart images and are marked approximate. Hoard was removed from the baseline list because it does not appear in the published charts. Repo metadata checks out (MIT, 2,508 stars, last commit 2026-07-15).
 - **Fields the verifier corrected:** `baseline`, `claimed_speedup`, `hardware`, `caveats`
-- **Shortcomings recorded by:** developer source's allocator selection put rpmalloc at about 2x glibc malloc on allocate/free churn (approximate figure, no per-row table published), the same order as jemalloc's measured 2.71x via LD_PRELOAD (11.738 to 4.33 ns). (developer source, private repo; selection measurement cited in docs/allocators.md and results/fastest.json row allocator_churn, run 2026-09-03-third-party)
+- **Shortcomings recorded by:** Developer source's allocator selection put rpmalloc at about 2x glibc malloc on allocate/free churn (approximate figure, no per-row table published), the same order as jemalloc's measured 2.71x via LD_PRELOAD (11.738 to 4.33 ns). (developer source, private repo; selection measurement cited in docs/allocators.md and results/fastest.json row allocator_churn, run 2026-09-03-third-party)
 - **Pages the verifier opened:**
   - <https://github.com/mjansson/rpmalloc>
   - <https://github.com/mjansson/rpmalloc-benchmark>
