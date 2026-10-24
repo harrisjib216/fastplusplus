@@ -45,9 +45,12 @@ extension passes further down. Waves 1-14 are closed (see docs/build-log.md); ex
 7. **Usage-limit lesson:** 15-20 Opus or Sonnet agents at once exhausted the session limit on 2026-10-02 and
    again on 2026-10-06 (nine enrichers killed mid-run; their complete output files were kept). 8-12 at a time,
    recording each report before launching more, runs a full day without a kill.
-8. **Book mining** (added 2026-10-24; waiting on the user to attach C++ books to a cloud session): run
-   `pipeline/books.py` per book, launch one Sonnet miner per chunk, then `seeds_merge.py` and `seed_backfill.py`
-   as for the curated lists (section F, "Books").
+8. **Book mining** (started 2026-10-24): 24 C++ books (EPUB) mined in 87 chunks into
+   `data/seeds/raw/book-*.json`; the merge gave 79 new seeds, 19 of them book-technique repos (mostly Packt
+   companion repos, about 120 techniques). 26 seed passes registered (`w{N}-mine-*`, group 4, each wave's own
+   `today`): w1-mine-ah..am, w2-mine-d..f, w3-mine-j, w4-mine-n, w5-mine-t..u, w6-mine-j..k, w7-mine-f,
+   w8-mine-o, w9-mine-f, w10-mine-u, w11-mine-p..s, w12-mine-h, w13-mine-a, w14-mine-a. Open: run them, then
+   merge, verify, enrich and render per wave. More books: section F, "Books".
 
 Closed waves, for reference: wave 8 (398 then 401 verified), wave 9 (136 then 141), wave 10 (254 then 265),
 wave 11 (144 then 145), wave 12 (220 then 227), wave 13 (303), wave 14 (274); details in docs/build-log.md.
