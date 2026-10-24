@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/bazelbuild/bazel",
+  "one_liner": "Google's client-server build system; beats default-rules GNU Make on large null and incremental builds, loses to Ninja.",
+  "what_it_does": "Bazel builds and tests multi-language projects from BUILD files written in Starlark, where every target declares its sources and direct dependencies. A short-lived client talks to a long-lived per-workspace server that keeps the loaded packages and build graph in memory between invocations. It replaces Makefiles entirely; it is not a drop-in for an existing Make or Ninja build.",
+  "how_it_is_fast": "The persistent server keeps an in-memory analysis cache (Skyframe dependency graph and loaded packages), so a repeat build skips re-reading BUILD files and re-deriving the graph. Actions are keyed by content hashes in an action cache plus a content-addressable store, which can be local or a shared remote cache, and actions can be sent to remote execution. Complete declared dependencies let it rebuild only affected targets and run independent actions in parallel.",
+  "when_to_use": [
+    "Large monorepos (thousands to 100,000+ targets) where developers repeat incremental and no-op builds against a warm server.",
+    "Multi-language builds (C++, Java, Go, Android, iOS) that should share one dependency graph and one cache.",
+    "Teams that can deploy a shared remote cache or remote execution, the speed levers the measured benchmark does not exercise.",
+    "Projects that need sandboxed actions and cache keys stable enough to share outputs between CI and laptops."
+  ],
+  "when_not_to_use": [
+    "Small and medium projects: in the third-party runs, a cold full build of 50 to 100 trivial modules took about 10 to 22 s against well under a second for Make and Ninja.",
+    "When you only need a faster Make: the same benchmark shows Ninja, and Make with --no-builtin-rules --no-builtin-variables, beating Bazel in every row (100,000 modules on x86_64: incremental 10.4 s and 9.5 s against 61.9 s; null 7.1 s and 7.8 s against 20.2 s).",
+    "Memory- or disk-constrained machines: measured memory ran from 242 MB to 4 GB across the x86_64 runs and ~/.cache/bazel reached 26 GB at 100,000 modules; Bazel's docs describe OutOfMemoryError on big builds and memory-saving flags that slow incremental builds (open issue #24527 reports OOM with a 9 GB heap).",
+    "Build steps whose outputs must not be cached (network fetches, deployments) or builds made of a few long sequential steps, per Bazel's own FAQ.",
+    "Codebases that must coexist with other build tools: every target needs a BUILD file, and outputs live under the user cache behind bazel-* symlinks."
+  ],
+  "integration": {
+    "form": "standalone build tool (C++ client plus Java server shipped as one binary), not a library",
+    "dependencies": "none for release binaries; install docs recommend the Bazelisk launcher; rule sets for each language come as external modules",
+    "min_toolchain": "Release binaries; maintained lines 7.7.x, 8.8.x and 9.3.x (9.3.1 latest on 2026-10-21, 10.0.0rc2 in pre-release); porting to a new Unix needs a JDK there",
+    "platforms": "Linux, macOS and Windows official; community packages for FreeBSD, Alpine, Raspberry Pi and ppc64el",
+    "thread_safety": "One server per output base runs one command at a time; concurrent invocations block or fail fast (--block_for_lock)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The idle server stays up for 3 hours by default (--max_idle_secs) and each workspace gets its own server, so scripted builds across many directories accumulate JVMs unless shut down.",
+    "Many command-line flag changes discard the in-memory analysis cache, and startup-option changes restart the server, turning the next build cold.",
+    "linux-sandbox does not nest inside Docker without extra privileges; Bazel then automatically falls back to processwrapper-sandbox (or local) unless the strategy is requested by name.",
+    "Benchmark harness caveats: one timed run per cell, the x86_64 Bazel binary reports 'no_version' (an unstamped build), its disk column excludes the install base that the Arm column includes (6 MB vs 310 MB at 50 modules), and generate.sh deletes the previous ~/.cache/bazel with a background rm -rf that overlaps the next tool's timed full build while the harness never runs bazel shutdown."
+  ],
+  "pick_this_over_siblings_when": "Pick Bazel over Ninja, tup or xmake when you need hermetic multi-language builds with a shared remote cache or remote execution rather than low local overhead, where Ninja measured faster in every row; Buck2 is the closest peer (same BUILD-file model), and ccache is complementary rather than an alternative.",
+  "verified_claims_summary": "A third-party synthetic benchmark (thutt/build-tool-comparator: rules that only touch 0-byte files, -j4, 4-CPU x86_64 and Raspberry Pi Arm boxes, CPU model unstated, one run per cell) found Bazel about 11x faster on incremental and 34x faster on null builds than recursive GNU Make 4.3 with its default built-in rules at 100,000 modules on x86_64. The win disappears once Make's built-in rules are turned off: in every incremental and null row of the same tables, Make with -rR and Ninja 1.11.1 are 1.8x to over 100x faster than Bazel (derived from page data), and Bazel's full builds are the slowest of all tools.",
+  "status_note": "Very actively maintained by Google (several release lines patched in October 2026, 26.0k stars) and Apache-2.0, but adopting it means rewriting the build in BUILD files and running a JVM server.",
+  "sources_read": [
+    "https://github.com/bazelbuild/bazel",
+    "https://raw.githubusercontent.com/bazelbuild/bazel/HEAD/README.md",
+    "https://github.com/bazelbuild/bazel/releases",
+    "https://github.com/bazelbuild/bazel/tree/master/docs",
+    "https://github.com/bazelbuild/bazel/issues?q=is%3Aissue%20state%3Aopen%20label%3Ateam-Performance",
+    "https://raw.githubusercontent.com/bazelbuild/bazel/HEAD/docs/about/faq.mdx",
+    "https://raw.githubusercontent.com/bazelbuild/bazel/HEAD/docs/install/index.mdx",
+    "https://raw.githubusercontent.com/bazelbuild/bazel/HEAD/docs/run/client-server.mdx",
+    "https://raw.githubusercontent.com/bazelbuild/bazel/HEAD/docs/advanced/performance/memory.mdx",
+    "https://raw.githubusercontent.com/bazelbuild/bazel/HEAD/docs/advanced/performance/iteration-speed.mdx",
+    "https://raw.githubusercontent.com/bazelbuild/bazel/HEAD/docs/remote/caching.mdx",
+    "https://raw.githubusercontent.com/bazelbuild/bazel/HEAD/docs/docs/sandboxing.mdx",
+    "https://raw.githubusercontent.com/thutt/build-tool-comparator/HEAD/README.md",
+    "https://raw.githubusercontent.com/thutt/build-tool-comparator/HEAD/scripts/runner.sh",
+    "https://raw.githubusercontent.com/thutt/build-tool-comparator/HEAD/scripts/run_build.py",
+    "https://raw.githubusercontent.com/thutt/build-tool-comparator/HEAD/scripts/build-bazel.sh",
+    "https://raw.githubusercontent.com/thutt/build-tool-comparator/HEAD/scripts/build-ninja.sh",
+    "https://raw.githubusercontent.com/thutt/build-tool-comparator/HEAD/scripts/generate.sh",
+    "https://raw.githubusercontent.com/thutt/build-tool-comparator/HEAD/scripts/modify-most-used-interface.sh",
+    "https://raw.githubusercontent.com/thutt/build-tool-comparator/HEAD/generator/generate.py",
+    "https://raw.githubusercontent.com/thutt/build-tool-comparator/HEAD/generator/bazel.py",
+    "https://raw.githubusercontent.com/thutt/build-tool-comparator/HEAD/generator/rmakefile.py"
+  ],
+  "confidence": 0.7
+}

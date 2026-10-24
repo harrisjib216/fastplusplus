@@ -1,0 +1,48 @@
+{
+  "id": "paper:book-hands-on-design-patterns-with-cpp-second-edition-virtual-call-vs-dynamic-cast",
+  "one_liner": "Teaching idiom: replace a dynamic_cast type test with a virtual member call; book example code, not a library.",
+  "what_it_does": "Chapter01/02_dynamic_cast.C is a 50-line Google Benchmark program that times two ways of acting on a Base* pointing at a Derived: calling the virtual f() 64 times per iteration (BM_virtual) and running dynamic_cast<Derived*> 64 times per iteration (BM_dynamic_cast). The lesson is a design rule: when code asks 'is this a Derived?' only to choose behaviour, move that behaviour into a virtual member and let the vtable choose. There is nothing to link against; you apply the pattern to your own hierarchy.",
+  "how_it_is_fast": "A virtual call loads the vtable pointer, loads the function slot and makes an indirect call; with a single target, as in this benchmark, the indirect branch is always predicted. dynamic_cast instead calls into the C++ ABI runtime (libsupc++ or libc++abi with GCC/Clang, the MSVC runtime), which reads the object's RTTI through the vtable and compares type information before returning the adjusted pointer, so even this best case (one-level hierarchy, cast always succeeds) pays a library call plus type checks.",
+  "when_to_use": [
+    "You own the class hierarchy and hot code branches on dynamic_cast<Derived*>(p) != nullptr to pick behaviour: add a virtual hook in the base and call it instead.",
+    "Loops over heterogeneous object collections that type-test every element before processing; the book figures relayed in the record put the virtual call near 1 ns against 5-10 ns for the cast (about 5-10x, derived).",
+    "Code that would like to build with RTTI disabled (-fno-rtti): virtual dispatch needs no RTTI, a downcasting dynamic_cast does.",
+    "Reviewing hot paths: a quick rule of thumb that an RTTI type test costs several virtual calls, before deciding whether CRTP or std::variant is worth the refactor."
+  ],
+  "when_not_to_use": [
+    "The base class is not yours (third-party or frozen ABI): dynamic_cast, or a visitor, stays the tool.",
+    "The operation does not belong in the base interface: adding one virtual per caller-specific question bloats the base and couples it to every client.",
+    "Cross-casts between sibling bases, casts through virtual inheritance or checks that must fail cleanly with nullptr: the idiom does not answer 'what type is this', and the benchmark covers none of these cases.",
+    "Expecting the 5-10x figure on your code: the benchmark uses the cheapest dynamic_cast (one level, always succeeds, since rand() is never seeded and returns non-zero first), and real cost depends on hierarchy depth, multiple inheritance, failing casts and the ABI runtime.",
+    "The dispatch itself is the bottleneck and the concrete type is known at compile time: CRTP or std::variant removes the indirect call too (see the sibling CRTP entry)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the idiom; the benchmark file needs Google Benchmark (not vendored, version not stated)",
+    "min_toolchain": "any C++11 compiler for the idiom (the file uses override and std::unique_ptr); the repo ships no build files and the README names only GCC, Clang or Visual Studio",
+    "platforms": "any; README lists Windows, Mac OS X and Linux",
+    "thread_safety": "not applicable to the idiom; the benchmark is single-threaded",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Asymmetric harness: BM_dynamic_cast passes every cast result through benchmark::DoNotOptimize, but BM_virtual never observes p->f()'s return value or the member it changes (no DoNotOptimize or ClobberMemory, and the object is deleted after the loop), so a compiler that speculatively devirtualizes and inlines Derived::f can fold the 64 calls; inspect the disassembly before trusting the virtual row.",
+    "The rows do different work: the virtual row runs a loop-carried --i on a heap member (a read-modify-write chain through memory when f is really called), the cast row a side-effect-free type test, so the ratio compares idioms rather than equivalent operations.",
+    "Google Benchmark's time column is per iteration and each iteration does 64 operations; the repo does not say whether the book's 1 ns and 5-10 ns are per operation or per iteration, so compare the items_per_second column (set by SetItemsProcessed(64*iterations)) when rerunning.",
+    "No CMakeLists.txt or Makefile exists for Chapter01, so optimisation level, compiler and Google Benchmark version are up to you; the .C extension is C++ to GCC and Clang, but tools that ignore case may compile it as C (MSVC needs /TP)."
+  ],
+  "pick_this_over_siblings_when": "The CRTP siblings (the same book's chapter 8 entry and Eli Bendersky's benchmark) remove the virtual call itself and need the concrete type at compile time; this entry is the step before that, replacing an RTTI type test with a virtual call when the set of derived types is only known at run time.",
+  "verified_claims_summary": "The book, as relayed by the seed lead and not shown anywhere in the repository, reports about 1 ns for the virtual call against 5-10 ns for dynamic_cast<Derived*> on a one-level hierarchy (about 5-10x, derived), noting that absolute numbers depend on hardware. The repo holds only the Google Benchmark source; compiler, flags, ABI runtime and CPU are not stated, so the result is first-party (tier C) and the virtual row may be inflated by devirtualization.",
+  "status_note": "MIT-licensed Packt companion repo (137 stars, 42 forks, not archived) whose code commits end in 2023 and whose last commit (2024-08-29) only added README errata; stale, but the idiom needs no maintenance and the benchmark is small enough to copy and fix.",
+  "sources_read": [
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/tree/main/Chapter01",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/commits/main",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/Chapter01/02_dynamic_cast.C",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/Chapter01/01_cast.C",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/Chapter08/CMakeLists.txt"
+  ],
+  "confidence": 0.55
+}

@@ -1,0 +1,51 @@
+{
+  "id": "paper:book-rust-for-cpp-developers-unchecked-indexing",
+  "one_liner": "Book example: naive Rust f32 matrix multiply that swaps safe indexing for get_unchecked, about 1.5x over the safe loop (book figure).",
+  "what_it_does": "A teaching step in chapter_10 of the Packt companion repository: an i-j-k triple loop over Vec<Vec<f32>> where the inner-loop reads of a[i][p] and b[p][j] and the output store go through get_unchecked/get_unchecked_mut inside unsafe blocks. It keeps the safe version's signature, fn(Matrix, Matrix) -> Matrix with both matrices taken by value, and is what lib.rs exports as matrix_multiply on a default (non-nightly) build. It is example code, not a published crate.",
+  "how_it_is_fast": "It removes Rust's per-access bounds checks (a compare and branch for a[i][p], b[p] and b[p][j]) from the innermost loop; with jagged Vec<Vec<f32>> storage and the loop bound taken from a[0].len(), the compiler has no proof that those indices are in range, so the safe version keeps the checks inside the loop. Nothing else changes: the loop stays scalar with one sequential f32 accumulator and a column-wise walk of b (the repo's next step, simd.rs, adds f32x4 vectorization by hand), and the summation order matches the safe hoisted-accumulator version, so valid inputs give the same results.",
+  "when_to_use": [
+    "As a worked, minimal illustration of what bounds checks cost in a hot Rust inner loop before you decide to use unsafe in your own code.",
+    "Porting a C++ loop that relied on unchecked operator[] when profiling shows the Rust bounds checks dominate and the shapes are validated once at the API boundary.",
+    "Small dense f32 products (the bench uses 100x100) inside code that cannot take a BLAS or linear-algebra dependency and whose callers you control.",
+    "As one step of the chapter's sequence (original, hoisted accumulator, unchecked indexing, unchecked init, SIMD) when teaching or learning Rust optimization with Criterion."
+  ],
+  "when_not_to_use": [
+    "Any real matrix workload: the repo has no BLAS, ndarray, nalgebra, faer or C++ comparison, and the book's 359 microseconds for 100x100 works out to about 5.6 GFLOPS (derived from the quoted figure), far below the optimized GEMM entries in this category.",
+    "Inputs whose shapes you do not control: ragged rows or a b with fewer than a[0].len() rows read out of bounds, which is undefined behaviour instead of the safe version's panic.",
+    "Crates that forbid unsafe code; the safe hoisted-accumulator version in the same file is the fallback, about 1.5x slower by the book's figure.",
+    "Large matrices or multithreaded use: single-threaded, each row is a separate heap allocation and b is walked by column; nothing beyond 100x100 is benchmarked in the repo."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the function itself (the chapter crate pulls rand 0.8, elapsed 0.1 and flame 0.2; criterion 0.5 for the bench)",
+    "min_toolchain": "Rust 1.82.0 or newer per the repo README (stable; nightly only for the later SIMD step)",
+    "platforms": "any (portable scalar Rust, no target-specific code)",
+    "thread_safety": "Pure function over owned inputs with no shared state; not documented beyond that",
+    "drop_in_for_baseline": "partial: same fn(Matrix, Matrix) -> Matrix signature as matrix_multiply_indexing_opt, but mismatched or ragged shapes become undefined behaviour instead of a panic"
+  },
+  "gotchas": [
+    "Unsound safe API: it is a plain pub fn whose unsafe blocks never check that rows are rectangular or that b has at least a[0].len() rows, so safe callers can trigger undefined behaviour; only empty inputs still panic (on a[0] or b[0]).",
+    "The Criterion bench (benches/multiply.rs) clones both 100x100 inputs and allocates and drops the result matrix inside the timed closure, so allocation and copying add a fixed cost to every step and compress the ratios between steps.",
+    "Which version is timed is chosen by a compile-time alias in lib.rs (pub use ... as matrix_multiply), so comparing two steps needs a source edit and a second cargo bench run; the safe and unchecked versions are never measured side by side in one run, and Criterion's change percentage is against the previously saved run.",
+    "No RUSTFLAGS, target-cpu or rust-toolchain file, and [profile.release] only adds debug = true, so results depend on the default target ISA and whatever compiler version was installed."
+  ],
+  "pick_this_over_siblings_when": "Not as a GEMM: for real throughput use faer (the Rust entry in this category), BLASFEO for matrices in the tens, or Eigen/OpenBLAS-class libraries. Pick this only as a reference for how much Rust bounds checks cost in a naive loop.",
+  "verified_claims_summary": "The book's figures (relayed by the lead; not in the repository) put one 100x100 f32 multiply under Criterion at about 540 microseconds for the safe hoisted-accumulator loop and about 359 microseconds with get_unchecked, about 1.5x (derived), on an unstated CPU and Rust version. The repository carries the code and the Criterion bench but no results, CPU or compiler version, and the two figures necessarily come from separate cargo bench runs.",
+  "status_note": "Packt companion repository with 3 commits (last 2026-03-13), 11 stars and one open Dependabot PR (rand 0.8.5 to 0.8.6); MIT-licensed example code to copy rather than a maintained crate.",
+  "sources_read": [
+    "https://github.com/PacktPublishing/Rust-for-CPP-Developers",
+    "https://github.com/PacktPublishing/Rust-for-CPP-Developers/commits/main",
+    "https://github.com/PacktPublishing/Rust-for-CPP-Developers/pulls",
+    "https://github.com/PacktPublishing/Rust-for-CPP-Developers/pull/2",
+    "https://github.com/PacktPublishing/Rust-for-CPP-Developers/tree/main/chapter_10",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/chapter_10/Cargo.toml",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/chapter_10/Cargo.lock",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/chapter_10/src/lib.rs",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/chapter_10/src/simd.rs",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/chapter_10/src/bin/cli.rs",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/chapter_10/benches/multiply.rs"
+  ],
+  "confidence": 0.6
+}

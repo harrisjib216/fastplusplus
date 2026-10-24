@@ -1,0 +1,62 @@
+{
+  "id": "paper:book-building-low-latency-applications-with-cpp-array-indexed-order-book-maps",
+  "one_liner": "Matching-engine order book using preallocated direct-indexed std::array maps instead of std::unordered_map; about 7% fewer cycles in the book's run.",
+  "what_it_does": "The Chapter 12 exchange's MEOrderBook finds resting orders by client id and order id, and price levels by price, through fixed-size std::array tables indexed directly by those integers (a 256 x 1,048,576 pointer table for orders and a 256-slot table for price levels). UnorderedMapMEOrderBook is an otherwise identical copy that uses nested std::unordered_map for the same lookups, and benchmarks/hash_benchmark.cpp times the two. It is a technique inside a teaching codebase, not a reusable container: the 'hash map' is a typedef of nested std::array used by the order book's add and cancel logic.",
+  "how_it_is_fast": "Direct addressing: when keys are small dense integers with a known upper bound, the key itself is the slot index, so a lookup is one bounds-checked array access with no hashing, no bucket-chain walk and no node allocation on insert, and erase is a nullptr store. MEOrder and MEOrdersAtPrice objects come from preallocated MemPool arrays in both variants, so the two books differ only in the lookup structure. The price is memory sized for the worst case, about 2 GiB of pointers per order book.",
+  "when_to_use": [
+    "Keys are dense integers you assign yourself with a hard, small upper bound (exchange-assigned order ids, session or client slots, instrument ids) and the lookup sits on a latency-critical path.",
+    "Inserts and removals are frequent and you want no allocation per operation.",
+    "You can reserve the worst-case table up front and rely on lazily committed pages, so only touched entries cost resident memory.",
+    "Price-level lookup in a book whose resting prices are guaranteed to stay inside a window narrower than the table (256 ticks here)."
+  ],
+  "when_not_to_use": [
+    "Sparse, unbounded or client-supplied keys: the order table is indexed by the raw client order id, and an id at or above 1,048,576 makes .at() throw inside a noexcept function, which terminates the process (issue #9 reproduces this with order id 2000000).",
+    "Prices spanning 256 or more ticks: price % 256 has no collision handling, so levels 256 ticks apart, even on opposite sides, share a slot and get spliced together, which issue #9 reports ending in a SIGSEGV; the unordered_map variant keys on the same price % 256 index and shares the bug.",
+    "Memory-constrained hosts or strict overcommit: each MEOrderBook carries about 2 GiB of pointers, the MatchingEngine constructor allocates one book per ticker (8), and each book's 1,048,576-entry MemPool<MEOrder> is filled at construction.",
+    "When you need a general associative container (arbitrary key types, iteration over live entries, a size): this is a fixed table embedded in one class.",
+    "When you expect a large payoff: the book's comparison shows only about 7% on add and cancel calls whose time is mostly logging and queue writes."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none outside the repo's own Chapter12 common/ headers (MemPool, Logger, LFQueue, types, rdtsc helpers) and pthread",
+    "min_toolchain": "C++20 (-std=c++2a); CMakeLists.txt pins g++ and builds with -Wall -Wextra -Werror -Wpedantic, Release adds CMake's -O3 -DNDEBUG; the README lists GCC 11.3.0 on Linux",
+    "platforms": "Linux on x86-64: rdtsc is inline x86 assembly and thread pinning uses pthread_setaffinity_np; the README lists Linux only",
+    "thread_safety": "none internal: each order book is meant to be driven only by the matching-engine thread",
+    "drop_in_for_baseline": "partial — same order-book API and same lookups as UnorderedMapMEOrderBook, but only for integer keys below the compile-time bounds (256 clients, 1,048,576 order ids, 256 price slots); not a general std::unordered_map replacement"
+  },
+  "gotchas": [
+    "The MEOrderBook constructor does not initialise cid_oid_to_order_ or price_orders_at_price_ (no member initialisers; only the destructor fills them with nullptr), so the tables read as empty only because a fresh multi-GiB allocation comes back as zeroed pages; a book built in recycled heap memory would return garbage pointers (reading of the source).",
+    "hash_benchmark.cpp times 100,000 add() and cancel() calls but divides the RDTSC total by loop_count * 2 (200,000), so the printed 'cycles per operation' is half the real per-call average; the ratio between the two books is unaffected.",
+    "The timed calls include always-on logging common to both books: every add or cancel runs std::stringstream toString(), ctime()/sprintf timestamps and character-by-character Logger pushes via sendClientResponse, sendMarketUpdate and END_MEASURE, so map work is a small slice of each call, and the gap comes from one run with the array book always first.",
+    "The unordered_map variant never erases: removal writes nullptr through operator[], and a cancel for an unknown order inserts a default entry, so that map only grows."
+  ],
+  "pick_this_over_siblings_when": "The catalogued hash maps (absl::flat_hash_map, boost::unordered_flat_map, ankerl::unordered_dense) are general replacements for std::unordered_map with measured 2.4x to 6x gains; pick direct indexing only when the keys are bounded dense integers you assign yourself and you want no hashing at all, accepting worst-case memory and adding the bounds checks and collision handling this code lacks.",
+  "verified_claims_summary": "The book reports 142650 against 152457 RDTSC cycles per operation (as printed, which is half the per-call figure) for the array-indexed book against the std::unordered_map copy, about 1.07x, on 100,000 alternating NEW and CANCEL requests for one client and one ticker, run on a four-core ThinkPad X1 Carbon at about 2.6 GHz with g++ (GCC 11.3.0 listed) and libstdc++. The harness and both variants are in the repo but no results are, and the timed region is dominated by logging and queue writes shared by both books, so the figure is first-party and says little about raw lookup cost.",
+  "status_note": "The order-book code has not changed since 2023-08-14 (later commits only edit README banners) and issue #9, which reports the price-slot collision and order-id crashes, has no reply; MIT-licensed teaching code, fine as a source for the direct-indexing idea but not to deploy as-is.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/HEAD/Chapter12/benchmarks/hash_benchmark.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/HEAD/Chapter12/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/HEAD/Chapter12/benchmarks/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/HEAD/Chapter12/scripts/build.sh",
+    "https://raw.githubusercontent.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/HEAD/Chapter12/exchange/matcher/me_order_book.h",
+    "https://raw.githubusercontent.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/HEAD/Chapter12/exchange/matcher/me_order_book.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/HEAD/Chapter12/exchange/matcher/unordered_map_me_order_book.h",
+    "https://raw.githubusercontent.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/HEAD/Chapter12/exchange/matcher/unordered_map_me_order_book.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/HEAD/Chapter12/exchange/matcher/me_order.h",
+    "https://raw.githubusercontent.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/HEAD/Chapter12/exchange/matcher/matching_engine.h",
+    "https://raw.githubusercontent.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/HEAD/Chapter12/exchange/matcher/matching_engine.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/HEAD/Chapter12/common/perf_utils.h",
+    "https://raw.githubusercontent.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/HEAD/Chapter12/common/macros.h",
+    "https://raw.githubusercontent.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/HEAD/Chapter12/common/types.h",
+    "https://raw.githubusercontent.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/HEAD/Chapter12/common/lf_queue.h",
+    "https://raw.githubusercontent.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/HEAD/Chapter12/common/mem_pool.h",
+    "https://raw.githubusercontent.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/HEAD/Chapter12/common/logging.h",
+    "https://raw.githubusercontent.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/HEAD/Chapter12/common/time_utils.h",
+    "https://raw.githubusercontent.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/HEAD/Chapter12/common/thread_utils.h",
+    "https://raw.githubusercontent.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/HEAD/README.md",
+    "https://github.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/issues?q=is%3Aissue",
+    "https://github.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/issues/9",
+    "https://github.com/PacktPublishing/Building-Low-Latency-Applications-with-CPP/issues/4"
+  ],
+  "confidence": 0.75
+}

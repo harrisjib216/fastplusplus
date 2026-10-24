@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/abumq/easyloggingpp",
+  "one_liner": "Archived feature-heavy synchronous C++ stream logger; 6-9% faster than glog at 1-10 threads in spdlog's old bench, 4x slower at 100.",
+  "what_it_does": "Easylogging++ is a synchronous C++11 logging library with glog-style LOG(INFO) << ... stream macros, CHECK macros, verbose levels, named loggers, per-level configuration from a config file or code (format, file, flush threshold, max file size), TIMED_FUNC/TIMED_SCOPE performance tracking, crash handling and STL/Qt container logging. It ships as two source files (easylogging++.h and easylogging++.cc) plus one INITIALIZE_EASYLOGGINGPP line in the file with main(). The macro names overlap with glog's (LOG, CHECK, VLOG), so call sites port easily, but setup, flags and sinks are different.",
+  "how_it_is_fast": "Nothing exotic: each message is streamed into a per-logger std::stringstream, a log line is built by substituting format specifiers (%datetime via gettimeofday plus custom formatting), and the line is written with std::fstream::write. Speed in the measured setup comes mostly from configuration: the bench set Log_Flush_Threshold to 10,485,760 entries, so the stream was never flushed explicitly during the 1M-line run, and the format was a short '[%datetime]: %msg'. Thread safety is compiled out unless ELPP_THREAD_SAFE is defined; when it is on, every LOG call takes the logger registry lock, holds the logger's own lock while the message is streamed, takes a global storage lock (unless ELPP_NO_GLOBAL_LOCK) and a per-file lock, which is why it fell behind at 100 threads.",
+  "when_to_use": [
+    "Existing code bases that already use Easylogging++ and only need it to keep working; MIT licence makes vendoring and patching easy.",
+    "Single-threaded tools or small apps where you want config-file driven per-level formats and files, CHECK macros and built-in TIMED_FUNC/TIMED_SCOPE block timing without pulling in Boost or gflags.",
+    "Moderate-rate file logging from a few threads where a synchronous call costing about a microsecond (about 1 s per million lines in the spdlog test) is acceptable."
+  ],
+  "when_not_to_use": [
+    "New projects: the repository was archived on 2025-07-06 and its own README recommends spdlog instead; the last code changes were in 9.97.0 (December 2020).",
+    "Many threads logging heavily: with ELPP_THREAD_SAFE every call serialises on several mutexes, and in the spdlog table 100 threads took 4.512 s against glog's 1.139 s.",
+    "Latency-critical hot paths: asynchronous logging exists only behind ELPP_EXPERIMENTAL_ASYNC and the README says not to rely on it in production; Quill, fmtlog or NanoLog report nanosecond-scale call sites.",
+    "Out-of-the-box use expecting the benchmark speed: the default configuration flushes the file after every entry (Log_Flush_Threshold 0) and also echoes every line to standard output."
+  ],
+  "integration": {
+    "form": "source-drop (easylogging++.h + easylogging++.cc); optional CMake static library",
+    "dependencies": "none (pthread when ELPP_THREAD_SAFE is defined on Linux)",
+    "min_toolchain": "C++11 (README: GCC 4.6.4+, Clang 3.1+, Visual C++ 11.0+; the repo's own CMake build uses C++14); v8.91 for C++98/03",
+    "platforms": "Linux, macOS, Windows (MSVC, MinGW, Cygwin), FreeBSD, Android, Solaris, AIX, QNX and Emscripten per README and changelog; stack traces on GCC only",
+    "thread_safety": "Off by default; define ELPP_THREAD_SAFE for every translation unit including easylogging++.cc. Without it, logging from more than one thread gives 'unexpected results' per the README.",
+    "drop_in_for_baseline": "partial — LOG(INFO)/CHECK/VLOG call sites look like glog, but initialization (INITIALIZE_EASYLOGGINGPP, el::Configurations), flags and log-file layout differ and there is no gflags integration"
+  },
+  "gotchas": [
+    "Benchmark harness asymmetry beyond what the verifier noted: Easylogging++ defaults to flushing after every entry and writing to stdout, and the bench overrode both (Log_Flush_Threshold 10,485,760 entries, TO_STANDARD_OUTPUT false), while glog ran with its full default prefix. The record's 'mostly default buffering' is not right for the Easylogging++ side; the measured configuration is tuned, not default.",
+    "The bench uses _INITIALIZE_EASYLOGGINGPP and _ELPP_THREAD_SAFE, which v9.75 still uses and v9.80 already spells without the underscore, so a v9.7x-or-older single-header release was measured, not the current two-file 9.97.x. The same table has glog at 1.139 s for 100 threads but 3.032 s for 10, an odd inversion with no run script or repeat data in the bench directory.",
+    "Configuration macros (ELPP_THREAD_SAFE, ELPP_NO_DEFAULT_LOG_FILE, ELPP_FEATURE_PERFORMANCE_TRACKING and others) must be passed as compiler flags so easylogging++.cc sees them too; a #define in main.cpp does not reach it (issue #590). Without ELPP_NO_DEFAULT_LOG_FILE a myeasylog.log file is created at start-up.",
+    "Open, unanswered issues include a deadlock when the disk runs out of inodes during file rolling (#744), a crash with performance tracking in multiple threads (#790), a compile error with TIMED_FUNC in a method called from several threads (#853) and an async-logger deadlock on VS2017 (#779); they will not be fixed upstream."
+  ],
+  "pick_this_over_siblings_when": "Pick Easylogging++ only to keep an existing code base running or if you specifically want its config-file driven loggers and built-in block timing; for a glog-like synchronous logger with better numbers loguru reports about 1.8x faster than glog, and glog itself (or ng-log) scaled better here at 100 threads. For throughput or latency, spdlog, Quill or fmtlog are far ahead.",
+  "verified_claims_summary": "In spdlog v0.16.3's README table (Ubuntu 64-bit, Intel i7-4770 @ 3.40GHz, g++ of unstated version with -O3 -flto -march=native, best of 3), writing 1,000,000 lines to a file took Easylogging++ 0.975 s vs glog 1.066 s on 1 thread and 2.857 s vs 3.032 s on 10 threads (about 1.06-1.09x, derived from page data), but 4.512 s vs 1.139 s on 100 threads. Easylogging++ was a pre-9.80 release with a short format, no flushing during the run and, in the 1-thread binary, no thread safety, while glog used its default prefix and locking.",
+  "status_note": "Abandoned: archived read-only on 2025-07-06 (last release 9.97.1 in July 2023 was a test-only chore; last functional release 9.97.0, December 2020), but MIT-licensed and two plain source files, so it is easy to vendor and patch.",
+  "sources_read": [
+    "https://github.com/abumq/easyloggingpp",
+    "https://raw.githubusercontent.com/abumq/easyloggingpp/HEAD/README.md",
+    "https://raw.githubusercontent.com/abumq/easyloggingpp/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/abumq/easyloggingpp/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/abumq/easyloggingpp/HEAD/src/easylogging++.h",
+    "https://raw.githubusercontent.com/abumq/easyloggingpp/HEAD/src/easylogging++.cc",
+    "https://raw.githubusercontent.com/abumq/easyloggingpp/v9.80/src/easylogging++.h",
+    "https://raw.githubusercontent.com/abumq/easyloggingpp/v9.75/src/easylogging++.h",
+    "https://raw.githubusercontent.com/abumq/easyloggingpp/v9.60/src/easylogging++.h",
+    "https://github.com/abumq/easyloggingpp/issues?q=is%3Aissue+performance+OR+slow+OR+deadlock",
+    "https://github.com/abumq/easyloggingpp/issues/590",
+    "https://github.com/abumq/easyloggingpp/issues/744",
+    "https://raw.githubusercontent.com/gabime/spdlog/v0.16.3/README.md",
+    "https://raw.githubusercontent.com/gabime/spdlog/v0.16.3/bench/Makefile",
+    "https://raw.githubusercontent.com/gabime/spdlog/v0.16.3/bench/easyl.conf",
+    "https://raw.githubusercontent.com/gabime/spdlog/v0.16.3/bench/easylogging-bench.cpp",
+    "https://raw.githubusercontent.com/gabime/spdlog/v0.16.3/bench/easylogging-bench-mt.cpp",
+    "https://raw.githubusercontent.com/gabime/spdlog/v0.16.3/bench/glog-bench.cpp",
+    "https://raw.githubusercontent.com/gabime/spdlog/v0.16.3/bench/glog-bench-mt.cpp",
+    "https://raw.githubusercontent.com/gabime/spdlog/v0.16.3/bench/latency/Makefile",
+    "https://github.com/gabime/spdlog/tree/v0.16.3/bench"
+  ],
+  "confidence": 0.8
+}

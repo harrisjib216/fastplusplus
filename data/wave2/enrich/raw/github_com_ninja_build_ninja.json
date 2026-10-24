@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/ninja-build/ninja",
+  "one_liner": "Minimal C++ build executor fed by generated build.ninja files; much faster no-op and incremental builds than CMake-generated Makefiles.",
+  "what_it_does": "Ninja reads a build.ninja file that lists rules and build edges, compares file timestamps, and runs the out-of-date commands in parallel. The file format has no conditionals, built-in rules, globbing or search paths, so it is meant to be written by a generator (CMake -G Ninja, Meson, GN) rather than by hand. For CMake projects it is a backend switch, not a rewrite.",
+  "how_it_is_fast": "It avoids decision-making at build time: there is no implicit or suffix rule search (Make's built-in rules even look for RCS files), and the whole dependency graph is loaded once in a single process. The manifest lexer is generated with re2c, command lines are stored as rapidhash hashes in .ninja_log so flag changes trigger rebuilds cheaply, and compiler header dependencies (deps = gcc or msvc) are folded into a compact binary .ninja_deps database instead of thousands of .d files parsed at startup. On Windows it caches directory listings to cut stat calls.",
+  "when_to_use": [
+    "Any CMake or Meson C/C++ project where edit-compile-run latency matters: switching the generator to Ninja cuts no-op builds from about 0.55 s to about 0.04 s on 1,000 files in the Meson experiment, and the gap grows with tree size.",
+    "Large trees (tens of thousands of sources, such as Chromium, or the Clang compiler) where build-system startup dominates a one-file rebuild: the manual cites under 1 s versus 10 s for Chromium's custom Makefiles.",
+    "Generated build graphs from your own tooling: the format is small, documented and easy to emit from any language.",
+    "Windows builds with MSVC, using deps = msvc to capture /showIncludes header dependencies."
+  ],
+  "when_not_to_use": [
+    "Hand-maintained build logic: build.ninja has no conditionals or built-in rules, so without a generator you would be writing every command yourself.",
+    "When your Makefiles are already lean: in a separate third-party synthetic benchmark (thutt/build-tool-comparator), GNU Make 4.3 with --no-builtin-rules --no-builtin-variables matched Ninja 1.11.1 on incremental and null builds and beat it on full builds from 50,000 modules (100,000 modules on x86_64: full 103.8 s vs 407.1 s), so the large wins are over default-rules or CMake-generated Makefiles.",
+    "Clean full builds of real code: they are compiler-bound, and the Meson charts put Make-based Premake (about 12.7 s) level with CMake's Ninja backend (about 12.5 s).",
+    "Memory-tight machines with heavy link or LTO steps: default parallelism is processor count plus 2 with no memory limit (open issue #2187 reports OOM kills building LLVM and KiCad), so cap it with -j, -l or a pool.",
+    "Builds that need content-hash rebuild decisions, remote caching or sandboxing: Ninja uses mtimes and command hashes only (content-based checking is an open request, #1459)."
+  ],
+  "integration": {
+    "form": "standalone executable (single binary, no install step needed)",
+    "dependencies": "none at runtime; building from source needs Python (configure.py --bootstrap) or CMake 3.15+, with re2c optional to regenerate the lexers",
+    "min_toolchain": "C++17 compiler to build Ninja itself",
+    "platforms": "Linux, macOS and Windows release binaries; configure.py also supports FreeBSD, OpenBSD, NetBSD, Solaris, AIX and MinGW",
+    "thread_safety": "One process whose scheduler spawns parallel subprocesses; running two ninja processes on one build directory at once is not documented",
+    "drop_in_for_baseline": "partial: for CMake or Meson projects it is a generator switch (-G Ninja) with no build-file changes; hand-written Makefiles must be rewritten or generated"
+  },
+  "gotchas": [
+    "Builds always run in parallel (default processors + 2), so under-specified dependencies that happened to work with serial make produce wrong or flaky builds.",
+    "Header dependencies only work if the rule sets depfile or deps = gcc/msvc; depfiles that mix absolute and relative paths fail to match other rules' paths, so the manual recommends relative include paths.",
+    "Command output is buffered per job; tasks that need the terminal (tests with progress output) must use the console pool, which runs one at a time.",
+    "Jobserver client support exists only since 1.13 and only for GNU Make 4.4+ FIFO jobservers; an older pipe-based jobserver is ignored with a warning and Ninja then uses its own job count."
+  ],
+  "pick_this_over_siblings_when": "Pick Ninja as the default local backend for CMake or Meson C++ projects; choose Bazel or Buck2 only when you need hermetic builds with remote caching (in the build-tool-comparator tables Ninja beat Bazel in every incremental and null row), tup when you need near-instant no-op checks on very large trees, and add ccache on top of Ninja rather than instead of it.",
+  "verified_claims_summary": "The Meson author's 1,000-trivial-C-file experiment (CMake debug build, -j 4, 2011-era MacBook Pro on Ubuntu 13.04, compiler and tool versions unstated, fastest of several manual runs) shows CMake's Ninja backend about 3.5 s (over 20%) faster than its Unix Makefiles backend on a full build (about 12.5 s vs 16 s, read off a chart) and about 13x faster on an empty rebuild (about 0.04 s vs 0.55 s). The same page anecdotally reports Clang no-op builds of 30 s with Make versus under 1 s with Ninja.",
+  "status_note": "Actively maintained (v1.13.2 is the latest release, master already documents 1.14 features, 13.3k stars), Apache-2.0, and shipped as one dependency-free binary, so adoption cost is low for CMake and Meson users.",
+  "sources_read": [
+    "https://github.com/ninja-build/ninja",
+    "https://github.com/ninja-build/ninja/releases",
+    "https://github.com/ninja-build/ninja/issues?q=is%3Aissue%20state%3Aopen%20performance",
+    "https://github.com/ninja-build/ninja/issues/2187",
+    "https://raw.githubusercontent.com/ninja-build/ninja/HEAD/README.md",
+    "https://raw.githubusercontent.com/ninja-build/ninja/HEAD/doc/manual.asciidoc",
+    "https://raw.githubusercontent.com/ninja-build/ninja/HEAD/src/build_log.cc",
+    "https://raw.githubusercontent.com/ninja-build/ninja/HEAD/src/deps_log.cc",
+    "https://raw.githubusercontent.com/ninja-build/ninja/HEAD/src/disk_interface.cc",
+    "https://raw.githubusercontent.com/ninja-build/ninja/HEAD/src/lexer.in.cc",
+    "https://raw.githubusercontent.com/ninja-build/ninja/HEAD/src/ninja.cc",
+    "https://raw.githubusercontent.com/ninja-build/ninja/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ninja-build/ninja/HEAD/configure.py",
+    "https://raw.githubusercontent.com/mesonbuild/meson/HEAD/docs/markdown/Simple-comparison.md",
+    "https://raw.githubusercontent.com/wiki/jpakkane/meson/measure.py",
+    "https://raw.githubusercontent.com/wiki/jpakkane/meson/gen_src.py",
+    "https://raw.githubusercontent.com/wiki/jpakkane/meson/buildtime.png",
+    "https://raw.githubusercontent.com/wiki/jpakkane/meson/emptytime.png",
+    "https://raw.githubusercontent.com/thutt/build-tool-comparator/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}

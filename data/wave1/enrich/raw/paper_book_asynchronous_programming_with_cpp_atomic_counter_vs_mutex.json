@@ -1,0 +1,51 @@
+{
+  "id": "paper:book-asynchronous-programming-with-cpp-atomic-counter-vs-mutex",
+  "one_liner": "Relaxed std::atomic fetch_add on a shared counter in place of a std::mutex-guarded increment; teaching idiom, not a library.",
+  "what_it_does": "A book example (Chapter_05/5x01-atomic_flag.cpp) that times three ways for 4 threads to bump one shared uint32_t: std::mutex lock/unlock around counter++, a hand-written std::atomic_flag test-and-set spinlock, and atomic_counter.fetch_add(1, std::memory_order_relaxed). The takeaway is an idiom: when a mutex guards nothing but one integer, make the integer a std::atomic and drop the lock.",
+  "how_it_is_fast": "The atomic increment is one hardware read-modify-write on the counter's cache line, so there is no lock acquire/release pair, no separate mutex word to bounce between cores, and no sleep/wake path when threads collide. Under contention the mutex adds lock handoffs and blocking on top of the cache-line ping-pong both variants pay, which is why the gap grows with thread count. memory_order_relaxed requests atomicity only, with no ordering of surrounding memory.",
+  "when_to_use": [
+    "Statistics, hit, byte or progress counters updated from many threads and read occasionally, where nothing else has to change together with the count.",
+    "Reference counts, ID or ticket generators where a single fetch_add (using its returned old value) is the whole critical section.",
+    "Code that takes a std::mutex only to protect one integer: per the book's Table 5.1 as relayed in the record, the atomic is cheaper even uncontended (0.82 s against 1.03 s for 200 million increments on one thread).",
+    "Moderate contention on a counter that cannot be sharded, where the book's 2-4 thread figures show the mutex falling 2.2-2.7x behind."
+  ],
+  "when_not_to_use": [
+    "Critical sections that update more than one variable or keep an invariant (counter plus container, check-then-act): an atomic counter does not protect them, so keep the mutex.",
+    "Very hot counters hit by many threads: the atomic still serialises on one cache line. From the book figures, 4 threads doing 800 million increments took 9.13 s, about 2.8x longer than one thread at its 0.82 s per 200 million pace would need for the same total (derived from those figures); per-thread or sharded counters summed on read avoid this.",
+    "When other threads must observe data written before the increment (publishing results, completion flags): relaxed gives no ordering, so use release/acquire or the default seq_cst.",
+    "Counter types the platform cannot update lock-free: std::atomic of a large type silently uses an internal lock (the repo's 5x04-atomic_type_not_lock-free.cpp shows a 512-byte struct reporting is_always_lock_free false), which removes the advantage."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the idiom (<atomic>); building the repo's example tree needs Boost 1.86 (thread, system, container), GoogleTest and {fmt} at the root, and Chapter_05 links libatomic",
+    "min_toolchain": "C++11 for std::atomic and memory orders; the repo targets C++20/23 with GCC 14.2 or Clang 18",
+    "platforms": "any platform with lock-free 32-bit atomics; repo README lists Linux (Ubuntu 24.04), macOS Sonoma and Windows 11",
+    "thread_safety": "fetch_add is safe for concurrent callers; memory_order_relaxed orders nothing else, so a reader can see the new count before the work it counts",
+    "drop_in_for_baseline": "partial — one-for-one only when the mutex guards a single integer update; reads become atomic loads, and any multi-step critical section still needs the lock"
+  },
+  "gotchas": [
+    "The checked-in file does not reproduce the book table like-for-like: the mutex loop runs 200000000 increments per thread but the spinlock and atomic loops run 500000000, with NUM_THREADS fixed at 4; divide by 2.5 or edit the loops before comparing printed times. Each variant is a single run with thread creation inside the timed region and no warm-up.",
+    "The root CMakeLists.txt sets no default build type and adds -O3 -DNDEBUG only for Release, so a plain cmake configure builds the benchmark without optimisation flags; pass -DCMAKE_BUILD_TYPE=Release.",
+    "The file uses std::mutex and uint32_t without including <mutex> or <cstdint>, relying on transitive includes of the standard library it was written against (other standard libraries not checked).",
+    "The companion spin_lock is a bare test_and_set loop with no backoff or pause instruction; it is a teaching foil, not a lock to copy."
+  ],
+  "pick_this_over_siblings_when": "Same idiom as the sibling 'The Art of Writing Efficient Programs: std::atomic counter increment' entry (book figure 23 ns against 7 ns on one thread); this one adds 2- and 4-thread points and a spinlock middle option, so read both, copy neither harness. The queue siblings (atomic_queue, moodycamel, Boost.Lockfree, xenium) solve message passing; use this idiom when the shared state is a single integer.",
+  "verified_claims_summary": "The book's Table 5.1, relayed by the seed lead and not in the repo, times 200 million increments per thread of one shared counter: relaxed fetch_add 0.82 s, 4.52 s and 9.13 s against std::mutex 1.03 s, 10.15 s and 24.61 s at 1, 2 and 4 threads, about 1.3x, 2.2x and 2.7x (derived from those figures). No CPU, compiler version or flags come with the table, and the repo's checked-in harness (single std::chrono run, unequal loop counts) does not regenerate it as is.",
+  "status_note": "MIT-licensed book companion code (95 stars, 34 forks, not archived); this file last changed 2024-09-08 ('Cleaning and fixing unwanted warnings') and the 2026 commits only edit a README banner, so treat it as frozen teaching code and copy the three-line idiom rather than the harness.",
+  "sources_read": [
+    "https://github.com/PacktPublishing/Asynchronous-Programming-with-CPP",
+    "https://github.com/PacktPublishing/Asynchronous-Programming-with-CPP/tree/main/Chapter_05",
+    "https://github.com/PacktPublishing/Asynchronous-Programming-with-CPP/tree/main/Chapter_13",
+    "https://github.com/PacktPublishing/Asynchronous-Programming-with-CPP/commits/main/Chapter_05/5x01-atomic_flag.cpp",
+    "https://github.com/PacktPublishing/Asynchronous-Programming-with-CPP/issues?q=is%3Aissue",
+    "https://github.com/PacktPublishing/Asynchronous-Programming-with-CPP/issues/26",
+    "https://github.com/PacktPublishing/Asynchronous-Programming-with-CPP/issues/27",
+    "https://raw.githubusercontent.com/PacktPublishing/Asynchronous-Programming-with-CPP/main/Chapter_05/5x01-atomic_flag.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/Asynchronous-Programming-with-CPP/main/Chapter_05/5x04-atomic_type_not_lock-free.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/Asynchronous-Programming-with-CPP/main/Chapter_05/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/Asynchronous-Programming-with-CPP/main/Chapter_13/13x07-thread_contention.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/Asynchronous-Programming-with-CPP/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/Asynchronous-Programming-with-CPP/main/README.md"
+  ],
+  "confidence": 0.5
+}

@@ -1,0 +1,57 @@
+{
+  "id": "paper:book-software-architecture-with-cpp-2e-binary-search-vs-linear-scan",
+  "one_liner": "Book benchmark: std::ranges::lower_bound beats std::ranges::find on a sorted vector<int>, O(log n) against a linear scan.",
+  "what_it_does": "A companion sample for the Packt book Software Architecture with C++, 2nd ed. (Chapter13/microbenchmarking) that times two standard-library calls on a sorted std::vector<int> holding 0..n-1: std::ranges::lower_bound (binary search) and std::ranges::find (linear scan). There is no library to adopt; the takeaway is to call lower_bound instead of find when the data is already sorted. The same experiment is written for Google Benchmark (benchmark_1 to benchmark_4), Catch2 and nanobench with doctest.",
+  "how_it_is_fast": "Binary search halves the candidate range at each comparison, so a 10M-element vector needs about 24 probes where std::ranges::find compares every element up to the match. The harness repeats one needle on one vector, so those probes stay in cache and the branches follow the same path every iteration; the book's 24 ns figure is that warm best case. Nothing beyond the textbook algorithm is used: the stock std::ranges::lower_bound, no branchless loop, prefetching or Eytzinger layout.",
+  "when_to_use": [
+    "You keep a std::vector (or another random-access range) sorted and still look values up with std::find or a hand-written loop: switching to std::ranges::lower_bound plus an equality check is a zero-dependency change.",
+    "Read-mostly data built once or in batches and searched many times, such as a sorted table of IDs or timestamps.",
+    "Arrays from about a thousand elements up (the smallest size this benchmark covers); with the needle at the end of 10M elements the book's run puts lower_bound near 24 ns against 2.8 ms for find.",
+    "Range queries (first element not less than x), which find cannot answer."
+  ],
+  "when_not_to_use": [
+    "Unsorted data, or data that changes between lookups: inserting into a sorted vector costs O(n) and sorting first costs O(n log n), which a handful of finds will not repay.",
+    "Very small arrays: the sweep starts at 1,000 elements, so it does not locate the size below which a linear scan wins; measure at your size.",
+    "Random lookups into large arrays where std::lower_bound itself is the bottleneck: this harness repeats one needle and so hides cache misses and branch mispredictions; a branchless or Eytzinger-layout search (see siblings) targets that case.",
+    "Hits that sit near the front of the array: a scan that stops early is cheap (in main_1 to main_3, find stops after 2,138 elements whatever the vector size)."
+  ],
+  "integration": {
+    "form": "header-only (C++ standard library <algorithm> and <ranges>; the repo sample itself is a source-drop benchmark)",
+    "dependencies": "none for the technique; the benchmarks need Google Benchmark 1.9.4, or Catch2 3.12.0, or nanobench 4.3.11 with doctest 2.4.12 (all via Conan 2)",
+    "min_toolchain": "C++20 for std::ranges (Google Benchmark targets use cxx_std_20, the Catch2 and nanobench targets cxx_std_23); the repo lists GCC 15, Clang 20 or MSVC 19.44/19.50, CMake 3.28 and Conan 2, and says GCC 14, Clang 19 and MSVC 19.44 build some but not all examples",
+    "platforms": "any (portable standard C++); the Chapter13 README says the examples are developed on Linux and tested on macOS and Windows",
+    "thread_safety": "Not documented in the repo; both calls are non-mutating algorithms over a range that is not modified, so concurrent lookups on an unchanging vector need no locking.",
+    "drop_in_for_baseline": "partial — lower_bound needs a range sorted by the same ordering and returns the first element not less than the needle, so a hit needs an extra *it == needle check (or std::ranges::binary_search for a bool); find works on unsorted data and returns end() only when the value is absent."
+  },
+  "gotchas": [
+    "main_1 to main_3 fix the needle at 2137, so for vectors of 10,000 elements and more std::ranges::find always stops at index 2137: the linear series in main_3 is flat from 1e4 to 1e7, and the book's 471 ns versus 24.2 ns (about 19x) is a 2,138-element scan against a 24-probe search, not a scan of 10M elements. Only main_4's needles (n/8, n/2, n-1 and the absent n+1) scale with the vector size.",
+    "Every iteration searches the same needle in the same vector, so the binary-search probes stay cached and its branch pattern repeats; random needles over the 40 MB array would cost more per lookup, and no variant measures that.",
+    "The nanobench_doctest variant (main_4) builds the vector inside the timed lambda, so at 10M elements it mostly times allocating and filling 40 MB rather than the search; the Google Benchmark and Catch2 variants build it outside the timed region.",
+    "main_4 passes the needle as int64_t (state.range) against a vector<int>, and the Catch2 helper narrows a size_t needle to int; harmless at these values, but needle and element types differ from a typical lookup."
+  ],
+  "pick_this_over_siblings_when": "Pick plain std::ranges::lower_bound when you are still scanning sorted data linearly and want the zero-dependency fix; move to sb_lower_bound, FastBinarySearch or the developer-source branchless/Eytzinger lower_bound when std::lower_bound itself shows up in profiles on random lookups into large arrays, a case this warm-cache benchmark never measures.",
+  "verified_claims_summary": "The repo carries only benchmark source; the numbers are the book's own run relayed by the seed lead: std::ranges::lower_bound 24.2 ns versus std::ranges::find 471 ns for needle 2137 in a 10M-element sorted vector<int> (about 19x, with find stopping after 2,138 elements), and about 24 ns versus 2.8 ms with the needle at the end (about 117,000x, derived from the relayed numbers). Compiler, flags and CPU model are not stated (the Google Benchmark context shows only 20 threads at 2022 MHz, 48 KiB L1d and 24 MiB L3); the repo's own build is a GCC 15/libstdc++ CMake Release build via Conan.",
+  "status_note": "Active Packt companion repository (last commit 2026-09-27, mostly README edits; CI builds only Chapter10/customer, not these benchmarks), MIT-licensed; there is nothing to vendor because the technique is the standard library call itself.",
+  "sources_read": [
+    "https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E",
+    "https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/issues",
+    "https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/commits/main",
+    "https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/.github/workflows",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/.github/workflows/github-ci.yml",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/Chapter13/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/Chapter13/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/Chapter13/conanfile.py",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/Chapter13/microbenchmarking/benchmark/main_1.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/Chapter13/microbenchmarking/benchmark/main_2.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/Chapter13/microbenchmarking/benchmark/main_3.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/Chapter13/microbenchmarking/benchmark/main_4.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/Chapter13/microbenchmarking/benchmark/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/Chapter13/microbenchmarking/catch2/main_4.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/Chapter13/microbenchmarking/catch2/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/Chapter13/microbenchmarking/nanobench_doctest/main_4.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/Chapter13/microbenchmarking/nanobench_doctest/CMakeLists.txt"
+  ],
+  "confidence": 0.6
+}

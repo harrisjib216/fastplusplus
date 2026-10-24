@@ -1,0 +1,68 @@
+[
+  {
+    "id": "paper:book-the-art-of-writing-efficient-programs-preallocated-buffer-reuse",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": false,
+    "evidence_tier_final": "C",
+    "tier_reason": "Chapter09/04_buffer.C is public Google Benchmark code that times BM_make_str_new (new char[N]/delete[] every iteration) against BM_make_str_max (one buffer allocated before the loop) and BM_make_str_buf (grow-only buffer) at Arg 1<<10 over ThreadRange(1, numcpu), but Chapter09 has no build file, results or README and the repo README names no compiler, flags or CPU; the 40%-of-speed figure exists only in the book (first-party), so C.",
+    "corrections": {
+      "claimed_speedup": "Book-reported (relayed via the seed lead; no numbers anywhere in the repository): allocating every iteration runs at about 40% of the speed of the version that allocates the maximum size once (preallocation about 2.5x faster, derived from the relayed book figure); the penalty is larger with 8 threads (book charts only).",
+      "caveats": "The timing numbers are the book's own (quoted in the seed lead); the repository carries the benchmark program but no results file, so the numbers do not appear on the benchmark_url page and the ratios could not be checked against it. Hoisting an allocation out of a loop is a general idiom, and the size of the win depends on the allocator (glibc malloc, tcmalloc and jemalloc differ) which the book does not name; requests of at most 1 KB fall in glibc's per-thread tcache range, so the result is specific to small-block allocator fast paths. The harness fills its random-size table with v[i] = rand() after only reserve(), writing past size() (undefined behaviour, works in practice), and the baseline also pays memset and a never-taken cout branch that the compared variants share. [verifier] By reading the source (not compiled or run here): the vector returned by that lambda keeps size() 0, so every vr[ir++ % nr] read in the timed loops is also an out-of-bounds operator[] access that only works because the moved buffer still holds the values; a build with _GLIBCXX_ASSERTIONS or MSVC debug iterators would abort. The file includes unistd.h and calls sysconf(_SC_NPROCESSORS_CONF), so it builds on Linux or macOS only. Chapter09 has no build file, so compiler, flags and CPU are not stated anywhere in the repository."
+    },
+    "notes": "Code matches the record (three variants, Arg 1<<10, ThreadRange(1, numcpu), UseRealTime); numbers are book-only, tier C stands. Added the size()-0 read UB and POSIX-only build to caveats. Metadata confirmed on github.com: MIT (LICENSE: Copyright (c) 2020 Packt), 405 stars, not fork or archived, last commit 2024-05-13 'Update README.md' (stale).",
+    "urls_opened": [
+      "https://github.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/blob/master/Chapter09/04_buffer.C",
+      "https://github.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs",
+      "https://github.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/commits/master",
+      "https://github.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/tree/master/Chapter09",
+      "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/LICENSE",
+      "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/README.md"
+    ]
+  },
+  {
+    "id": "paper:book-modern-cpp-programming-cookbook-third-edition-parallel-map-fold-std-async",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": false,
+    "evidence_tier_final": "C",
+    "tier_reason": "Chapter08/recipe_8_10.h is public code that times sequential std::transform/std::accumulate against version1 (hardware_concurrency std::async(std::launch::async) chunks) and the recursive version2 with a microsecond chrono timer, one run per size, but the repo has no results and its CMake adds no optimisation flag; the 50M-element figures exist only in the book (first-party), so C.",
+    "corrections": {
+      "claimed_speedup": "Book-reported (relayed via the seed lead; no numbers anywhere in the repository; the shipped size list stops at 10,000,000, so the 50,000,000 row is not produced by the repository code): at 50,000,000 ints version1 map 22216 us vs 59665 us sequential (about 2.7x, derived from the relayed book figures), fold 12942 us vs 58689 us (about 4.5x, derived); faster than the std::thread version, especially for fold. The recursive version2 (map half deferred) was no better than sequential.",
+      "caveats": "The timing numbers are the book's own (quoted in the seed lead); the repository carries the benchmark program but no results file, so the numbers do not appear on the benchmark_url page and the ratios could not be checked against it. The shipped test in recipe_8_10.h stops at 10,000,000 elements (sizes 10000 to 10000000), so the 50,000,000-element row the book quotes cannot be produced without editing the size list. First-party tier C: single run per size, compiler, flags and CPU model not stated. The sequential fold baseline is 58689 us here against 41374 us in the std::thread recipe for the same data size, so the fold ratio (about 4.5x) is probably inflated by a slow or noisy baseline run; map baselines agree within 1% (59665 vs 60049 us). The baseline is single-threaded, so the gain comes from 8 threads and not a better algorithm. version2 uses std::launch::deferred for the map half, which runs on the calling thread, so it is effectively sequential and a poor foil. [verifier] By reading the source (not compiled or run here): version2's fold recurses with std::launch::async down to 10,000-element leaves, so it launches roughly size/10000 asynchronous tasks (about 1,000 at 10M elements), which is a new thread per task on libstdc++ and libc++ but runs on the Windows thread pool with MSVC, so version2 fold timings are not portable across standard libraries. The top-level CMakeLists.txt adds only '/EHc /std:c++latest' (MSVC) or '-std=c++2a -fexceptions -g -Wall' (GCC/Clang) and Chapter08/CMakeLists.txt adds none, so an optimised build depends on the chosen build type, which the book does not state. The README lists VC++ 2022 17.7, GCC 14 and Clang 19 as tested toolchains, not the one used for the timings. Both sides time freshly copied vectors (pages already touched) and thread or task start-up sits inside the parallel timing, which is fair."
+    },
+    "notes": "Code matches the record; tier C stands. Added the version2 fold thread-count caveat and the CMake no-optimisation-flag note (already in the std::thread sibling). Records 2 and 3 are the same recipe family (8.9 std::thread, 8.10 std::async) on one repo and could fold into one entry if the orchestrator wants. Metadata confirmed on github.com: MIT (LICENSE: Copyright (c) 2023 Packt), 170 stars, not fork or archived, last commit 2024-02-28 'Update README.md' (stale).",
+    "urls_opened": [
+      "https://github.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/blob/main/Chapter08/recipe_8_10.h",
+      "https://github.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition",
+      "https://github.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/commits/main",
+      "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/main/CMakeLists.txt",
+      "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/main/Chapter08/CMakeLists.txt",
+      "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/main/LICENSE"
+    ]
+  },
+  {
+    "id": "paper:book-modern-cpp-programming-cookbook-third-edition-parallel-map-fold-std-thread",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": false,
+    "evidence_tier_final": "C",
+    "tier_reason": "Chapter08/recipe_8_09.h is public code that times sequential std::transform/std::accumulate against parallel_map/parallel_fold on hardware_concurrency std::thread chunks, sizes 10,000 to 50,000,000, one run each with a microsecond chrono timer, but the repo has no results and no stated flags or CPU; the figures exist only in the book (first-party), so C.",
+    "corrections": {
+      "claimed_speedup": "Book-reported (relayed via the seed lead; no numbers anywhere in the repository): at 50,000,000 ints map 27457 us parallel vs 60049 us sequential (about 2.2x, derived from the relayed book figures), fold 19075 us vs 41374 us (about 2.2x, derived). Parallel is faster only above roughly 2 million elements; below that the thread start-up cost loses.",
+      "caveats": "The timing numbers are the book's own (quoted in the seed lead); the repository carries the benchmark program but no results file, so the numbers do not appear on the benchmark_url page and the ratios could not be checked against it. First-party book measurement, tier C: one run per size (the book itself notes run-to-run variation), compiler, optimisation flags and exact CPU not stated for this recipe; the repository's top-level CMakeLists adds only '/EHc /std:c++latest' for MSVC and '-std=c++2a -fexceptions -g -Wall' for GCC and Clang, so GCC and Clang builds through that file carry no optimisation flag. The baseline is single-threaded, so the gain is thread count (8 logical on 4 cores) and not a better algorithm; both loops are probably memory-bound, which would cap the gain well below the thread count. The sequential fold figure differs between this recipe (41374 us) and the std::async recipe (58689 us) for the same 50M elements, a spread as large as some of the claimed gains. Technique is an idiom, not a library: std::reduce or std::transform with std::execution::par (recipe 8.11) does the same job. [verifier] By reading the source (not compiled or run here): Chapter08/CMakeLists.txt adds no flags either, and the README lists VC++ 2022 17.7, GCC 14 and Clang 19 as tested toolchains, not the one used for the timings. Inputs at or below 10,000 elements fall back to the sequential algorithm inside parallel_map/parallel_fold. Both sides time freshly copied vectors (pages already touched) and thread creation and join sit inside the parallel timing, which is fair."
+    },
+    "notes": "Code matches the record (sizes list does include 50,000,000 here); tier C stands, only small caveat addenda. Same repo and recipe family as the std::async record; folding the two is an orchestrator call. Metadata confirmed on github.com: MIT, 170 stars, not fork or archived, last commit 2024-02-28 (stale).",
+    "urls_opened": [
+      "https://github.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/blob/main/Chapter08/recipe_8_09.h",
+      "https://github.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition",
+      "https://github.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/commits/main",
+      "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/main/CMakeLists.txt",
+      "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/main/Chapter08/CMakeLists.txt",
+      "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/main/LICENSE"
+    ]
+  }
+]

@@ -1,0 +1,49 @@
+{
+  "id": "paper:book-modern-cpp-programming-cookbook-third-edition-parallel-map-fold-std-async",
+  "one_liner": "Cookbook recipe: chunked parallel map and fold with std::async tasks, beating sequential std::transform and std::accumulate on large vectors.",
+  "what_it_does": "Chapter08/recipe_8_10.h defines version1::parallel_map(begin, end, f), which transforms a range in place, and version1::parallel_fold(begin, end, init, op), which reduces it, both by splitting the range into hardware_concurrency() equal chunks and running each chunk in a std::async(std::launch::async) task; ranges of 10,000 elements or fewer fall back to plain std::transform or std::accumulate. version2 is a recursive halving variant kept as a counter-example. test_mapfold_tasks times all three against the sequential algorithms on std::vector<int> of 10,000 to 10,000,000 elements and prints microseconds. The API is iterator-pair templates in the shape of the standard algorithms, but map works in place only.",
+  "how_it_is_fast": "Plain data parallelism: each task runs the ordinary sequential algorithm on its own contiguous slice, so N logical cores supply up to N times the compute and more memory bandwidth than one core can draw. The fold returns each chunk's partial result through std::future<R>::get and combines them with op. There is no algorithmic change, pooling or work stealing; for operations as cheap as i+i and a sum the gain stays well below the thread count (about 2.7x for map and 4.5x for fold on 8 logical cores in the relayed figures).",
+  "when_to_use": [
+    "Learning or prototyping coarse-grained data parallelism: the chunk, launch, join pattern in about 70 lines with only the standard library.",
+    "A one-off parallel in-place transform or sum over millions of contiguous elements on a toolchain without C++17 parallel algorithms or a thread-pool library.",
+    "Folds where a worker's exception must reach the caller: future::get rethrows it, which the std::thread sibling recipe cannot do.",
+    "Large ranges only: the only relayed figures are at 50,000,000 ints, and at 10,000 elements or fewer the functions run sequentially anyway."
+  ],
+  "when_not_to_use": [
+    "Repeated calls or many medium-sized ranges: every call starts hardware_concurrency() new tasks, which per the verifier is a new thread each on libstdc++ and libc++; a pool (dispenso, BS::thread_pool, Taskflow) or std::execution::par amortises that start-up.",
+    "Folds whose identity is not R{} or whose operator is not associative: each chunk starts from R{} (0 for arithmetic types), so product, min or max folds return wrong answers, and version2 combines its halves with a hard-coded + instead of op.",
+    "Stateful functors: f and op are passed through std::forward inside every task, so an rvalue functor is moved from once per task (concurrently in version1, twice per level in version2); only captureless lambdas and std::plus<> are exercised.",
+    "version2 as a design: its map defers the left half with std::launch::deferred, so it runs on the caller and is effectively sequential, and its fold launches about size/10,000 async tasks (roughly 1,000 at 10,000,000 elements).",
+    "Map callers that need errors: parallel_map waits with future::wait, which does not rethrow a worker's exception."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond the standard library; recipe_8_10.h itself includes only <iostream>, <algorithm>, <future>, <numeric>, <chrono> and <cassert> and gets <vector>, <thread>, <iomanip> and <functional> through the headers Chapter08/main.cpp includes before it",
+    "min_toolchain": "C++14 for the functions (deduced auto return type), C++17 for the perf_timer harness (std::invoke); the repo builds with /std:c++latest or -std=c++2a and its README lists VC++ 2022 17.7, GCC 14 and Clang 19",
+    "platforms": "any platform with std::async threads; README targets Windows, Linux and Mac",
+    "thread_safety": "Each element is touched by exactly one task; f and op are invoked concurrently from several tasks and must tolerate that; separate calls on disjoint ranges are independent.",
+    "drop_in_for_baseline": "partial — same iterator-pair shape as std::transform/std::accumulate, but map is in place only (no output iterator), fold needs an associative op whose identity is R{}, and there is no execution policy or thread-count control"
+  },
+  "gotchas": [
+    "hardware_concurrency() may return 0 when the core count is unknown; version1 then computes size / 0 before launching anything.",
+    "The repo's top-level CMakeLists.txt calls add_subdirectory(chapter08) while the folder is Chapter08, so configuring fails on case-sensitive file systems (open issue #7, 2026-09-27, no reply); it also adds no optimisation flag, and the README's VS 2022 example configures -A Win32, so set the build type and target yourself before timing.",
+    "The harness checks results only with assert (gone under NDEBUG), times each size once with a microsecond high_resolution_clock and no warm-up, and runs inside a program that executes every other Chapter 8 recipe first.",
+    "The shipped size list stops at 10,000,000, so the book's 50,000,000-element row needs an edited list; its sequential fold baseline (58689 us) is about 42% slower than the std::thread recipe's 41374 us at the same size (derived), so the 4.5x fold ratio is probably inflated."
+  ],
+  "pick_this_over_siblings_when": "Over the std::thread sibling recipe (8.9) it uses the same chunking but returns partial sums through futures and rethrows fold exceptions, with slightly better relayed figures (map about 2.7x against 2.2x). For production code pick a pool sibling that reuses threads (dispenso, BS::thread_pool, Taskflow or utl::parallel, whose own table puts its pool at 573% of serial speed against 214% for std::async on small non-recursive jobs).",
+  "verified_claims_summary": "Relayed from the book and absent from the repository: on a Windows 64-bit Intel Core i7 (assumed 4 cores, 8 threads) with 50,000,000 ints, version1 map took 22216 us against 59665 us for sequential std::transform (about 2.7x, derived) and fold 12942 us against 58689 us for std::accumulate (about 4.5x, derived), while version2 was no faster than sequential. One run per size; compiler, build type, flags and exact CPU are not stated, and the repo's harness only reaches 10,000,000 elements.",
+  "status_note": "MIT-licensed Packt companion repo (170 stars, 54 forks, 10 commits, last 2024-02-28) with the Linux CMake break reported in 2026 and unanswered; stale teaching code, fine to read and copy for the pattern but not a library to depend on.",
+  "sources_read": [
+    "https://github.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition",
+    "https://github.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/issues?q=is%3Aissue",
+    "https://github.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/issues/7",
+    "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/HEAD/Chapter08/recipe_8_10.h",
+    "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/HEAD/Chapter08/recipe_8_09.h",
+    "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/HEAD/Chapter08/main.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/HEAD/Chapter08/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/HEAD/chapter08/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/HEAD/README.md"
+  ],
+  "confidence": 0.6
+}

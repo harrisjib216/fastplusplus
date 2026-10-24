@@ -3,7 +3,7 @@
 <sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Storage and data](../README.md)</sub>
 
 **What these beat:** Apache Arrow, DuckDB, ClickHouse, pandas, polars  
-**36 entries:** 4 tier A · 12 tier B · 20 tier C · 0 tier D · 30 copyable, 6 study only
+**38 entries:** 4 tier A · 12 tier B · 22 tier C · 0 tier D · 30 copyable, 8 study only
 
 | # | Project | What it is | Tier | Language | License | Status |
 |--:|---|---|:-:|---|---|---|
@@ -40,8 +40,10 @@
 | 31 | [**Hydra Columnar (Postgres columnar extension)**](hydradatabase-columnar.md) | Postgres table-access-method extension (Citus Columnar fork) adding compressed columnar storage, parallel scans, vectorized filters; \~23x vs heap on ClickBench. | **C** | C | AGPL-3.0 (the columnar… | 🟡 stale |
 | 32 | [**Parquet Sort (Earnix)**](earnix-parquet-sort.md) | Java CLI that sorts a flat Parquet file by one column; 1.12-1.26x faster than DuckDB on TPC-H lineitem. | **C** | Java | Apache-2.0 | 🟡 stale |
 | 33 | [**TensorBase**](tensorbase-tensorbase.md) | Abandoned Rust ClickHouse-protocol server on forked DataFusion; 3.1x faster than ClickHouse on plain sum, 6.7x slower on group-by. | **C** | Rust | Apache-2.0 | 🔴 abandoned |
-| 34 | [**FireDucks**](fireducks-dev-fireducks.md) | NEC's closed-source drop-in for pandas: lazy IR optimization plus multithreaded Arrow kernels; first-party TPC-H SF10 claims 141x. | **C** | Python | BSD-3-Clause (study only) | 🟢 active |
-| 35 | [**tickdb (DerekNest)**](dereknest-tickdb.md) | Rust tick-trade store: delta-of-delta/varint+zstd segments \~20% smaller than Parquet+zstd, but slower than DuckDB on ingest and all queries. | **C** | Rust | no license (study only) | 🟢 active |
-| 36 | [**JetStream**](paper-jetstream.md) | MIT research prototype: LLM agents generate query-specific accelerators that plug into DuckDB or PostgreSQL; claims 833x geomean over single-threaded DuckDB. | **C** | C++ | no license (study only) | ⚪ unknown |
+| 34 | [**ScyllaDB**](scylladb-scylladb.md) | C++ rewrite of Apache Cassandra (CQL, plus a DynamoDB API) on a thread-per-core engine; vendor claims 3-8x Cassandra 4.0 throughput. | **C** | C++ | LicenseRef-ScyllaDB-Source-A… (study only) | 🟢 active |
+| 35 | [**YugabyteDB**](yugabyte-yugabyte-db.md) | Distributed SQL database (PostgreSQL-compatible YSQL plus Cassandra-style YCQL) over a C++ Raft/RocksDB store; not faster than single-node PostgreSQL. | **C** | C++ | Apache-2.0 (core database… (study only) | 🟢 active |
+| 36 | [**FireDucks**](fireducks-dev-fireducks.md) | NEC's closed-source drop-in for pandas: lazy IR optimization plus multithreaded Arrow kernels; first-party TPC-H SF10 claims 141x. | **C** | Python | BSD-3-Clause (study only) | 🟢 active |
+| 37 | [**tickdb (DerekNest)**](dereknest-tickdb.md) | Rust tick-trade store: delta-of-delta/varint+zstd segments \~20% smaller than Parquet+zstd, but slower than DuckDB on ingest and all queries. | **C** | Rust | no license (study only) | 🟢 active |
+| 38 | [**JetStream**](paper-jetstream.md) | MIT research prototype: LLM agents generate query-specific accelerators that plug into DuckDB or PostgreSQL; claims 833x geomean over single-threaded DuckDB. | **C** | C++ | no license (study only) | ⚪ unknown |
 
 <sub>Tiers: **A** reproducible public benchmark (code, compiler, flags and CPU stated) · **B** independent or peer-reviewed measurement · **C** first-party claim · **D** directional, no numbers. Status: 🟢 active · 🔵 finished · 🟡 slow or stale · 🔴 abandoned · ⚪ unknown. *Study only* means no usable open-source license: read the idea, don't copy the code.</sub>

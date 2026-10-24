@@ -4,16 +4,16 @@
 
 Allocators, coroutines, thread pools, logging, profilers and file I/O measured against malloc, spdlog, TBB and the POSIX defaults.
 
-**165 entries in 6 categories:** 24 tier A · 23 tier B · 99 tier C · 19 tier D
+**178 entries in 6 categories:** 25 tier A · 25 tier B · 108 tier C · 20 tier D
 
 | Category | Entries | A | B | C | D | What they beat |
 |---|--:|--:|--:|--:|--:|---|
-| [Allocators and garbage collectors](allocators-gcs/README.md) | 30 | 4 | 4 | 19 | 3 | malloc, jemalloc, mimalloc, Boehm GC |
-| [Coroutines and fibers](coroutines-fibers/README.md) | 20 | 0 | 1 | 16 | 3 | Boost.Context, Boost.Coroutine, libco |
-| [Filesystems and I/O](filesystems-and-io/README.md) | 48 | 1 | 10 | 34 | 3 | POSIX read/write, mmap, io_uring baselines |
-| [Logging and tracing](logging-tracing/README.md) | 23 | 14 | 0 | 8 | 1 | spdlog, glog, OpenTelemetry SDK |
-| [Profilers and instrumentation](profilers-and-instrumentation/README.md) | 20 | 0 | 5 | 10 | 5 | perf, gprof, Valgrind |
-| [Thread pools and work stealing](thread-pools-work-stealing/README.md) | 24 | 5 | 3 | 12 | 4 | Intel TBB, OpenMP, Rayon |
+| [Allocators and garbage collectors](allocators-gcs/README.md) | 32 | 4 | 4 | 21 | 3 | malloc, jemalloc, mimalloc, Boehm GC |
+| [Coroutines and fibers](coroutines-fibers/README.md) | 23 | 1 | 1 | 18 | 3 | Boost.Context, Boost.Coroutine, libco |
+| [Filesystems and I/O](filesystems-and-io/README.md) | 50 | 1 | 11 | 34 | 4 | POSIX read/write, mmap, io_uring baselines |
+| [Logging and tracing](logging-tracing/README.md) | 26 | 14 | 1 | 10 | 1 | spdlog, glog, OpenTelemetry SDK |
+| [Profilers and instrumentation](profilers-and-instrumentation/README.md) | 22 | 0 | 5 | 12 | 5 | perf, gprof, Valgrind |
+| [Thread pools and work stealing](thread-pools-work-stealing/README.md) | 25 | 5 | 3 | 13 | 4 | Intel TBB, OpenMP, Rayon |
 
 ## Most-adopted tier A picks
 

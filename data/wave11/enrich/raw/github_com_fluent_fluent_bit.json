@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/fluent/fluent-bit",
+  "one_liner": "C telemetry agent that collects, parses and forwards logs, metrics and traces; about 8x Fluentd's regex-parsing throughput per core.",
+  "what_it_does": "Fluent Bit is a standalone agent (with an optional shared library build) that reads logs, metrics and traces from inputs such as tail, TCP or HTTP, runs them through filters such as regex parsers, Lua scripts or SQL stream processing, and ships them to outputs such as TCP, Elasticsearch, Kafka or Fluentd's forward protocol. It is configured through INPUT/FILTER/OUTPUT sections or YAML rather than called from your code, so it replaces a Fluentd or Logstash process in a pipeline, not a logging library inside a program.",
+  "how_it_is_fast": "The core is C with records kept as MessagePack (msgpack-c, mpack) end to end, network I/O on the bundled monkey event loop, and output flushes run as libco coroutines (flb_coro, fixed stacks of at least 64 KiB by default) so slow destinations do not block the pipeline. Regex parsing uses the bundled Onigmo engine from C, and filters run at ingest time inside input_chunk_append_raw before records are buffered, so parse cost is paid once per record on the input path. SIMD paths are enabled automatically on x86-64 and aarch64 (and riscv64 when the compiler supports RVV) through FLB_SIMD=Auto, with simdutf for UTF handling when a C++ compiler is available.",
+  "when_to_use": [
+    "Node or sidecar log shipping where one core must parse and forward tens of MiB/s: in Vector's harness it parsed Apache lines at 20.5 MiB/s on one core of a c5.large, against 2.6 MiB/s for Fluentd at the same CPU use.",
+    "Replacing Fluentd or Logstash collectors on hosts and Kubernetes nodes while keeping a Fluentd aggregator, since both belong to the Fluentd ecosystem and Fluent Bit has a forward output.",
+    "Tailing many files and shipping over TCP with low CPU and disk-write overhead (35 MiB/s with 6.1 MiB disk writes in the 2019 multi-file run).",
+    "Embedded, Windows, macOS or BSD hosts that need a single native agent binary with bundled dependencies."
+  ],
+  "when_not_to_use": [
+    "If raw shipping throughput is the goal, Vector beat it in the same harness (76.7 vs 35 MiB/s file-to-TCP) and used less memory in the regex case (179.3 vs 584.5 MiB).",
+    "Memory-capped hosts without limits configured: the harness config set no Mem_Buf_Limit, and Fluent Bit peaked at 584.5 MiB in the regex case, more than Fluentd's 246.1 MiB.",
+    "Pipelines that depend on Fluentd's plugin ecosystem or Logstash grok and pipeline syntax; those must be rewritten as Fluent Bit plugins, Lua, Go or WASM.",
+    "Running old releases: the benchmarked 3.2.x line is end-of-life per SECURITY policy, and critical advisories hit the Trace API (GHSA-5rjf-prwh-pp7q, 2024) and the out_forward Secure-Forward PONG handler (GHSA-jrp8-r9hx-gf73, 2026)."
+  ],
+  "integration": {
+    "form": "standalone agent binary (packages, Docker, Windows builds); optional shared library (FLB_SHARED_LIB)",
+    "dependencies": "Bundled: msgpack-c, mpack, monkey, libco, Onigmo, chunkio, LuaJIT, WAMR, simdutf, zstd, nghttp2, c-ares, librdkafka and others under lib/. Build needs Flex, Bison, YAML and OpenSSL headers",
+    "min_toolchain": "C compiler and CMake 3.12+ (CMakeLists; README says 3.0); C++ compiler optional (enables simdutf)",
+    "platforms": "Linux, Windows, macOS, BSD and embedded per README; SIMD on x86-64, aarch64, riscv64 (RVV)",
+    "thread_safety": "Not applicable to the agent; thread safety of the embedding library API is not documented",
+    "drop_in_for_baseline": "partial — replaces a Fluentd or Logstash process in the pipeline and can forward to Fluentd, but configs, parsers and plugins must be rewritten in Fluent Bit's format"
+  },
+  "gotchas": [
+    "The harness 'IO Thrpt' row is the subject host's network receive rate (net_recv_avg in bin/compare), not records delivered to the consumer. Fluent Bit runs filters at ingest, so the number does reflect regex-parse speed, but delivery is unmeasured, and its send/receive ratio (1.6 GiB / 1.2 GiB) is lower than Vector's (2 GiB / 804.8 MiB), which may mean a backlog was still in memory at the end of the run.",
+    "With no Mem_Buf_Limit and memory storage, an input never pauses when an output lags (flb_input_chunk_is_mem_overlimit returns false when the limit is 0), so memory grows without bound. Set Mem_Buf_Limit or filesystem storage in production.",
+    "Open 2026 issues report memory growth with storage.type filesystem (#12504, #12443) and a SIGSEGV with two Kubernetes filter instances (#12152).",
+    "Benchmarked versions are 3.2.7 (regex) and 1.1.0 (file-to-TCP), while master tracks 5.2 and the stable line is 5.1; no newer independent numbers were found."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (Quill, fmtlog, BqLog, spdlog-style loggers) are in-process libraries that format and write log lines from your C++ code; Fluent Bit is the out-of-process agent that tails, parses and ships what those loggers write. Pick it to replace a Fluentd or Logstash collector, not to replace a logging call in a hot path.",
+  "verified_claims_summary": "In Vector's public test harness (a competitor's suite, AWS c5.large subject, 60-second TCP-in, regex-parse, TCP-out runs with prebuilt packages and default single-worker configs; run count not shown, bin/compare averages all runs of the latest version), Fluent Bit 3.2.7 ingested and parsed 20.5 MiB/s against Fluentd 4.5.2-1 at 2.6 MiB/s and Logstash 8.17.3 at 4.6 MiB/s, measured as network receive rate on the subject. A 2019 file-to-TCP run had Fluent Bit 1.1.0 at 35 MiB/s against 26.1 (Fluentd) and 3.1 (Logstash), with Vector fastest at 76.7.",
+  "status_note": "Very active CNCF graduated project with major releases every 3-4 months (master tracks 5.2, stable 5.1) and an Apache-2.0 license; only 5.0.x and 5.1.x get security fixes, so stay on a supported line.",
+  "sources_read": [
+    "https://github.com/fluent/fluent-bit",
+    "https://raw.githubusercontent.com/fluent/fluent-bit/master/README.md",
+    "https://raw.githubusercontent.com/fluent/fluent-bit/master/CMakeLists.txt",
+    "https://github.com/fluent/fluent-bit/tree/master/lib",
+    "https://raw.githubusercontent.com/fluent/fluent-bit/master/src/flb_input_chunk.c",
+    "https://raw.githubusercontent.com/fluent/fluent-bit/master/src/flb_regex.c",
+    "https://raw.githubusercontent.com/fluent/fluent-bit/master/include/fluent-bit/flb_coro.h",
+    "https://github.com/fluent/fluent-bit/security",
+    "https://github.com/fluent/fluent-bit/issues?q=is%3Aissue%20state%3Aopen%20memory%20leak",
+    "https://raw.githubusercontent.com/vectordotdev/vector-test-harness/master/README.md",
+    "https://raw.githubusercontent.com/vectordotdev/vector-test-harness/master/cases/regex_parsing_performance/README.md",
+    "https://raw.githubusercontent.com/vectordotdev/vector-test-harness/master/cases/file_to_tcp_performance/README.md",
+    "https://raw.githubusercontent.com/vectordotdev/vector-test-harness/master/bin/compare",
+    "https://github.com/vectordotdev/vector-test-harness/tree/master/bin",
+    "https://raw.githubusercontent.com/vectordotdev/vector-test-harness/master/lib/vector-test-harness/init.sh",
+    "https://raw.githubusercontent.com/vectordotdev/vector-test-harness/master/lib/vector-test-harness/utils/print_compare_test",
+    "https://raw.githubusercontent.com/vectordotdev/vector-test-harness/master/cases/regex_parsing_performance/ansible/config_files/td-agent-bit.conf",
+    "https://raw.githubusercontent.com/vectordotdev/vector-test-harness/master/cases/regex_parsing_performance/ansible/config_files/td-agent-bit.parsers.conf",
+    "https://raw.githubusercontent.com/vectordotdev/vector-test-harness/master/cases/regex_parsing_performance/ansible/config_files/td-agent.conf"
+  ],
+  "confidence": 0.75
+}

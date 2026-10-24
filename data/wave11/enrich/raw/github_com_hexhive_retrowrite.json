@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/hexhive/retrowrite",
+  "one_liner": "Static rewriter adding ASan and AFL coverage to Linux x86-64/aarch64 binaries without source; claims 3x faster than Valgrind memcheck.",
+  "what_it_does": "RetroWrite turns a compiled Linux ELF binary back into reassemblable assembly (symbolization), runs an instrumentation pass over it, and reassembles it with an ordinary compiler. Passes include binary-only AddressSanitizer (BASan, linked against the compiler's libasan), AFL coverage (on x64 by assembling the output with afl-gcc; on aarch64 through its own coverage pass plus forkserver), coarse CFI on aarch64, a jumparound obfuscation pass and a kernel-module variant (KRetrowrite, kcov). It is a Python 3 command-line tool (`retrowrite [--asan | -m <pass>] <bin> <out.s>`), not a library you link; the result is a native binary that runs without any runtime translator, unlike Valgrind.",
+  "how_it_is_fast": "Instrumentation is inserted statically, so the rewritten program runs as native code with no dynamic binary translation; Valgrind memcheck instead JIT-translates every basic block at run time. On x64, relocation information in position-independent binaries tells pointers apart from constants, which lets it symbolize code and data references (including switch tables) without heuristics. The BASan pass emits the same inline shadow-memory check as compiler ASan (address >> 3, shadow offset 0x7fff8000) before each 1/2/4/8-byte access and uses a register-liveness analysis to borrow free registers and skip saving RFLAGS where possible, so checks avoid most spills. AFL coverage on x64 reuses afl-gcc's assembler instrumentation on the symbolized output, which is why it matches compiler-instrumented speed.",
+  "when_to_use": [
+    "Fuzzing a closed-source Linux x86-64 PIE binary with AFL/AFL++ when QEMU mode is too slow; the paper abstract claims 4.5x over QEMU-mode AFL and parity with compiler instrumentation.",
+    "Memory-error checking of a binary-only C program where Valgrind memcheck's slowdown makes test or fuzz runs impractical (abstract: about 3x faster than memcheck on SPEC CPU2006 C benchmarks).",
+    "Stripped or non-PIE aarch64 Linux binaries, which the aarch64 rewriter supports (the x64 one does not).",
+    "Fuzzing Linux kernel modules without source via KRetrowrite with kcov or BASan.",
+    "Research or tooling that needs editable, reassemblable assembly of a binary to write a custom instrumentation pass in Python."
+  ],
+  "when_not_to_use": [
+    "C++ binaries: the README marks C++ support as work in progress on both architectures, and issue #26 (g++ hello world cannot be rebuilt) is open.",
+    "Stripped or non-PIE x86-64 binaries: the x64 rewriter needs symbols and position-independent code (merging stripped-binary function detection is still open as issue #40).",
+    "When you have source: compiler AddressSanitizer is faster (the abstract snippet puts BASan about 0.65x slower than source ASan) and checks wider accesses.",
+    "When you need memcheck's uninitialized-value tracking or leak-checking semantics; BASan is an ASan-style redzone checker, so the 3x comparison is between tools that check different things.",
+    "Production or safety-critical rewriting: reassembly can silently mis-symbolize (open issues #45 RIP-relative addressing, #38 omitted data sections, #35 functions not disassembled, #49 segfaults in BASan-rewritten SPEC2006 gcc and bzip2), and the USENIX Security 2023 'Reassembly Is Hard' study (slides, search snippet only) counts RetroWrite output as compilable for 95.2% of 25,704 binaries and still reports symbolization errors; compiling is not the same as running correctly."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Python 3 (README says 3.6) with pyelftools, capstone >= 4.0.2, intervaltree and archinfo pinned to 9.1.11752; a GCC or Clang toolchain to reassemble, libasan for BASan, afl-gcc/afl-clang (AFL++) for x64 coverage",
+    "min_toolchain": "Python 3.6; capstone 4.0.2+ (README warns distro capstone packages may be too old)",
+    "platforms": "Linux ELF on x86-64 (PIE, non-stripped, non-C++ only) and aarch64 (stripped and non-PIE supported, different algorithm); no Windows or macOS",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — replaces running the binary under Valgrind memcheck (or AFL QEMU mode) with a rewrite-then-run step on supported binaries, but it reports ASan-style errors, not memcheck's, and works only on binaries the rewriter accepts"
+  },
+  "gotchas": [
+    "The x64 BASan pass skips memory operands that are not 1, 2, 4 or 8 bytes (it prints 'Maybe missed an access'), so 16-byte SSE/AVX accesses go unchecked, and rep stos is marked TODO.",
+    "Stack redzones are added only to functions that load a stack canary in their first 20 instructions, so binaries built without -fstack-protector get no stack-overflow detection.",
+    "Depending on the libasan version the output may fail to link with 'undefined reference to __asan_init_v4'; the README's fix is a sed rename to __asan_init.",
+    "Register analysis is slow on large binaries; the -c flag caches it next to the output, and a stale cache prints 'Missing free reglist in cache. Regenerate!' and falls back to saving registers."
+  ],
+  "pick_this_over_siblings_when": "Pick RetroWrite over Dr. Memory or Valgrind when the target is a supported Linux PIE C binary and you can afford a rewrite step, since the result runs natively with compiler-ASan-style checks; pick E9Patch when the binary is stripped, non-PIE or C++ (it patches in place with trampolines instead of reassembling), and compiler AddressSanitizer whenever you have source.",
+  "verified_claims_summary": "Only the IEEE S&P 2020 abstract was readable (via search snippets): BASan about 3x faster than Valgrind memcheck and about 0.65x slower than source ASan on the SPEC CPU2006 C benchmarks, detecting 80% more bugs, and AFL coverage 4.5x faster than QEMU mode (a Purdue thesis snippet says 7.5x). CPU, compiler, flags and per-benchmark numbers are in the paper, which was unreachable (nebelwelt.net and cs.purdue.edu DNS-blocked), and the repo has no benchmark data.",
+  "status_note": "Stale research code: last commit 2025-04-26 (jumparound pass), 29 open issues mostly unanswered since 2022, no releases; MIT-licensed, 754 stars.",
+  "sources_read": [
+    "https://github.com/HexHive/retrowrite",
+    "https://raw.githubusercontent.com/HexHive/retrowrite/HEAD/README.md",
+    "https://raw.githubusercontent.com/HexHive/retrowrite/HEAD/requirements.txt",
+    "https://raw.githubusercontent.com/HexHive/retrowrite/HEAD/setup.py",
+    "https://raw.githubusercontent.com/HexHive/retrowrite/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/HexHive/retrowrite/HEAD/retrowrite",
+    "https://github.com/HexHive/retrowrite/tree/master/rwtools_x64/asan",
+    "https://github.com/HexHive/retrowrite/tree/master/librw_x64",
+    "https://raw.githubusercontent.com/HexHive/retrowrite/HEAD/rwtools_x64/asan/instrument.py",
+    "https://raw.githubusercontent.com/HexHive/retrowrite/HEAD/rwtools_x64/asan/snippets.py",
+    "https://raw.githubusercontent.com/HexHive/retrowrite/HEAD/librw_x64/rw.py",
+    "https://github.com/HexHive/retrowrite/issues?q=is%3Aissue",
+    "https://github.com/HexHive/retrowrite/issues/49",
+    "https://github.com/HexHive/retrowrite/issues/34",
+    "https://github.com/HexHive/retrowrite/commits/master",
+    "https://nebelwelt.net/publications/files/20Oakland.pdf (blocked: DNS not resolved)",
+    "https://www.cs.purdue.edu/homes/dxu/pubs/SP20.pdf (blocked: DNS not resolved)",
+    "WebSearch snippets: RetroWrite S&P 2020 abstract; USENIX Security 2023 'Reassembly Is Hard' slides"
+  ],
+  "confidence": 0.6
+}

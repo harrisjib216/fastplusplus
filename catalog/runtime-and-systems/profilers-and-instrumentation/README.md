@@ -3,7 +3,7 @@
 <sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Runtime and systems](../README.md)</sub>
 
 **What these beat:** perf, gprof, Valgrind  
-**20 entries:** 0 tier A · 5 tier B · 10 tier C · 5 tier D · 17 copyable, 3 study only
+**22 entries:** 0 tier A · 5 tier B · 12 tier C · 5 tier D · 19 copyable, 3 study only
 
 | # | Project | What it is | Tier | Language | License | Status |
 |--:|---|---|:-:|---|---|---|
@@ -19,13 +19,15 @@
 | 10 | [**MicroProfiler (micro-profiler)**](tyoma-micro-profiler.md) | Low-overhead real-time instrumenting C/C++ profiler; README chart shows 6-7x less slowdown than AQtime and the VS instrumenting profiler. | **C** | C++ | MIT | 🟢 active |
 | 11 | [**wallClockProfiler**](jasonrohrer-wallclockprofiler.md) | Single-file C++ 'poor man's profiler' that drives GDB to sample wall-clock stacks, with far less slowdown than callgrind. | **C** | C++ | Public-Domain… | 🟢 active |
 | 12 | [**aw-backtrace**](gperftools-aw-backtrace.md) | Async-signal-safe, crash-free DWARF (.eh_frame) backtracer from the gperftools maintainers that unwinds faster than libgcc and LLVM libunwind. | **C** | C++ | ISC | 🟢 active |
-| 13 | [**funtrace**](yosefk-funtrace.md) | Small flight-recorder function call tracer for C/C++ on x86-64 Linux; author reports 4.5-18x lower per-call cost than XRay and uftrace. | **C** | C++ | BSD-2-Clause | 🟡 stale |
-| 14 | [**tracing_malloc**](dpull-tracing-malloc.md) | Linux LD_PRELOAD malloc hook that records live allocations with stack traces; far lower overhead than Valgrind for leak hunting. | **C** | C++ | no license (study only) | 🟢 active |
-| 15 | [**Palanteer**](dfeneyrou-palanteer.md) | Single-header C++11 tracing/logging instrumentation plus viewer; enqueues a log in \~19 ns versus 1250 ns measured for spdlog. | **C** | C++ | MIT (instrumentation… (study only) | 🟡 stale |
-| 16 | [**heaptrack**](kde-heaptrack.md) | Linux heap profiler using LD_PRELOAD and libunwind; much lower time and memory overhead than Valgrind massif (no published numbers). | **D** | C++ | GPL-2.0-or-later | 🟢 active |
-| 17 | [**heapusage**](d99kris-heapusage.md) | LD_PRELOAD/DYLD_INSERT_LIBRARIES heap-error and leak checker covering a small subset of Valgrind Memcheck without CPU emulation. | **D** | C++ | BSD-3-Clause | 🟢 active |
-| 18 | [**memtrail**](jrfonseca-memtrail.md) | LD_PRELOAD heap profiler and leak finder for Linux; claims much lower overhead than Valgrind Massif or Memcheck, unmeasured. | **D** | C | MIT (permission headers in… | 🟢 active |
-| 19 | [**bytehound**](koute-bytehound.md) | LD_PRELOAD heap profiler for Linux recording every allocation with full backtraces, positioned as a cheaper heaptrack/massif alternative. | **D** | Rust | Apache-2.0 OR MIT | 🔴 abandoned |
-| 20 | [**Perforator**](yandex-perforator.md) | Yandex's eBPF continuous CPU profiler that unwinds frame-pointer-less native stacks in-kernel; a perf record alternative, no measured win. | **D** | Go | Apache-2.0 (eBPF unwinder… (study only) | 🟢 active |
+| 13 | [**RetroWrite**](hexhive-retrowrite.md) | Static rewriter adding ASan and AFL coverage to Linux x86-64/aarch64 binaries without source; claims 3x faster than Valgrind memcheck. | **C** | Python | MIT | 🟡 stale |
+| 14 | [**funtrace**](yosefk-funtrace.md) | Small flight-recorder function call tracer for C/C++ on x86-64 Linux; author reports 4.5-18x lower per-call cost than XRay and uftrace. | **C** | C++ | BSD-2-Clause | 🟡 stale |
+| 15 | [**AFL (american fuzzy lop)**](google-afl.md) | Original coverage-guided fuzzer: edge-coverage feedback plus a fork server; far more code reached than blind mutation fuzzing. | **C** | C | Apache-2.0 | 🔴 abandoned |
+| 16 | [**tracing_malloc**](dpull-tracing-malloc.md) | Linux LD_PRELOAD malloc hook that records live allocations with stack traces; far lower overhead than Valgrind for leak hunting. | **C** | C++ | no license (study only) | 🟢 active |
+| 17 | [**Palanteer**](dfeneyrou-palanteer.md) | Single-header C++11 tracing/logging instrumentation plus viewer; enqueues a log in \~19 ns versus 1250 ns measured for spdlog. | **C** | C++ | MIT (instrumentation… (study only) | 🟡 stale |
+| 18 | [**heaptrack**](kde-heaptrack.md) | Linux heap profiler using LD_PRELOAD and libunwind; much lower time and memory overhead than Valgrind massif (no published numbers). | **D** | C++ | GPL-2.0-or-later | 🟢 active |
+| 19 | [**heapusage**](d99kris-heapusage.md) | LD_PRELOAD/DYLD_INSERT_LIBRARIES heap-error and leak checker covering a small subset of Valgrind Memcheck without CPU emulation. | **D** | C++ | BSD-3-Clause | 🟢 active |
+| 20 | [**memtrail**](jrfonseca-memtrail.md) | LD_PRELOAD heap profiler and leak finder for Linux; claims much lower overhead than Valgrind Massif or Memcheck, unmeasured. | **D** | C | MIT (permission headers in… | 🟢 active |
+| 21 | [**bytehound**](koute-bytehound.md) | LD_PRELOAD heap profiler for Linux recording every allocation with full backtraces, positioned as a cheaper heaptrack/massif alternative. | **D** | Rust | Apache-2.0 OR MIT | 🔴 abandoned |
+| 22 | [**Perforator**](yandex-perforator.md) | Yandex's eBPF continuous CPU profiler that unwinds frame-pointer-less native stacks in-kernel; a perf record alternative, no measured win. | **D** | Go | Apache-2.0 (eBPF unwinder… (study only) | 🟢 active |
 
 <sub>Tiers: **A** reproducible public benchmark (code, compiler, flags and CPU stated) · **B** independent or peer-reviewed measurement · **C** first-party claim · **D** directional, no numbers. Status: 🟢 active · 🔵 finished · 🟡 slow or stale · 🔴 abandoned · ⚪ unknown. *Study only* means no usable open-source license: read the idea, don't copy the code.</sub>

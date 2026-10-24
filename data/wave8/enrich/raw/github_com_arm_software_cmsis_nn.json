@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/arm-software/cmsis-nn",
+  "one_liner": "Arm's int8/int16/int4 neural-network kernels for Cortex-M; bit-exact drop-in backend that replaces TensorFlow Lite Micro reference kernels.",
+  "what_it_does": "A C library of quantized NN operators (Conv2D, depthwise conv, transpose conv, fully connected, batch matmul, LSTM, SVDF, pooling, softmax, add/mul, pad, transpose) following the TFLite int8/int16 quantization spec, plus int4-weight variants and an opt-in experimental float16/float32 set. Inside TensorFlow Lite Micro it is selected with a build switch (OPTIMIZED_KERNEL_DIR=cmsis_nn, formerly TAGS=cmsis-nn) and replaces the reference kernels with bit-exact ones. Used standalone, each operator is a C function (e.g. arm_convolve_wrapper_s8) taking a cmsis_nn_context scratch buffer, per-channel quant params (multiplier/shift) and NHWC dims; the caller sizes the scratch buffer with the matching *_get_buffer_size function.",
+  "how_it_is_fast": "Convolution is done as partial im2col plus GEMM: only a couple of patches are expanded into a scratch buffer at a time, then multiplied, to keep RAM small. On cores with the DSP extension (Cortex-M4, M7, M33) int8 data is widened to int16 and multiplied two lanes at a time with the SMLAD dual multiply-accumulate instruction; on Helium cores (Cortex-M55, M85) the MVE path runs int8 matrix multiplies with vector instructions. A wrapper dispatches shape-specialized kernels (1x1 fast path, 1xN path, generic path), and requantization stays in fixed point, so the bit-exact TFLM result is kept.",
+  "when_to_use": [
+    "Running int8-quantized TFLite models with TensorFlow Lite Micro on Cortex-M4/M7/M33 (DSP extension) or Cortex-M55/M85 (Helium): switch the TFLM build to the cmsis_nn kernels and keep the same outputs.",
+    "Convolution-heavy models (image classification, Visual Wake Words-style CNNs) where kernel time dominates; a third-party SparkFun Edge (Cortex-M4F) run measured 14.01 s to 2.33 s for a three-conv-layer cifar10 example.",
+    "Bare-metal firmware without an interpreter that needs hand-called quantized layers with a fixed, caller-sized scratch buffer and no heap.",
+    "int4-weight / int8-activation or int16-activation (16x8) models on Cortex-M, which the operator table lists as supported for conv, depthwise conv and fully connected."
+  ],
+  "when_not_to_use": [
+    "Arm A-class CPUs (Cortex-A, Neoverse): the README itself says to prefer Arm Compute Library or XNNPACK there.",
+    "Models dominated by interpreter or non-kernel overhead: the TFLM paper (per search snippet, not opened) reports only about 25% gain for the Google Hotword model against more than 4x for Visual Wake Words on Cortex-M4.",
+    "Float models on cores without Helium: the float API is experimental and opt-in, and on DSP-only cores it falls back to scalar C that is not a performance target; the v8.0.0 release notes recommend Arm Compiler 6 and mention known GCC issues for the float extension.",
+    "Projects built with IAR or for a host PC: IAR is untested (open issues #212 and #210 on inline assembly and warnings) and host compilation is not supported out of the box.",
+    "Operators outside the table (e.g. Minimum/Maximum/Pad/Transpose have no int16 or DSP versions), where TFLM falls back to its reference kernels anyway."
+  ],
+  "integration": {
+    "form": "static lib (CMake add_library cmsis-nn STATIC) or source-drop via the CMSIS pack / TFLM's downloaded copy",
+    "dependencies": "CMSIS-Core headers (the TFLM build notes say CMSIS-NN depends on CMSIS-Core); Arm Ethos-U Core Platform toolchain files recommended for CMake builds; pybind11 only for the optional Python buffer-size helpers",
+    "min_toolchain": "CMake 3.21; tested with Arm Compiler 6 and Arm GNU Toolchain (C standard not stated); IAR untested",
+    "platforms": "Arm Cortex-M: pure C path (M0/M3), DSP-extension path (M4, M7, M33 with DSP), MVE/Helium path (M55, M85); selected from compiler feature flags",
+    "thread_safety": "not documented (kernels write only to caller-supplied output and a caller-supplied scratch buffer in cmsis_nn_context)",
+    "drop_in_for_baseline": "partial — inside TensorFlow Lite Micro it is a build switch with bit-exact results versus the reference kernels; outside TFLM it is a different C API that needs quantization parameters and a scratch buffer per call"
+  },
+  "gotchas": [
+    "Do not build with -fno-builtin or -ffreestanding: CMSIS-NN leans on inlined memcpy/memset, and in TensorFlow issue #37361 the flag cut its lead over the reference kernels from about 6x to about 7%; TensorFlow PR #37936 ('TFLu: remove -fno-builtin compiler flag', merged 2020-05-22) removed it from the TFLM build, but check your own vendor makefiles.",
+    "The CMake default is -Ofast, and the experimental float kernels do not handle NaN, Inf, denormals or signed zero; inputs must already be finite.",
+    "CMSIS_NN_USE_REQUANTIZE_INLINE_ASSEMBLY is faster on Cortex-M4 but slower on other cores, and an output difference with it enabled is an open issue (#177); options marked as affecting headers must be set identically in TFLM.",
+    "APIs change across major releases (v6.0.0 and v7.0.0 changed arm_convolve_s8, buffer-size and LSTM signatures), and recent fixes include wrong transpose-conv output when pad_h % stride_h != 0 (#230) and missing int16 saturation in LSTM gates (#245), so pin a release and run the unit tests."
+  ],
+  "pick_this_over_siblings_when": "Pick CMSIS-NN for Cortex-M microcontrollers running TFLM int8/int16 models; pick KleidiAI (the other Arm kernel library catalogued) for Cortex-A/Neoverse CPUs and LLM matmuls, and RTNeural for small recurrent audio models on desktop-class CPUs where floating point and Eigen/xsimd are available.",
+  "verified_claims_summary": "One third-party user (TensorFlow issue #37361, March 2020) timed interpreter->Invoke() with GPIO toggling on a SparkFun Edge (Cortex-M4F) for the TFLM cifar10 example: reference kernels 14.01 s versus CMSIS-NN 2.33 s (about 6.0x) once -fno-builtin was removed, but 14.05 s versus 13.13 s (about 1.07x) with it; GCC version, -O level, clock and repeat count are not given, and the CMSIS-NN version was the one TFLM vendored in 2020.",
+  "status_note": "Actively maintained by Arm (last commit 2026-10-21, latest release v8.0.0 adding experimental float kernels, about two releases a year) under Apache-2.0, and shipped as the CMSIS-NN backend of TensorFlow Lite Micro, so it is safe to vendor.",
+  "sources_read": [
+    "https://github.com/ARM-software/CMSIS-NN",
+    "https://raw.githubusercontent.com/ARM-software/CMSIS-NN/HEAD/README.md",
+    "https://raw.githubusercontent.com/ARM-software/CMSIS-NN/HEAD/Include/arm_nnfunctions.h",
+    "https://raw.githubusercontent.com/ARM-software/CMSIS-NN/HEAD/Source/ConvolutionFunctions/arm_convolve_wrapper_s8.c",
+    "https://raw.githubusercontent.com/ARM-software/CMSIS-NN/HEAD/Source/ConvolutionFunctions/arm_convolve_s8.c",
+    "https://raw.githubusercontent.com/ARM-software/CMSIS-NN/HEAD/ARM.CMSIS-NN.pdsc",
+    "https://raw.githubusercontent.com/ARM-software/CMSIS-NN/HEAD/CMakeLists.txt",
+    "https://github.com/ARM-software/CMSIS-NN/issues?q=is%3Aissue",
+    "https://github.com/ARM-software/CMSIS-NN/releases",
+    "https://github.com/tensorflow/tensorflow/issues/37361",
+    "https://github.com/tensorflow/tensorflow/pull/37936",
+    "https://raw.githubusercontent.com/tensorflow/tflite-micro/main/tensorflow/lite/micro/kernels/cmsis_nn/README.md"
+  ],
+  "confidence": 0.72
+}

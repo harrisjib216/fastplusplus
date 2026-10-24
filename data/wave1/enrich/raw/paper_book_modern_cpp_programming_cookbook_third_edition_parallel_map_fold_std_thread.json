@@ -1,0 +1,51 @@
+{
+  "id": "paper:book-modern-cpp-programming-cookbook-third-edition-parallel-map-fold-std-thread",
+  "one_liner": "Book recipe running std::transform and std::accumulate on one std::thread per hardware thread; about 2.2x at 50M ints.",
+  "what_it_does": "A companion example (Chapter08/recipe_8_09.h) for the Packt book Modern C++ Programming Cookbook, 3rd edition. It defines two free function templates, parallel_map(begin, end, f), an in-place transform, and parallel_fold(begin, end, init, op), a reduction, and a driver that times them against plain std::transform and std::accumulate on std::vector<int> sizes from 10,000 to 50,000,000. There is no library to adopt: it is about 60 lines of source to copy, with an interface close to the standard algorithms (map always writes in place; fold seeds each partial result with R{} and adds init only in the final combine).",
+  "how_it_is_fast": "Static data-parallel chunking (fork-join): the range is cut into hardware_concurrency() equal contiguous slices, each slice runs the ordinary sequential algorithm on its own std::thread, and the fold combines the per-thread partial results with one more std::accumulate after join. Nothing about the per-element work changes, so the gain is bounded by the core count and, for loops this light (one add per int), by memory bandwidth; counting 4 bytes read and 4 written per element, the relayed book figures put the parallel map near 15 GB/s against about 7 GB/s sequential (derived). Ranges of 10,000 elements or fewer skip the threads and call the sequential algorithm.",
+  "when_to_use": [
+    "A one-off parallel transform or reduction over millions of elements in a contiguous container, in a codebase that cannot rely on std::execution::par (for example libstdc++ without TBB, or libc++ builds where the parallel algorithms are not available).",
+    "Teaching or prototyping: the code shows the whole fork-join pattern (chunk, spawn, join, combine) in one screen.",
+    "Calls that are rare and large (the book places the break-even near 2 million ints), so creating and joining N threads per call is a small share of the time.",
+    "Per-element work heavier than one add, where the loop is compute-bound and can scale closer to the core count than the memory-bound 2.2x reported here."
+  ],
+  "when_not_to_use": [
+    "Frequent or small calls: every call creates and joins hardware_concurrency() threads; a persistent pool (BS::thread_pool, dispenso, Taskflow) or std::execution::par amortises that cost.",
+    "Code that can throw: an exception escaping a worker calls std::terminate, and a std::system_error from std::thread construction partway through the loop destroys still-joinable threads, which also terminates.",
+    "Stateful or move-sensitive functors: every worker evaluates std::forward<F>(f) on the same object, so an rvalue functor is moved from concurrently by several threads (a data race for any functor holding state such as a std::function or a captured container).",
+    "Non-associative operations, or floating-point sums that must match the sequential result bit for bit: the fold regroups the reduction by chunk.",
+    "Nested or concurrent use from several threads: each call spawns a full set of threads with no shared scheduler, so the machine is oversubscribed."
+  ],
+  "integration": {
+    "form": "source-drop (two function templates in one header of a book sample)",
+    "dependencies": "none (standard library only: <thread>, <algorithm>, <numeric>)",
+    "min_toolchain": "C++17 for the code itself (std::invoke in the timer, C++14 std::plus<>); the repo builds with /std:c++latest or -std=c++2a and the README lists VC++ 2022 17.7, GCC 14 and Clang 19",
+    "platforms": "any platform with std::thread; the repo's CMake is set up for Windows (top-level add_subdirectory uses lowercase chapterNN while the folders are ChapterNN, so configuring fails on case-sensitive file systems; issue #7, open)",
+    "thread_safety": "Not documented. Each call is self-contained, but the caller must not touch the range during the call, and the functor is shared (and forwarded) across all worker threads.",
+    "drop_in_for_baseline": "partial — same iterator-pair shape as std::transform/std::accumulate, but map is in place only, there is no execution-policy or output-iterator overload, and the operator must be associative"
+  },
+  "gotchas": [
+    "std::thread::hardware_concurrency() may return 0 when the value is not computable, and the code divides the range size by it with no check (division by zero).",
+    "The header is not self-contained for copying: it uses std::vector, std::setw and std::invoke without including <vector>, <iomanip> or <functional> (main.cpp's earlier includes cover it), and get_no_of_threads, test_mapreduce_threads and execute are non-inline functions defined in a header, so including it in two translation units breaks the link.",
+    "Harness: one run per size, sequential always first, no warm-up or repetitions; the sums and vectors are consumed only by assert, so in an NDEBUG build the sequential timings are open to dead-code elimination while the thread-spawning parallel calls are not (a bias against the parallel side, not toward it). Thread creation and join are inside the parallel timing, and both sides work on freshly copied vectors, which is fair.",
+    "Build configuration behind the book figures is not stated: the CMake files add no optimisation flag for any compiler (GCC and Clang get -g only), and the README's Visual Studio 2022 command generates a Win32 (32-bit) solution, while the book's machine is described as 64-bit Windows."
+  ],
+  "pick_this_over_siblings_when": "Pick it over the std::async sibling (recipe 8.10) only if you want plain threads and accept std::terminate on errors; that version's fold collects partial sums through futures that rethrow worker exceptions and it adds a recursive variant. For anything long-lived prefer std::execution::par (recipe 8.11 in the same repo), or a reusable pool such as BS::thread_pool or dispenso, which avoid creating threads on every call.",
+  "verified_claims_summary": "The book (relayed via the seed lead; no numbers anywhere in the repo) reports one run at 50,000,000 ints: map 27,457 us parallel against 60,049 us for std::transform and fold 19,075 us against 41,374 us for std::accumulate into long long, about 2.2x each (derived), on 64-bit Windows with an Intel Core i7 of 4 cores and 8 threads; compiler, flags and exact CPU are not stated. The same book's std::async recipe reports a different sequential fold time (58,689 us) for the same 50M elements, so the run-to-run spread is about as large as the gain.",
+  "status_note": "Stale MIT-licensed Packt companion repo (10 commits, code last changed 2024-02-23, README 2024-02-28; 7 issues with no maintainer replies), small enough to copy, but the parallel algorithms in <execution> are the maintained route.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/main/Chapter08/recipe_8_09.h",
+    "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/main/Chapter08/recipe_8_10.h",
+    "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/main/Chapter08/recipe_8_11.h",
+    "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/main/Chapter08/main.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/main/Chapter08/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/main/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/main/include/features.h",
+    "https://github.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition",
+    "https://github.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/commits/main",
+    "https://github.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/issues?q=is%3Aissue",
+    "https://github.com/PacktPublishing/Modern-Cpp-Programming-Cookbook-Third-Edition/issues/7"
+  ],
+  "confidence": 0.65
+}

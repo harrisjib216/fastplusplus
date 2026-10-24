@@ -1,0 +1,50 @@
+{
+  "id": "paper:book-the-cpp-programmers-mindset-clamp-conditional-store",
+  "one_liner": "Book micro-idiom: an if-guarded store clamp loop beats a std::min (cmov) clamp loop by about 1.2x, vectorisation off.",
+  "what_it_does": "A Chapter-04 sample from the Packt companion repository for The C++ Programmer's Mindset that clamps a std::span<uint16_t> to 255 in place in two ways: ct::clamp_min writes v = std::min(v, max) for every element, and ct::clamp_conditional writes if (v > max) v = max. There is no library to adopt; the takeaway is a two-line loop pattern for your own code. Both functions sit in a separate static library (clamp_loop) so the benchmark cannot inline them, and Google Benchmark times each on 1,000 freshly drawn random values per iteration.",
+  "how_it_is_fast": "The std::min form is the branch-free (compare plus conditional move) version named in the record's baseline: every element is loaded, compared, selected and stored, and the stored value depends on that load-compare chain. The if-form is a real branch: when the predictor guesses right the CPU runs ahead past the compare, the stored value is the constant 0xFF, and in-range elements are not stored at all. With a threshold of 255 and uniform 16-bit input about 99.6% of elements exceed the limit (derived from the repo constants), so the branch is almost perfectly predictable; this is branch prediction against predication (if-conversion, cmov), and the advantage reverses when the branch becomes unpredictable.",
+  "when_to_use": [
+    "Scalar loops where the clamp or saturate condition is highly predictable, either almost always true (as in this benchmark, 99.6% of values over the limit) or almost never true (rare outliers in sensor or audio samples).",
+    "Loops the compiler will not vectorise anyway (per-element function calls, pointer chasing, loop-carried state), where the choice between a branch and a conditional move is what is left to tune.",
+    "In-place updates where most elements are already in range: the if-form skips the store for them, so read-mostly data are not rewritten.",
+    "As a template for measuring your own data: the two-function harness is small enough to copy and rerun with your real value distribution before committing to either form."
+  ],
+  "when_not_to_use": [
+    "Unpredictable data, for example a threshold near the median of the input: roughly every other branch can mispredict, which costs far more than a conditional move, and the repo never measures this case.",
+    "Loops that can be vectorised: the benchmark switches tree vectorisation off for both functions, while a normal optimised build can turn the std::min loop into SIMD min instructions over 16 uint16_t lanes per 256-bit register; the conditional-store form needs masked stores to vectorise and can lose that speedup, so the 1.2x is against an artificially scalar baseline.",
+    "Code that needs a portable or guaranteed win: the gain is about 1.2x on one undisclosed machine and compiler, and a compiler may if-convert or lay out the branch differently from version to version.",
+    "Clamping whole arrays for throughput: a SIMD library min (xsimd, Vc) or an auto-vectorised std::min/std::clamp loop is the bigger lever."
+  ],
+  "integration": {
+    "form": "source-drop (a loop idiom; the repo sample is the clamp_loop static library plus a Google Benchmark executable)",
+    "dependencies": "none for the idiom; the benchmark needs Google Benchmark, and the shared Chapter-04 CMake project also requires GTest, Threads and OpenMP (and optionally BLAS) at configure time; Chapter-04 has no vcpkg.json at HEAD",
+    "min_toolchain": "C++20 for std::span (CMakeLists sets CMAKE_CXX_STANDARD 20), CMake 3.30+; the no-tree-vectorize switch uses the GCC-only [[gnu::optimize]] attribute",
+    "platforms": "any (portable C++); the branch-versus-cmov balance depends on the CPU's branch predictor and the compiler's code layout",
+    "thread_safety": "Not documented; both functions modify the span in place, so concurrent calls need disjoint spans.",
+    "drop_in_for_baseline": "partial: if (v > max) v = max gives the same result as v = std::min(v, max) for these unsigned integers, but whether it is faster depends on how predictable the data are and on whether the loop would otherwise vectorise."
+  },
+  "gotchas": [
+    "The workload is the predictable extreme: about 99.6% of uniform uint16_t values exceed 0xFF, so both versions store nearly every element and the branch is almost always taken. Open issue #15 notes that the book text implies an [[unlikely]] hint on this branch; the maintainer replied that the code is correct and the compiler already places the store path out of line without the attribute, yet with this benchmark's data that path runs 99.6% of the time, so an [[unlikely]] hint would be the wrong hint here.",
+    "Vectorisation is disabled with [[gnu::optimize(\"no-tree-vectorize\")]], which only GCC honours (Clang ignores the unknown attribute, so a Clang build can vectorise both loops). The GCC manual says the optimize attribute is for debugging only and not for production, and kernel and GCC discussions report it can drop other command-line optimisation settings for the function (per WebSearch snippets; gcc.gnu.org was unreachable). It applies to both functions, so the comparison stays symmetric but unrepresentative of production builds.",
+    "Chapter-04/CMakeLists.txt sets no CMAKE_BUILD_TYPE or -O flags; a plain single-config configure builds without optimisation, where std::min stays an out-of-line function call and the comparison means something else. Reproduce with -DCMAKE_BUILD_TYPE=Release, and note the book's compiler, flags and CPU are not recorded in the repo.",
+    "Each iteration calls PauseTiming/ResumeTiming around a roughly 500 ns kernel; that timer overhead lands in both measurements, so absolute times are overstated and the 605 versus 500 ns ratio is compressed (the absolute gap is about 105 ns per 1,000 elements, about 0.1 ns per element, derived). Each benchmark also seeds its generator from std::random_device, so the two series see different value sequences."
+  ],
+  "pick_this_over_siblings_when": "Use this idiom only for scalar loops that will not vectorise; for bulk clamping of arrays, an auto-vectorised std::min/std::clamp loop or xsimd/Vc min operations process 16 or more uint16_t values per instruction, which dwarfs a 1.2x scalar gain.",
+  "verified_claims_summary": "The repository holds code only; the book's own run, relayed by the seed lead, gives 605 ns per call for the std::min loop against 500 ns for the conditional-store loop when clamping 1,000 uniform uint16_t values to 255 in place, about 1.2x, with tree vectorisation disabled for both through a GCC attribute. Compiler version, flags and CPU are not stated, and the times include Google Benchmark's PauseTiming/ResumeTiming overhead.",
+  "status_note": "Packt companion repository, MIT-licensed, 20 stars and 8 forks; last commit 2026-01-22 (a README; code last changed in November 2025), with one open issue (#15) about this exact loop; there is nothing to vendor because the idiom is two lines.",
+  "sources_read": [
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/tree/main/Chapter-04",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/commits/main",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/issues",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/issues/15",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/bench_clamp_loop.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/clamp_loop.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/clamp_loop.h",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/vcpkg.json",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/LICENSE"
+  ],
+  "confidence": 0.6
+}

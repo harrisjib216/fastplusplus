@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/jbaldwin/libcoro",
+  "one_liner": "C++20 coroutine library with epoll/kqueue TCP, UDP, TLS and DNS; edges cppcoro on single-threaded socket ping-pong.",
+  "what_it_does": "libcoro bundles C++20 coroutine types (task, generator, when_all, when_any, sync_wait), coroutine-aware sync primitives (event, latch, mutex, shared_mutex, semaphore, condition_variable, ring_buffer, queue), two executors (a fixed-size thread_pool and an I/O scheduler, called io_scheduler before January 2026) and a coroutine networking layer with TCP client/server, UDP peer, OpenSSL TLS and a c-ares DNS resolver. Code co_awaits executor.schedule() to move onto an executor and co_awaits client.poll(op) before non-blocking recv/send calls; it is its own API, not a drop-in for cppcoro or Asio.",
+  "how_it_is_fast": "The scheduler is a readiness-based event loop over epoll on Linux and kqueue on macOS: each poll() registers the fd one-shot (EPOLLONESHOT), races it against a timer, and removes it when the event fires, with timeouts handled by a timerfd. In process_tasks_inline mode the event-loop thread resumes coroutines itself, so a one-loop-per-core design avoids cross-thread hand-offs. task uses symmetric transfer and when_all joins through one atomic latch; coro::queue hands a pushed element straight to a waiting consumer when one exists. thread_pool is a single std::deque guarded by one mutex and condition variable, with no per-thread queues or work stealing, which is why it does badly on fork-join.",
+  "when_to_use": [
+    "Linux or macOS network services and clients written as coroutines that want TCP, UDP, TLS and async DNS in one Apache-2.0 library without Boost",
+    "Thread-per-core designs: one inline scheduler per core, where each request does little CPU work (in the third-party io_socket_st row it beat cppcoro by about 9%, 483074 vs 524717 us)",
+    "Async producer/consumer queues on a small thread pool: coro::queue on 64 threads moved 10M elements in 409967 us, close to TooManyCooks at 390771 us",
+    "Projects that also need coroutine primitives such as shared_mutex, semaphore, condition_variable, when_any and timeouts on scheduled tasks (std::stop_source plus a timeout)",
+    "Android targets: the repo ships a test harness for arm64-v8a, armeabi-v7a, x86 and x86_64 with TLS through prebuilt OpenSSL"
+  ],
+  "when_not_to_use": [
+    "Recursive fork-join or many small CPU tasks: it was the slowest runtime in the suite (mean ratio 2513.96x; skynet 119686148 us vs cppcoro 144907 us) because every schedule() goes through one mutex-guarded FIFO deque; issue #404 is open and the Chase-Lev work-stealing rework (PR #450) is not on main",
+    "Memory-bounded hosts running deep task trees: the FIFO queue turns fork-join into a breadth-first traversal, so peak RSS reached 14.66 GB on skynet, 5.03 GB on nqueens and 15.81 GB on fib(39); issue #446 is open",
+    "Peak single-threaded socket throughput: TooManyCooks (339340 us) and Boost.Cobalt (393036 us) beat it on io_socket_st (483074 us)",
+    "Windows or Emscripten network code: LIBCORO_FEATURE_NETWORKING and TLS are not supported there, and the I/O scheduler (timers, yield_for, schedule_after) requires the networking feature",
+    "Code that must track a stable API: io_scheduler was renamed to scheduler in January 2026 (#435) and a new socket Read/Write API landed in February 2026 (#436)"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "pthreads; c-ares (git submodule) for networking/DNS; OpenSSL for LIBCORO_FEATURE_TLS; CMake",
+    "min_toolchain": "C++20 with coroutine support; README lists g++ 11-13, clang++ 16-17 and MSVC 2022 (no networking/TLS on MSVC)",
+    "platforms": "Linux (epoll) and macOS (kqueue) with full features; Windows 2022 and Emscripten without networking or TLS; Android arm64-v8a, armeabi-v7a, x86, x86_64",
+    "thread_safety": "thread_pool, scheduler, queue, ring_buffer and the mutexes are documented as thread-safe; any co_await may resume on another thread, so thread_local must not be used across co_await unless the executor has exactly one thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Do not capture state in coroutine lambdas: the README warns captures are destroyed at the first suspension point (use-after-free); pass by value as arguments or wrap with coro::invoke.",
+    "The benchmarked commit (44d12235, PR #433) predates the io_scheduler-to-scheduler rename (#435), the socket Read/Write API (#436) and the scheduler lock removal (#444), so the suite's harness does not compile against main and current I/O numbers may differ; thread_pool.cpp is unchanged.",
+    "The README says threads can switch through 'work stealing' on libcoro's schedulers, but thread_pool is one shared FIFO deque behind a mutex; the profile in issue #404 shows about 96% of time in kernel spin-lock slow paths on fork-join.",
+    "Harness asymmetries in the io_socket_st row: the cppcoro program's timer includes stopping both io_services and joining both event threads while libcoro's stops before scheduler teardown, and libcoro is linked against tcmalloc while the suite's cppcoro build skips tcmalloc on Linux (mimalloc, jemalloc or glibc malloc)."
+  ],
+  "pick_this_over_siblings_when": "Pick libcoro over cppcoro when you need maintained Linux/macOS networking with TLS and DNS in plain C++20 (upstream cppcoro has no Linux sockets), and over Boost.Cobalt when you cannot take a Boost dependency or want a multi-threaded queue; pick Boost.Cobalt for faster single-threaded Asio I/O, and cppcoro, Coros or Marl for any CPU fork-join work.",
+  "verified_claims_summary": "In tzcnt/runtime-benchmarks on an AMD EPYC 7742 (Clang 21.1.7, -O3 -march=native, C++23, tcmalloc), a single-threaded TCP ping-pong of 100,000 requests over 20 connections took 483074 us with libcoro's inline io_scheduler against 524717 us for cppcoro's io_service from the andreasbuhr fork, about 1.09x (derived from page data), from one run each with no variance. The channel row (libcoro queue on 64 threads, 409967 us, against Boost.Cobalt on one thread, 910778 us) compares different thread configurations, so it is not like-for-like.",
+  "status_note": "Active (last commit 2026-03-31, 16 open issues) and Apache-2.0 with a CMake build that is easy to add_subdirectory or FetchContent, but its thread_pool redesign for fork-join is still open (issues #404 and #446).",
+  "sources_read": [
+    "https://github.com/jbaldwin/libcoro",
+    "https://raw.githubusercontent.com/jbaldwin/libcoro/HEAD/README.md",
+    "https://raw.githubusercontent.com/jbaldwin/libcoro/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jbaldwin/libcoro/HEAD/src/thread_pool.cpp",
+    "https://raw.githubusercontent.com/jbaldwin/libcoro/HEAD/include/coro/thread_pool.hpp",
+    "https://raw.githubusercontent.com/jbaldwin/libcoro/HEAD/src/scheduler.cpp",
+    "https://raw.githubusercontent.com/jbaldwin/libcoro/HEAD/include/coro/scheduler.hpp",
+    "https://raw.githubusercontent.com/jbaldwin/libcoro/HEAD/include/coro/task.hpp",
+    "https://raw.githubusercontent.com/jbaldwin/libcoro/HEAD/include/coro/queue.hpp",
+    "https://raw.githubusercontent.com/jbaldwin/libcoro/HEAD/include/coro/when_all.hpp",
+    "https://raw.githubusercontent.com/jbaldwin/libcoro/HEAD/src/detail/io_notifier_epoll.cpp",
+    "https://raw.githubusercontent.com/jbaldwin/libcoro/HEAD/include/coro/detail/io_notifier_epoll.hpp",
+    "https://raw.githubusercontent.com/jbaldwin/libcoro/HEAD/src/detail/io_notifier_kqueue.cpp",
+    "https://raw.githubusercontent.com/jbaldwin/libcoro/HEAD/src/net/tcp/client.cpp",
+    "https://raw.githubusercontent.com/jbaldwin/libcoro/44d12235a218a93cf6ce462f67c06a1287901c54/src/thread_pool.cpp",
+    "https://raw.githubusercontent.com/jbaldwin/libcoro/44d12235a218a93cf6ce462f67c06a1287901c54/include/coro/thread_pool.hpp",
+    "https://raw.githubusercontent.com/jbaldwin/libcoro/44d12235a218a93cf6ce462f67c06a1287901c54/include/coro/io_scheduler.hpp",
+    "https://github.com/jbaldwin/libcoro/commit/44d12235a218a93cf6ce462f67c06a1287901c54",
+    "https://github.com/jbaldwin/libcoro/commits/main",
+    "https://github.com/jbaldwin/libcoro/issues",
+    "https://github.com/jbaldwin/libcoro/issues/404",
+    "https://github.com/jbaldwin/libcoro/issues/446",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/build_and_bench_all.py",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/libcoro/CMakeLists.txt",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/libcoro/io_socket_st.cpp",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/libcoro/channel.cpp",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/libcoro/skynet.cpp",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/cobalt/channel.cpp",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/cppcoro/io_socket_st.cpp",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/cppcoro/CMakeLists.txt"
+  ],
+  "confidence": 0.75
+}

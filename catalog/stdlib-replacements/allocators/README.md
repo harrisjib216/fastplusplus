@@ -3,7 +3,7 @@
 <sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [C++ standard library replacements](../README.md)</sub>
 
 **What these beat:** std::allocator, operator new/delete, std::pmr  
-**17 entries:** 4 tier A · 4 tier B · 8 tier C · 1 tier D · 15 copyable, 2 study only
+**19 entries:** 4 tier A · 4 tier B · 10 tier C · 1 tier D · 17 copyable, 2 study only
 
 | # | Project | What it is | Tier | Language | License | Status |
 |--:|---|---|:-:|---|---|---|
@@ -20,9 +20,11 @@
 | 11 | [**rpmalloc**](mjansson-rpmalloc.md) | Lock-free, per-thread-caching malloc replacement for C/C++, drop-in via LD_PRELOAD or override, faster than glibc/tcmalloc/jemalloc under threaded churn. | **C** | C | MIT | 🟢 active |
 | 12 | [**ltalloc**](r-lyeh-archived-ltalloc.md) | Single-file source drop-in overriding operator new/delete; thread-local free lists speed up many small (&lt;256B) allocations vs CRT malloc. | **C** | C++ | BSD-3-Clause | 🟢 active |
 | 13 | [**fastcpp::arena (developer source)**](private-developer-source-allocators.md) | Header-only bump/arena allocator for same-lifetime objects; 5.4x faster than glibc new/delete when a whole batch is freed at once. | **C** | C++ | MIT | 🟢 active |
-| 14 | [**smmalloc**](sergeymakeev-smmalloc.md) | Lock-free, thread-cached proxy allocator for small (16-992B) game allocations; passes everything else through to CRT malloc. | **C** | C++ | MIT | 🟡 stale |
-| 15 | [**Lockless Memory Allocator**](locklessinc-com.md) | Abandoned GPL x86 malloc replacement (per-thread slabs, lock-free remote frees); 1.15-1.48x faster than glibc malloc in Ruby tests. | **C** | C | GPL-3.0-or-later | 🔴 abandoned |
-| 16 | [**arena-allocator (ShortAlloc)**](shantanu-arena-allocator.md) | Single-file bump-pointer arena allocator with an STL-compatible wrapper; beats glibc malloc via std::vector, especially above the mmap threshold. | **C** | C++ | no license (study only) | 🟡 stale |
-| 17 | [**TCMalloc (google/tcmalloc)**](google-tcmalloc.md) | Google's per-CPU-cache C/C++ allocator, positioned as a faster-at-scale alternative to glibc malloc, though unquantified in the repo. | **D** | C++ | Apache-2.0 | 🟢 active |
+| 14 | [**The Art of Writing Efficient Programs: preallocate-once…**](paper-book-the-art-of-writing-efficient-programs-preallocated-buffer-reuse.md) | Book sample: allocate a scratch buffer once at its maximum size instead of new[]/delete[] on every loop iteration. | **C** | C++ | MIT | 🟡 stale |
+| 15 | [**smmalloc**](sergeymakeev-smmalloc.md) | Lock-free, thread-cached proxy allocator for small (16-992B) game allocations; passes everything else through to CRT malloc. | **C** | C++ | MIT | 🟡 stale |
+| 16 | [**Lockless Memory Allocator**](locklessinc-com.md) | Abandoned GPL x86 malloc replacement (per-thread slabs, lock-free remote frees); 1.15-1.48x faster than glibc malloc in Ruby tests. | **C** | C | GPL-3.0-or-later | 🔴 abandoned |
+| 17 | [**FreeGuard**](utsasrg-freeguard.md) | Research secure malloc (CCS 2017) with near-glibc speed, far faster than the DieHarder and OpenBSD secure allocators. | **C** | C++ | GPL-2.0 | 🔴 abandoned |
+| 18 | [**arena-allocator (ShortAlloc)**](shantanu-arena-allocator.md) | Single-file bump-pointer arena allocator with an STL-compatible wrapper; beats glibc malloc via std::vector, especially above the mmap threshold. | **C** | C++ | no license (study only) | 🟡 stale |
+| 19 | [**TCMalloc (google/tcmalloc)**](google-tcmalloc.md) | Google's per-CPU-cache C/C++ allocator, positioned as a faster-at-scale alternative to glibc malloc, though unquantified in the repo. | **D** | C++ | Apache-2.0 | 🟢 active |
 
 <sub>Tiers: **A** reproducible public benchmark (code, compiler, flags and CPU stated) · **B** independent or peer-reviewed measurement · **C** first-party claim · **D** directional, no numbers. Status: 🟢 active · 🔵 finished · 🟡 slow or stale · 🔴 abandoned · ⚪ unknown. *Study only* means no usable open-source license: read the idea, don't copy the code.</sub>

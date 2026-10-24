@@ -1,0 +1,46 @@
+{
+  "id": "paper:book-c-plus-plus-memory-management-chunksizedallocator",
+  "one_liner": "Teaching-grade fixed size-class pool (one malloc'd chunk per power-of-two class) used through placement new; about 1.1x over new/delete in the book.",
+  "what_it_does": "ChunkSizedAllocator<N, Sz...> pre-allocates, in its constructor, one malloc'd block of N slots for each size class Sz (rounded up to a power of two, each at least sizeof(std::max_align_t)). Objects are created with placement-new syntax, new (alloc) T{...}, and released with an explicit ::operator delete(p, alloc); there is no std::allocator or std::pmr interface and no new[]/delete[]. Requests that fit no class, or arrive after a class is used up, fall through to ::operator new.",
+  "how_it_is_fast": "Allocation picks the first class whose size is strictly larger than the request and bumps a per-class index into a contiguous block under a std::mutex, so there is no free-list search, no per-object header and no trip into malloc. Deallocation only checks which block the pointer lies in and returns; freed slots are never handed out again, so free costs a short range scan instead of glibc's bin bookkeeping.",
+  "when_to_use": [
+    "Reading or teaching how size-class pools work; the whole allocator is about 60 lines in chapter10/chunk_sized_allocator.cpp.",
+    "Short-lived batch phases with a known upper bound on small objects per size class (the book uses 100,000 each of 30-, 60- and 100-byte objects) that are all thrown away together.",
+    "As a starting point for your own pool when you will add free-slot reuse and drop the per-allocation mutex in single-threaded code."
+  ],
+  "when_not_to_use": [
+    "Long-running alloc/free churn: freed slots are never reused, so after N lifetime allocations per class every request pays the class scan, a mutex lock and then ::operator new, and every free pays the range scan before ::operator delete, which is slower than plain new/delete.",
+    "Memory-constrained programs: all N slots of every class (about 22 MB for the book's N = 100,000 with 32/64/128-byte classes) are malloc'd up front whether used or not.",
+    "Multithreaded allocation-heavy code: one std::mutex serialises every allocation.",
+    "Code that needs a drop-in malloc, std::allocator or std::pmr::memory_resource, or array new; none is provided.",
+    "Production use in general: a book exercise with a roughly 10% measured gain, not a maintained library."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (standard library only: <mutex>, <concepts>, <array>, <cstdlib> via transitive includes)",
+    "min_toolchain": "C++20 for the allocator (concepts, constrained auto parameters); the test driver in the same file uses C++23 <print>. Book build was online gcc 15 at -O2 per the record.",
+    "platforms": "any (portable standard C++ over std::malloc)",
+    "thread_safety": "allocate is serialised by a single std::mutex; deallocate takes no lock and is safe only because it never modifies state (the lock is commented out for a future reuse path).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The class test is strict (n < sizes[i]), so a request exactly equal to a class size skips it: 32-byte objects land in the 64-byte class and 128-byte objects fall through to ::operator new. The book's 30/60/100-byte test sizes never hit this.",
+    "::operator delete(p, alloc) only releases memory; it does not run the destructor, so callers must destroy the object themselves first (the benchmark's dummy<N> types are trivially destructible).",
+    "The benchmark times std::function type erasure and std::pair moves into a pre-built vector on both sides, plus first-touch page faults (the pool's blocks are malloc'd before timing but touched inside it), so the 10% gap understates and blurs the raw allocator difference.",
+    "The file relies on <cstdlib> arriving through other headers for std::malloc/std::free; add the include when vendoring."
+  ],
+  "pick_this_over_siblings_when": "Pick it to read a compact, compile-time-configured size-class pool; for real use fast-alloc (pool allocate/free 3.0x over new/delete, with GCC 14.2.0 and the CPU named) or mtrebi/memory-allocators (pool and free-list allocators with benchmark code) are better starting points.",
+  "verified_claims_summary": "In the book's single run (online gcc 15, -O2 per the record, CPU not stated), allocating and then freeing 100,000 each of 30-, 60- and 100-byte objects, each stored with a std::function deleter, took 13,360 us through libstdc++ new/delete (glibc malloc) and 12,032 us through ChunkSizedAllocator, about 1.11x. The repo holds the benchmark program but no results, build line or CPU, and the pool side's frees do no work while glibc's free does real bookkeeping.",
+  "status_note": "MIT-licensed Packt companion repository (87 stars) with commits through 2026-08-14, but chapter10 files have not changed since their 2024-08-14 upload; small enough to copy, best treated as a worked example.",
+  "sources_read": [
+    "https://github.com/packtpublishing/c-plus-plus-memory-management",
+    "https://github.com/packtpublishing/c-plus-plus-memory-management/commits",
+    "https://github.com/packtpublishing/c-plus-plus-memory-management/tree/main/chapter10",
+    "https://github.com/packtpublishing/c-plus-plus-memory-management/commits/main/chapter10",
+    "https://github.com/packtpublishing/c-plus-plus-memory-management/issues",
+    "https://github.com/packtpublishing/c-plus-plus-memory-management/pulls",
+    "https://raw.githubusercontent.com/PacktPublishing/C-Plus-Plus-Memory-Management/HEAD/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/C-Plus-Plus-Memory-Management/HEAD/chapter10/chunk_sized_allocator.cpp"
+  ],
+  "confidence": 0.7
+}

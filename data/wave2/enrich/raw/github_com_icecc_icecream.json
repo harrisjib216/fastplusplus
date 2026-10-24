@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/icecc/icecream",
+  "one_liner": "SUSE's distcc-derived distributed C/C++ compiler with a central scheduler; beats single-machine make when several networked machines are free.",
+  "what_it_does": "Icecream puts compiler stubs (/usr/lib/icecc/bin/gcc, g++, clang and so on) first on PATH, so an ordinary make -jN or CMake build sends each compile through the icecc client. An iceccd daemon runs on every node, including the submitting one (-m 0 makes it submit-only), and one icecc-scheduler per network, found by UDP broadcast, hands out jobs. The client preprocesses locally, asks the scheduler for a host, and ships compressed source plus, the first time, a tarball of its compiler environment that the remote daemon unpacks into a chroot. Linking and jobs with flags such as -E, -M*, --coverage or PCH creation stay local.",
+  "how_it_is_fast": "The gain is job-level parallelism across machines, steered by a scheduler that tracks each host's measured speed and load and gives every job to the host expected to finish it soonest (default 'fastest' algorithm; random, round_robin and least_busy are alternatives), preferring the local machine when it is free and at least 70% as fast as the best host. Daemons are pre-loaded with one extra job so a slot never idles waiting for a round trip, and transfers are compressed (LZO originally, zstd since 1.3). By default only #include expansion runs locally (-fdirectives-only for GCC, -frewrite-includes for Clang) and macro expansion runs remotely; shipping compiler environments lets mismatched or cross-compiling nodes contribute.",
+  "when_to_use": [
+    "An office or lab of shared developer workstations whose load changes: the scheduler sends work to idle, fast machines and copes with nodes joining and leaving.",
+    "Teams whose machines carry different or frequently changing GCC/Clang versions, or that cross-compile (Yocto and embedded targets), since the client's compiler environment travels with the job.",
+    "Large parallel C/C++ builds on a low-latency LAN of 100 Mbit or better; the README budgets about 1 Mbit per concurrent job.",
+    "Linux, FreeBSD, DragonFlyBSD or macOS clusters (Cygwin as a client only), optionally behind ccache with CCACHE_PREFIX=icecc."
+  ],
+  "when_not_to_use": [
+    "A lone machine or a non-parallel make: the README's single-file test took 1.6s with g++ against 1.9s through icecream, and BENCH calls make -j1 with icecream 'a horrible mistake' (418s against 315s local on Linux 2.6.16).",
+    "Untrusted networks: the README says never to use it there; daemons need root, or libcap-ng capabilities, to chroot into shipped environments, and no authentication or encryption is documented.",
+    "High-latency or lossy links (between buildings, over VPN, in the cloud): the README calls icecream very sensitive to latency and packet loss, and stock 0.7 gained only 6% over WLAN in BENCH.",
+    "Windows/MSVC builds, which are not supported.",
+    "Builds that lean on precompiled headers, Clang modules or coverage: those flags force local work or are stripped for remote jobs, and open issue #618 reports Clang 13 PCH builds failing remotely and being silently recompiled locally."
+  ],
+  "integration": {
+    "form": "standalone tool built with autotools or taken from distro packages: icecc client stub plus compiler symlinks, iceccd daemon, icecc-scheduler; the icemon or icecream-sundae monitors are separate projects",
+    "dependencies": "lzo2, libzstd and libarchive (required by configure); libcap-ng (default on Linux); a C++11 compiler to build it",
+    "min_toolchain": "Builds with -std=c++11; wraps GCC and Clang (C, C++, Objective-C/C++)",
+    "platforms": "Linux, FreeBSD, DragonFlyBSD and macOS as both client and server, with cross-compiling between them; Cygwin as client only",
+    "thread_safety": "Not a library; safe under make -jN. Each daemon runs at most -m jobs at once and the scheduler assigns jobs centrally",
+    "drop_in_for_baseline": "partial — compiler flags and outputs are unchanged and it hooks in via PATH stubs, but every node needs iceccd, the network needs a reachable scheduler and open ports (TCP 10245 and 8765, UDP 8765), and the build must use a high make -j"
+  },
+  "gotchas": [
+    "Mixed icecream versions degrade the cluster: nodes running older versions may be excluded, and daemons older than 1.1 pick a random scheduler when several run on one network.",
+    "Many cases fall back to local work without failing the build (PCH, -pedantic forcing local preprocessing per issue #630, preprocessing errors), so a build can quietly run mostly on the submitting machine; icemon shows where jobs actually ran.",
+    "Open issue #657 reports a master-only regression (not in any release) where pick_server_fastest() computes a uint8_t weight_factor of 0, so host speed statistics are never refreshed and newly joined hosts can be skipped.",
+    "Benchmark caveats in BENCH: the headline rows come from a development patch ('dirk's no-latency') on a two-node cluster, the author calls the identical 27%/36% gains for Linux and Qt 'astonishing' and in need of explanation, and the later rows (make-it-cool, 0.8.0 at 257s, 442s without compression) name no project and have no local baseline."
+  ],
+  "pick_this_over_siblings_when": "Pick icecream over distcc when machines are shared, come and go, or carry different compilers or targets, because distcc has a static host list and no scheduler; pick distcc on a fixed homogeneous farm where pump mode can move preprocessing off the client, and NativeLink or sccache when you want a shared cache or remote execution rather than plain job distribution.",
+  "verified_claims_summary": "The only numbers are a first-party BENCH file from around 2006: two single-CPU 1.7GHz Pentium M machines, five runs with the best and worst dropped, no scripts, compiler version or flags. With a development patch, Linux 2.6.16 defconfig fell from 315s (best local setting, make -j1) to 230s over 54MBit WLAN and 203s over 100MBit LAN, and Qt 3.3.6 src/ from 363-368s locally to 269s and 239s (27% and 36% less time against a theoretical 50%), while stock 0.7 managed only 6% over WLAN.",
+  "status_note": "Last release is 1.4 (2022-03-04) and only a handful of commits have landed since the end of 2022 (latest 2026-03-04), with about 72 open issues, so it is effectively in maintenance mode, though distros still package it and the GPL v2 code is usable as is.",
+  "sources_read": [
+    "https://github.com/icecc/icecream",
+    "https://raw.githubusercontent.com/icecc/icecream/HEAD/README.md",
+    "https://raw.githubusercontent.com/icecc/icecream/HEAD/BENCH",
+    "https://raw.githubusercontent.com/icecc/icecream/HEAD/NEWS",
+    "https://raw.githubusercontent.com/icecc/icecream/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/icecc/icecream/HEAD/doc/icecream.adoc",
+    "https://raw.githubusercontent.com/icecc/icecream/HEAD/doc/icecc.adoc",
+    "https://raw.githubusercontent.com/icecc/icecream/HEAD/doc/iceccd.adoc",
+    "https://raw.githubusercontent.com/icecc/icecream/HEAD/doc/icecc-scheduler.adoc",
+    "https://raw.githubusercontent.com/icecc/icecream/HEAD/doc/icecc-create-env.adoc",
+    "https://raw.githubusercontent.com/icecc/icecream/HEAD/client/main.cpp",
+    "https://raw.githubusercontent.com/icecc/icecream/HEAD/client/cpp.cpp",
+    "https://raw.githubusercontent.com/icecc/icecream/HEAD/client/arg.cpp",
+    "https://github.com/icecc/icecream/commits/master",
+    "https://github.com/icecc/icecream/tags",
+    "https://github.com/icecc/icecream/issues?q=is%3Aissue+is%3Aopen",
+    "https://github.com/icecc/icecream/issues/657",
+    "https://github.com/icecc/icecream/issues/645"
+  ],
+  "confidence": 0.8
+}

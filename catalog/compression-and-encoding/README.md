@@ -4,13 +4,13 @@
 
 Lossless compressors, entropy coders, integer bit-packing and succinct structures that beat zlib, zstd, lz4 and SDSL.
 
-**153 entries in 5 categories:** 38 tier A · 24 tier B · 80 tier C · 11 tier D
+**154 entries in 5 categories:** 38 tier A · 24 tier B · 81 tier C · 11 tier D
 
 | Category | Entries | A | B | C | D | What they beat |
 |---|--:|--:|--:|--:|--:|---|
 | [Entropy coders](entropy-coders/README.md) | 26 | 2 | 5 | 19 | 0 | Huffman, rANS baselines the benchmark names |
 | [Erasure codes](erasure-codes/README.md) | 1 | 0 | 0 | 1 | 0 | CM256 (catid/cm256, O(N^2) Cauchy-matrix MDS Reed-Solomon… |
-| [General-purpose lossless compression](general-lossless/README.md) | 72 | 26 | 10 | 30 | 6 | zlib, zstd, lz4, brotli, xz |
+| [General-purpose lossless compression](general-lossless/README.md) | 73 | 26 | 10 | 31 | 6 | zlib, zstd, lz4, brotli, xz |
 | [Integer compression and bit-packing](integer-bitpacking/README.md) | 24 | 2 | 2 | 19 | 1 | varint, Simple8b, FastPFor |
 | [Succinct data structures](succinct-structures/README.md) | 30 | 8 | 7 | 11 | 4 | SDSL, sux |
 

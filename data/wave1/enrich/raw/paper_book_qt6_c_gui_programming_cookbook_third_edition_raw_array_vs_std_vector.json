@@ -1,0 +1,48 @@
+{
+  "id": "paper:book-qt6-c-gui-programming-cookbook-third-edition-raw-array-vs-std-vector",
+  "one_liner": "Book sample timing a presized new int[] against std::vector and QVector filled by push_back without reserve, read with at().",
+  "what_it_does": "A companion example (Chapter14/Optimizing/main.cpp) for the Packt book Qt 6 C++ GUI Programming Cookbook, 3rd edition. Inside a Qt Widgets application's main(), before the event loop starts, it times three functions that each store 100,000,000 ints (0..N-1) and sum them: a heap array from new int[count] written and read by index, a std::vector<int> grown by push_back and read with at(), and a QVector<int> treated the same way, printing each elapsed time with qDebug. There is no library to adopt: the takeaway is an idiom, allocating the full buffer once when the element count is known and indexing it without checks.",
+  "how_it_is_fast": "The array side does one allocation of the final size and then plain indexed stores and loads, while both container sides grow geometrically from empty, so they reallocate and relocate everything stored so far many times (about 27 times to reach 100M if capacity doubles; the growth factor is implementation-defined), touch more fresh pages, and pay a bounds check on every std::vector::at() read. The speedup therefore comes from preallocation plus unchecked access, not from a faster container: std::vector with reserve(count) and operator[] performs the same memory operations as the array. The relayed 650 ms for the array is about 6.5 ns per element for one store, one load and the page faults (derived), slow for an optimised build, which points to an unoptimised one (inference; the build is not stated).",
+  "when_to_use": [
+    "A hot path that fills a large buffer whose final element count is known up front, where profiling shows reallocation from a growing vector.",
+    "Large buffers of trivial types that will be overwritten anyway, where you want to skip the zero-fill that std::vector<int>(n) or resize(n) performs (new int[n] leaves ints uninitialised).",
+    "Interop with C APIs that take a pointer and a length and own nothing, keeping ownership in std::unique_ptr<int[]> rather than a bare pointer.",
+    "Debug or unoptimised builds where std::vector and QList layers are not inlined and their per-element overhead dominates (for example a tool that has to run fast in Debug)."
+  ],
+  "when_not_to_use": [
+    "Any case where std::vector with reserve(n) (or a sized buffer read with operator[]) is acceptable: that closes most of the measured gap and keeps RAII, size tracking and iterator support.",
+    "Sizes that are not known before filling: the raw array cannot grow, and hand-rolled growth just re-implements std::vector.",
+    "Code that relies on bounds checks for safety, or on exception safety: a bare new[] leaks if anything between new[] and delete[] throws, and mismatched delete is undefined behaviour.",
+    "Qt API boundaries that expect QList/QVector: converting from a raw buffer copies the data, losing the gain.",
+    "Expecting the book's 5.9x or 8.3x in an optimised build: the comparison was one run of an unstated build configuration and its baseline idioms (no reserve, at()) carry most of the difference."
+  ],
+  "integration": {
+    "form": "source-drop (an idiom: new T[n] or std::unique_ptr<T[]> plus indexing; nothing to install)",
+    "dependencies": "none for the idiom; the sample program needs Qt 6 Widgets and qmake (Optimizing.pro)",
+    "min_toolchain": "any C++ compiler for the idiom; the README lists Qt Creator 12.0.2 for chapters 1-14",
+    "platforms": "any (README: Windows, macOS or Linux)",
+    "thread_safety": "Not documented; a plain heap array has no synchronisation of its own, the same as any shared buffer",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The int sum of 0..99,999,999 overflows a signed int (undefined behaviour) and result, result2 and result3 are never used, so an optimising compiler may remove the array test entirely (new/delete pairs may be elided since C++14) and report a near-zero time for it.",
+    "Each timed region includes allocation, first-touch page faults and the free at function exit; the tests run once in a fixed order (array, std::vector, QVector) with no warm-up, timed by QElapsedTimer in whole milliseconds. With doubling growth the vector briefly holds both the old and new buffers at its last reallocation, about 0.8 GB for 400 MB of ints (derived).",
+    "In Qt 6, QVector<T> is an alias of QList<T>, and QList::at() is noexcept with only a Q_ASSERT_X bounds check that release builds compile out; that QVector is still the slowest of the three in the book's run fits a Debug build better than a release one (inference).",
+    "Matching the array with the standard library needs care: std::vector<int>(n) and resize(n) zero the buffer before you write it, so use reserve(n) plus push_back, or std::make_unique_for_overwrite<int[]>(n) (C++20), to avoid writing the memory twice."
+  ],
+  "pick_this_over_siblings_when": "Try the Data Structures and Algorithms with the C++ STL reserve() sibling first: reserve plus operator[] gets most of this gain while keeping std::vector. Pick a raw or unique_ptr-owned array only when you also need to skip value-initialisation of a large trivial buffer; for many small vectors ankerl::svector or sfl::small_vector avoid the heap, and fast_vector reports about 2x over std::vector even with reserve.",
+  "verified_claims_summary": "The book (relayed via the seed lead; no numbers on any repo page) reports one run: new int[] about 650 ms, std::vector<int> about 3,830 ms and QVector<int> about 5,400 ms for filling and summing 100,000,000 ints, about 5.9x and 8.3x slower than the array (derived). Compiler, build configuration and CPU are not stated; the .pro file sets no optimisation flags or CONFIG += release, so Qt Creator's selected configuration decided, and the vector sides grow without reserve and read with at().",
+  "status_note": "Stale MIT-licensed Packt companion repo (3 commits; code added 2024-02-19, README updated 2024-04-22; one open issue, about chapter 2); nothing to vendor, since the takeaway is preallocation, which std::vector::reserve already provides.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/PacktPublishing/QT6-C-GUI-Programming-Cookbook---Third-Edition-/main/Chapter14/Optimizing/main.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/QT6-C-GUI-Programming-Cookbook---Third-Edition-/main/Chapter14/Optimizing/Optimizing.pro",
+    "https://raw.githubusercontent.com/PacktPublishing/QT6-C-GUI-Programming-Cookbook---Third-Edition-/main/README.md",
+    "https://github.com/PacktPublishing/QT6-C-GUI-Programming-Cookbook---Third-Edition-",
+    "https://github.com/PacktPublishing/QT6-C-GUI-Programming-Cookbook---Third-Edition-/tree/main/Chapter14",
+    "https://github.com/PacktPublishing/QT6-C-GUI-Programming-Cookbook---Third-Edition-/commits/main",
+    "https://github.com/PacktPublishing/QT6-C-GUI-Programming-Cookbook---Third-Edition-/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/qt/qtbase/6.5/src/corelib/tools/qlist.h",
+    "https://raw.githubusercontent.com/qt/qtbase/6.5/src/corelib/tools/qcontainerfwd.h"
+  ],
+  "confidence": 0.6
+}

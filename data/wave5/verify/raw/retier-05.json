@@ -1,0 +1,60 @@
+[
+ {
+  "id": "https://github.com/carterli/liburing4cpp",
+  "evidence_tier_final": "C",
+  "tier_reason": "C stands: first-party, flags not stated; the winning row is asymmetric, so the entry is kept as not faster like for like.",
+  "corrections": {
+   "claimed_speedup": "Not faster like for like. Echo server README rows (medians of 3 runs): C++ POLL-RECV-SEND 111,210 req/s vs the C server's POLL-RECV-SEND 114,893, about 96.8% (derived from page data). The headline row, C++ RECV-SEND 120,239 vs C RECV-SEND 114,461 (105.05%, README column 'rate'), is asymmetric: the C baseline sets IOSQE_ASYNC on its recv while the C++ server does not, so the two rows run different submission paths. SPLICE-SPLICE variants 77.84% to 81.63%. Yield microbench: service.yield 5436209973 vs plain IORING_OP_NOP 5268565967, 'About 3% overhead'.",
+   "caveats": "Enricher: the RECV-SEND comparison is asymmetric (the C io_uring-echo-server flags its recv IOSQE_ASYNC, forcing io-wq punting, while the C++ server submits plain recv), so the 105% row does not show the coroutine layer beating hand-written C; the like-for-like POLL-RECV-SEND pair is about 96.8% (derived from page data). Library gotchas: uio::panic is a non-inline function defined in a header (duplicate-symbol link error from two translation units); the README still describes C++17 -fcoroutines-ts while the code needs C++20 <coroutine>; on GCC the CMakeLists overwrites CMAKE_CXX_FLAGS with -fcoroutines. Last commit July 2024; open crash issues."
+  },
+  "urls_opened": [
+   "enricher record data/wave5/enrich/raw/github_com_carterli_liburing4cpp.json"
+  ]
+ },
+ {
+  "id": "https://github.com/resetius/coroio",
+  "evidence_tier_final": "C",
+  "tier_reason": "C stands: author-run, flags and build type not stated.",
+  "corrections": {
+   "caveats": "Enricher: the libevent comparison likely differs in transport (libevent's bench-style harness over pipes against COROIO's socketpair setup; not proven from the code), so the per-descriptor ratios may mix transport costs with loop costs. Results date from April-May 2023 and were not re-run on the current code. With 100 active connections COROIO wins by up to 1.87x at 128 descriptors (derived from page data). Gotchas: the epoll backend calls epoll_pwait2 (Linux 5.11+); closing a socket does not resume a coroutine waiting on it (poller.hpp TODO), so it can stay suspended; TVoidTask swallows exceptions; ReadSome/WriteSome return -1 on EAGAIN/EINTR and throw std::system_error otherwise; TWebSocket keeps a reference to its socket."
+  },
+  "urls_opened": [
+   "enricher record data/wave5/enrich/raw/github_com_resetius_coroio.json"
+  ]
+ },
+ {
+  "id": "https://github.com/envoyproxy/envoy",
+  "evidence_tier_final": "B",
+  "tier_reason": "B stands: independent public-code measurements agree Envoy is slower; kept as a not-faster entry.",
+  "corrections": {
+   "caveats": "Enricher: the Proxy-Benchmarks envoy.yaml ignores Envoy's own benchmarking FAQ (generate_request_id, dynamic_stats and circuit breakers left at defaults) while NGINX gets upstream keepalive 32, so the Envoy row is a default-config result; the echo backend returns what it receives, so Envoy's added request headers likely inflate its 253 B body (inference, not measured); issue 5536's HAProxy ran with http-reuse aggressive. More independent sources agree Envoy is slower: issue 17266 (direct_response 123,949 req/s vs nginx return 446,352, Envoy 1.18.3 with request ids and stats off) and issue 38554 (2-5x the NGINX CPU on 128 cores, about 20-30% behind after cutting workers to 32). Issue 5536's 'CPU-intensive parser' remark is stale: codec_impl.cc now builds only the QUICHE Balsa parser. oghttp2 had a latency regression (issue 40070); nghttp2 is the default again via PR 42319."
+  },
+  "urls_opened": [
+   "enricher record data/wave5/enrich/raw/github_com_envoyproxy_envoy.json"
+  ]
+ },
+ {
+  "id": "https://github.com/nginx/nginx",
+  "evidence_tier_final": "C",
+  "tier_reason": "C stands: third-party run by a competing project, configuration only partly stated.",
+  "corrections": {
+   "caveats": "Enricher: the repo's conf/nginx.conf sets worker_processes 1 and the compiled-in defaults are 1 worker and 512 connections; the binserve page does not say which 'default' it ran. The 'Tuned' row follows the denji tuning guide (access_log off, open_file_cache, keepalive_requests 100000) while Apache shows no tuning, so 3.2x is tuned against apparently stock; 1.9x is the like-for-like default row. In the cross-check gist the author says the HTTP/1.0 run was limited by docker-proxy, so its +13% is capped by Docker's port proxy, not by the servers."
+  },
+  "urls_opened": [
+   "enricher record data/wave5/enrich/raw/github_com_nginx_nginx.json"
+  ]
+ },
+ {
+  "id": "https://github.com/xilinx-cns/onload",
+  "evidence_tier_final": "C",
+  "tier_reason": "C stands: one user's issue comment, no CPU or kernel.",
+  "corrections": {
+   "claimed_speedup": "Average latency over report lines 2-6: 14.24-14.72 us with Onload vs 19.44-20.20 us without, about 1.37x lower (derived from page data); packets per second 64635-66688 vs 47340-49298. The first report line (14.303 vs 20.310 us) covers a partial first interval in which the client's stats struct is calloc'd rather than initialised (min shows 0.000 us), so lines 2-6 are the cleaner figures.",
+   "workload": "majek/dump udpclient/udpserver UDP ping-pong, 32-byte payload (PKT_SIZE in udpclient.c), one session per side, with and without Onload acceleration.",
+   "caveats": "Enricher: majek/dump's udpclient callocs its stats struct without stddev_init, so the first report line (the record's earlier headline) mixes a partial interval; lines 2-6 give about 1.37x (derived from page data). Payload is 32 B. Other reports: issue 306 (iperf3 on an ixgbe AF_XDP NIC fell from 9 to 5 Gb/s under Onload); issue 272 (latency spikes traced to a stray pcie_aspm=off); the latency-best profile sets EF_EPOLL_MT_SAFE=1 and CTPIO cut-through, so results depend on profile and NIC."
+  },
+  "urls_opened": [
+   "enricher record data/wave5/enrich/raw/github_com_xilinx_cns_onload.json"
+  ]
+ }
+]

@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/frerich/clcache",
+  "one_liner": "Python ccache-style object cache for MSVC cl.exe that skips recompiling unchanged translation units on repeat builds.",
+  "what_it_does": "clcache is invoked in place of cl.exe (CLCACHE_CL or PATH lookup, a CMake compiler launcher, or MSBuild's CLToolExe/CLToolPath). For a single-source /c compile it returns a previously stored .obj plus the captured compiler stdout/stderr when the inputs match, and relays everything else (linking, /Zi, /Yc or /Yu precompiled headers, /E /EP /P preprocessing) to the real compiler unchanged. It is a drop-in wrapper rather than a build system; the CLI only adds cache management (-s stats, -c trim, -C clear, -z reset, -M max size). Storage is a local directory (default %HOME%\\clcache) or a memcached backend.",
+  "how_it_is_fast": "Content-addressed result caching, modeled on ccache. In the default direct mode an MD5 of the compiler binary's mtime and size, the normalized command line and the source file selects a manifest; on a miss clcache injects /showIncludes to record the header set, and on later runs a hit only requires the MD5 of every recorded header to match, so the preprocessor is not run (CLCACHE_NODIRECT falls back to hashing /EP output). A hit copies, or with CLCACHE_HARDLINK hard-links, the stored object instead of compiling. The optional clcachesrv server keeps header hashes in memory and watches the files for changes; the maintainer found warm-cache time dominated by hashing include files (issue #239), which is the cost the server targets.",
+  "when_to_use": [
+    "Windows CI jobs with MSVC where a restored cache directory covers most translation units (OpenMW's draft MR saw 100 then 55 minutes on the 2nd and 3rd cached runs of a job that otherwise sits near its 2 hour timeout).",
+    "Developer machines that rebuild the same sources after cleans or branch switches with the same compiler install and build directory (or CLCACHE_BASEDIR set).",
+    "Ninja, NMake or CMake compiler-launcher builds, or MSBuild builds that can run with TrackFileAccess=false (required for MSBuild cache hits per the wiki).",
+    "Codebases that can compile with /Z7 instead of /Zi and without MSVC precompiled headers, since those invocations bypass the cache."
+  ],
+  "when_not_to_use": [
+    "Cold or mostly-miss builds: upstream issue reports show the empty-cache build slower than no cache (4:49 to 6:22 on a 4-core CI machine in #239; 7 to 23 minutes in #251), so one-off builds lose.",
+    "Projects that depend on /Zi PDBs or PCH (/Yc, /Yu): those compiles are passed through uncached, and switching to /Z7 and turning PCH off to get hits can slow the uncached build and enlarge objects and the cache.",
+    "Current toolchains with upstream code: the archived repository predates Python 3.10 and MSVC 2019 flags such as /external:I, and users run forks pinned to a commit (OpenMW used Aussiemon/clcache@21c50c2).",
+    "Very large or highly parallel builds: CacheLockException timeouts on section and stats locks and slow in-build cache cleanup are open, unfixed issues (#251, #347; one reporter's cache passed 100 GB and a million files).",
+    "Non-Windows hosts or GCC/Clang command lines: it uses Win32 named mutexes and only parses cl.exe/clang-cl options; sccache or ccache cover those."
+  ],
+  "integration": {
+    "form": "module (Python package exposing clcache and clcache-server console scripts; optional PyInstaller-built executable)",
+    "dependencies": "Python 3 with atomicwrites, pymemcache and pyuv (setup.py install_requires); the real cl.exe; optional memcached server",
+    "min_toolchain": "Python 3.5+ upstream (CI tested 3.5 and 3.6; 3.3/3.4 dropped in 4.2.0); MSVC tested in CI with Visual Studio 2013; Python >=3.10 and MSVC >=2019 need third-party fork patches",
+    "platforms": "Windows only (Win32 named mutexes and named pipes via ctypes windll)",
+    "thread_safety": "Concurrent invocations on one machine coordinate through Windows named mutexes in the Local\\ namespace: hash-sharded locks for object and manifest sections (256 sections per the maintainer in #251) plus a global statistics lock, with a 10 s default timeout (CLCACHE_OBJECT_CACHE_TIMEOUT_MS). These do not coordinate across machines sharing a cache directory.",
+    "drop_in_for_baseline": "partial — wraps cl.exe transparently, but only single-source /c compiles without /Zi or PCH are cached, and MSBuild needs TrackFileAccess=false to get hits"
+  },
+  "gotchas": [
+    "The compiler is identified by cl.exe's mtime and size, not its contents, so reinstalling or re-imaging the same MSVC version can invalidate the whole cache.",
+    "Changes to the INCLUDE and LIBPATH environment variables are not detected in direct mode and can return a stale object (wiki Caveats); set CLCACHE_NODIRECT or clear the cache.",
+    "CLCACHE_COMPRESS caches are incompatible with uncompressed ones; changing the setting requires clearing the cache.",
+    "clcachesrv watches header directories and blocks deleting them (use its exclude option), and a PyInstaller --onefile build is documented as considerably slower."
+  ],
+  "pick_this_over_siblings_when": "Pick clcache over sccache only for an MSVC-only Windows build that needs no remote storage and already runs a pinned fork; sccache is maintained, handles MSVC as well as GCC/Clang/Rust/CUDA and offers shared cloud backends. Against FASTBuild or octobuild it needs no build-system change, but it caches nothing the build does not pass as a plain /c compile.",
+  "verified_claims_summary": "The only recent numbers come from OpenMW's unmerged draft MR !5021: a GitLab Windows MSBuild RelWithDebInfo job (MSVC 2022, 64-bit, runner hardware not stated) that usually sits at its 2 hour timeout uncached finished in 100, 55 and as little as 49 minutes on successive runs with a restored cache, using a patched fork rather than upstream, and with precompiled headers turned off (OpenMW's CMake default is on), /Zi rewritten to /Z7 and MSBuild TrackFileAccess disabled only in the cached configuration, so the ~2.2x (derived from page data, against the timeout) compares different builds across separate pipelines. Upstream issue #239 has a same-machine user measurement of upstream clcache: 4:49 without, 6:22 cold and 2:06 warm on a 4-core 2 GHz SSD CI machine (about 2.3x warm, derived from page data), and 2:21 against 1:10 warm on a 4-core 3.3 GHz machine; project and compiler version not stated.",
+  "status_note": "Archived by its owner on 2020-02-04 with the last upstream commit on 2019-02-19; BSD-3-Clause and pure Python, so it can be vendored, but modern Python and MSVC need a third-party fork such as Aussiemon/clcache, whose 2025 commits add Python >=3.10 and /external:I fixes.",
+  "sources_read": [
+    "https://github.com/frerich/clcache",
+    "https://raw.githubusercontent.com/frerich/clcache/master/README.asciidoc",
+    "https://raw.githubusercontent.com/frerich/clcache/master/CHANGELOG.md",
+    "https://raw.githubusercontent.com/frerich/clcache/master/setup.py",
+    "https://raw.githubusercontent.com/frerich/clcache/master/appveyor.yml",
+    "https://raw.githubusercontent.com/frerich/clcache/master/clcache/__main__.py",
+    "https://github.com/frerich/clcache/wiki/Caveats",
+    "https://github.com/frerich/clcache/issues?q=is%3Aissue+slow",
+    "https://github.com/frerich/clcache/issues/251",
+    "https://github.com/frerich/clcache/issues/347",
+    "https://github.com/frerich/clcache/issues/239",
+    "https://github.com/Aussiemon/clcache/commits/master",
+    "https://gitlab.com/OpenMW/openmw/-/merge_requests/5021",
+    "https://gitlab.com/OpenMW/openmw/-/merge_requests/5021/diffs",
+    "https://gitlab.com/OpenMW/openmw/-/raw/master/CMakeLists.txt",
+    "https://gitlab.com/OpenMW/openmw/-/raw/master/CI/before_script.msvc.sh",
+    "https://gitlab.com/OpenMW/openmw/-/raw/master/.gitlab-ci.yml"
+  ],
+  "confidence": 0.75
+}

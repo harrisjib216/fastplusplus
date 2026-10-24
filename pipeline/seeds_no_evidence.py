@@ -11,6 +11,9 @@ OUT = ROOT / "catalog" / "seeds-no-evidence.md"
 
 def main():
     rows, bad = {}, []
+    seeds = json.loads((ROOT / "data" / "seeds" / "seeds.json").read_text())
+    # a book companion repo carries several techniques: keep one row per technique, not per repo
+    companions = {s["repo_url"].rstrip("/").lower() for s in seeds if s.get("kind") == "book-companion"}
     for f in sorted(SRC.glob("*.json")):
         try:
             items = json.loads(f.read_text())
@@ -19,7 +22,9 @@ def main():
         for it in items if isinstance(items, list) else []:
             if not isinstance(it, dict) or not it.get("repo_url"):
                 continue
-            key = it["repo_url"].rstrip("/").lower()
+            key = it["repo_url"].split("#")[0].rstrip("/").lower()
+            if key in companions or "#" in it["repo_url"]:
+                key = f"{key}#{str(it.get('name') or '').lower()}"
             it["assignment"] = f.stem
             rows.setdefault(key, it)
     lines = ["# Seeds without evidence",

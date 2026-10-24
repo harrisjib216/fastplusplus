@@ -1,0 +1,239 @@
+You are a technical writer producing the entry for ONE library in a curated
+catalog of implementations that beat the default/incumbent tool on
+performance. You will receive a verified JSON record. Your job is to open the
+project and write a short, accurate, opinionated entry that lets a busy
+engineer decide in 30 seconds whether to use it.
+
+Today's date: 2026-09-25
+
+INPUT RECORD:
+{
+  "name": "serde_json (typed, #[derive(Deserialize)])",
+  "repo_url": "https://github.com/serde-rs/json",
+  "language": "Rust",
+  "domain": "serialization-and-formats",
+  "category": "json",
+  "baseline": "RapidJSON (DOM parser) and nlohmann/json; simdjson is faster",
+  "baseline_in_list": true,
+  "metric": "throughput",
+  "workload": "Parse a generated, pretty-printed JSON file (json/generate_json.rb: 524,288 objects, each with x, y and z doubles, a name string and an opts object holding a one-element array, plus a top-level info string) and average the x, y and z values (kostya/benchmarks 'Json' test). Timed region is parse plus averaging; reading the file and the self-test run before the timer. The Serde Typed row is serde_json::from_str into a #[derive(Deserialize)] struct with only x, y and z fields; the C++ rows build a full DOM.",
+  "claimed_speedup": "kostya/benchmarks Json table (medians; rows measured in the 2025-08-17 update and carried unchanged into the README dated 2026-07-19): Rust Serde Typed 0.110 s vs C++ RapidJSON 0.154 s (g++) and 0.194 s (clang++), RapidJSON Precise 0.212 s (g++) and 0.262 s (clang++), and nlohmann/json 1.266 s (g++) and 1.182 s (clang++). That is about 1.4x-1.8x faster than default RapidJSON, 1.9x-2.4x faster than RapidJSON Precise and 10.7x-11.5x faster than nlohmann/json (derived from page data). Rust Serde Custom (derive plus a hand-written visitor that folds the array without storing it) takes 0.103 s. Not faster than simdjson On-Demand 0.060 s (g++) / 0.062 s (clang++) or DAW JSON Link 0.085 s (clang++) / 0.089 s (g++); about equal to simdjson DOM 0.103 s (clang++) / 0.107 s (g++). The like-for-like DOM row, Rust Serde Untyped (serde_json::Value) at 0.557 s, is about 2.1x-2.3x faster than nlohmann/json but about 2.9x-3.6x slower than RapidJSON DOM (derived from page data).",
+  "evidence_tier": "C",
+  "benchmark_url": "https://github.com/kostya/benchmarks#json",
+  "baseline_stdlib": [
+    "libstdc++",
+    "libc++"
+  ],
+  "compiler_and_flags": "Measured toolchain (the Json rows date from the 2025-08-17 update, kostya/benchmarks commit 63ffa65, and are identical in the 2026-07-19 README, whose Versions table lists newer compilers that did not produce them): Rust 1.89.0, cargo build --release with RUSTFLAGS='-C target-cpu=native -C llvm-args=--x86-branches-within-32B-boundaries' and profile.release lto=true, codegen-units=1, panic=abort, strip=true (edition 2024); json.rs/Cargo.lock at that commit pinned serde_json 1.0.142 and serde/serde_derive 1.0.219, with no float_roundtrip feature. C++ baselines: g++ 14.2.0 and clang++ 19.1.7 (clang++ with -stdlib=libc++), -Wall -Wextra -pedantic -Wcast-align -O3 -march=native -flto=auto -Wa,-mbranches-within-32B-boundaries -std=c++23 and no -DNDEBUG; RapidJSON built without RAPIDJSON_SSE2 or RAPIDJSON_SSE42; RapidJSON (miloyip/rapidjson), nlohmann/json and simdjson shallow-cloned from master at build time (json/Makefile, common/commands.mk).",
+  "hardware": "Intel(R) Xeon(R) E-2324G; Docker image based on Debian GNU/Linux trixie/sid at the 2025-08-17 measurement (the 2026-07-19 README's Environment section now says forky/sid, but the Json rows for Rust, RapidJSON and nlohmann/json were not re-measured then).",
+  "compared_against_cpp_std_directly": false,
+  "license": "MIT OR Apache-2.0",
+  "usability": "copyable",
+  "last_commit": "2026-10-16",
+  "maintenance_status": "active",
+  "is_fork_of": null,
+  "stars_or_usage": "5.7k stars",
+  "has_code": true,
+  "tradeoffs": "Rust crate; a C++ project must reach it through an FFI or a separate process. Typed deserialization needs the target types known at compile time (derive), ignores unknown fields by default and uses far less memory than a DOM (111.75 MiB base + 11.12 MiB for Serde Typed vs 113.21 + 123.44 MiB for g++ RapidJSON and 447.88 MiB increase for g++ nlohmann/json on the same page). The untyped serde_json::Value DOM is much slower (0.557 s) and uses 839.75 MiB extra. float_roundtrip (exact float round-tripping) is an opt-in feature that costs about 2x float-parse speed per the crate's Cargo.toml comment.",
+  "caveats": "1) Not like for like: the typed Rust rows deserialize only x, y and z and skip name and opts without allocating (Serde Custom does not even store the array), while the RapidJSON and nlohmann/json rows build the whole document; the like-for-like DOM row (Serde Untyped, 0.557 s) loses to RapidJSON (0.154-0.194 s). 2) Asymmetric builds: the C++ flags carry no -DNDEBUG, so RAPIDJSON_ASSERT and nlohmann's JSON_ASSERT stay live as assert() (cost not measured), while the Rust release profile turns debug assertions off; RapidJSON is also built without RAPIDJSON_SSE2/SSE42, so its SIMD whitespace skipping is off on a pretty-printed, whitespace-heavy file. 3) Version drift: the README's Versions table (Rust 1.97.1, g++ 16.1.0, clang++ 22.1.8, serde_json 1.0.150) does not describe these rows; they were measured on 2025-08-17 with Rust 1.89.0, g++ 14.2.0, clang++ 19.1.7 and serde_json 1.0.142. 4) Float handling: the kostya Cargo.toml enables no float_roundtrip, so serde_json parses floats best-effort (an emulation by a wave14 enricher put 1-2 ULP errors on about 35% of the x values and about 10% of y and z); the README's list of inexact parsers names default RapidJSON but omits serde_json, and only the RapidJSON Precise rows (0.212/0.262 s) are exact, so the margin over Precise is not a same-accuracy comparison. UTF-8 validation of the input runs in fs::read_to_string outside the Rust timer. 5) simdjson On-Demand (0.060 s g++, 0.062 s clang++) is about 1.8x faster than Serde Typed and DAW JSON Link (0.085-0.089 s) about 1.2x-1.3x faster (derived from page data), so serde_json is not the fastest JSON option here. 6) Single workload on one machine from a third-party multi-language suite; medians with median absolute deviation. 7) The crate README's claim ('500 to 1000 megabytes per second deserialization and 600 to 900 megabytes per second serialization ... competitive with the fastest C and C++ JSON libraries or even 30% faster for many use cases') carries no table; its linked https://github.com/serde-rs/json-benchmark (archived by its owner 2024-05-20; serde_json 1.0.72, rustc 1.59.0-nightly 2021-12-07, Intel Core i7-6600U; C++ built with -std=c++1z -O3 under clang 11.0.0 and gcc 10.1.0) shows serde_json DOM parse at 320/420/300 MB/s (canada/citm_catalog/twitter), slower than RapidJSON's 380-390/680-890/320-440 MB/s on all three files; DOM stringify is faster on canada (430 vs 200-250 MB/s) and twitter (910 vs 600-870 MB/s) but slower on citm_catalog (560 vs 1090-1650 MB/s); struct parse is 580/710/550 MB/s with no labelled C++ struct column. That Rust harness sets jemalloc as the global allocator while the C++ harness uses the default allocator, the README's RapidJSON table does not say whether its columns are DOM or struct, and the committed cpp/main.cc runs only canada.json (citm_catalog and twitter are commented out), so those rows are not reproducible as committed. 8) serde_json is itself one of the json category's listed baselines.",
+  "is_evidence_for_known": false,
+  "confidence": 0.75,
+  "id": "https://github.com/serde-rs/json",
+  "verification": {
+    "date": "2026-09-25",
+    "verdict": "downgrade",
+    "tier_before": "A",
+    "tier_reason": "The kostya/benchmarks Json table has every quoted row, and the harness is public (json/json.rs/src/json_struct.rs, json_pull.rs and json_value.rs against json/test_rapid.cpp and test_nlohmann_json.cpp; flags in common/commands.mk and json/Makefile; Xeon E-2324G), but the win over RapidJSON and nlohmann/json comes from unequal work (typed decoding that skips name and opts against full DOM builds; the like-for-like serde_json::Value row is 2.9x-3.6x slower than RapidJSON) and from C++ baselines built without -DNDEBUG or RapidJSON SIMD, so it is capped at C, matching the tier given to the same rows in wave14 (lang:rust/kostya/benchmarks#json). The record's compiler versions were also wrong: these rows date from the 2025-08-17 run.",
+    "notes": "Numbers match the kostya README exactly, but the Json rows for Rust, RapidJSON and nlohmann/json are byte-identical to the 2025-08-17 README (commit 63ffa65), so they were measured with Rust 1.89.0 / g++ 14.2.0 / clang++ 19.1.7, not the versions in the current table; all compared rows come from that same run. The same rows already back wave14's lang:rust/kostya/benchmarks#json (tier C); that entry's yyjson rows (0.131/0.132 s) first appeared in the 2026-07-19 update, so its Serde Custom vs yyjson ratio is a cross-run comparison and its recorded Rust 1.97.1 / serde_json 1.0.150 toolchain is wrong (retier candidate).",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/kostya/benchmarks/master/README.md",
+      "https://github.com/kostya/benchmarks/tree/master/json",
+      "https://github.com/kostya/benchmarks/commits/master/README.md",
+      "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/README.md",
+      "https://raw.githubusercontent.com/kostya/benchmarks/4d4ac9a/README.md",
+      "https://raw.githubusercontent.com/kostya/benchmarks/199aa74/README.md",
+      "https://raw.githubusercontent.com/kostya/benchmarks/master/json/Makefile",
+      "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/json/Makefile",
+      "https://raw.githubusercontent.com/kostya/benchmarks/master/common/commands.mk",
+      "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/common/commands.mk",
+      "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/Cargo.toml",
+      "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/json/json.rs/Cargo.toml",
+      "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/json/json.rs/Cargo.lock",
+      "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/Cargo.lock",
+      "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/src/json_struct.rs",
+      "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/src/json_pull.rs",
+      "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/src/json_value.rs",
+      "https://raw.githubusercontent.com/kostya/benchmarks/master/json/test_rapid.cpp",
+      "https://raw.githubusercontent.com/kostya/benchmarks/master/json/test_nlohmann_json.cpp",
+      "https://raw.githubusercontent.com/kostya/benchmarks/master/json/generate_json.rb",
+      "https://raw.githubusercontent.com/Tencent/rapidjson/master/include/rapidjson/rapidjson.h",
+      "https://raw.githubusercontent.com/nlohmann/json/develop/include/nlohmann/detail/macro_scope.hpp",
+      "https://github.com/serde-rs/json",
+      "https://github.com/serde-rs/json/commits/master",
+      "https://github.com/serde-rs/json-benchmark",
+      "https://raw.githubusercontent.com/serde-rs/json-benchmark/master/README.md",
+      "https://raw.githubusercontent.com/serde-rs/json-benchmark/master/cpp/main.cc",
+      "https://raw.githubusercontent.com/serde-rs/json-benchmark/master/cpp/Makefile",
+      "https://raw.githubusercontent.com/serde-rs/json-benchmark/master/Cargo.toml",
+      "https://raw.githubusercontent.com/serde-rs/json-benchmark/master/src/main.rs"
+    ],
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true
+  }
+}
+
+SIBLING ENTRIES (same category, already catalogued):
+- simdjson (https://github.com/simdjson/simdjson): beats RapidJSON; README text: "parse JSON 4x faster than RapidJSON and 25x faster than JSON for Modern C++" and "uses three-quarters less instructions than state-of-the-art pars
+- yyjson (https://github.com/ibireme/yyjson): beats RapidJSON; On AWS EC2 (AMD EPYC 7R32, gcc 9.3), twitter.json: yyjson(insitu) 1.80 GB/s parse / 1.51 GB/s stringify vs rapidjson(insitu) 0.77 GB/s parse (~2.3x, derived fro
+- glaze (https://github.com/stephenberry/glaze): beats RapidJSON; Glaze 1.01 s roundtrip / 1396 MB/s write / 1200 MB/s read vs RapidJSON 3.76 s / 289 MB/s / 416 MB/s (~3.7x roundtrip, ~4.8x write, ~2.9x read, derived from page
+- Coost co/json (https://github.com/idealvin/coost): beats RapidJSON; master readme.md table (us, co/json vs rapidjson, minified twitter.json): win stringify 569 vs 2089 (3.6x), parse 924 vs 2495 (2.7x); mac stringify 783 vs 1289 
+- jaq (https://github.com/01mf02/jaq): beats jq 1.8.1 (also compared against gojq 0.12.18); README table (ms, user CPU time): jaq-3.0 is fastest of the three on 20 of 30 benchmarks, jq-1.8.1 on 5, gojq-0.12.18 on 6. Against jq: sort 90 vs 430, group-by
+- asdf (Mir/D) (https://github.com/libmir/asdf): beats RapidJSON; 0.133s (D/ldc2, Mir Asdf DOM) vs RapidJSON 0.154s (g++) and 0.194s (clang++) (~1.16x-1.46x faster, derived from page data)
+- cJSON (https://github.com/DaveGamble/cJSON): beats nlohmann/json (JSON for Modern C++); Table 10 (Skylake, GB/s): cJSON is faster than nlohmann/json ('JSON for Modern C++') on 13 of 14 files and ties on mesh (0.06 vs 0.06 GB/s), e.g. gsoc-2018 0.53
+- cpp-yyjson (https://github.com/yosh-matsuda/cpp-yyjson): beats RapidJSON; vs RapidJSON: 1.4-4.6x faster reads, 2.6-8.1x faster writes across the ten documents (per-document ranges from the root README table); time-weighted totals: 2.3
+- gjson (https://github.com/tidwall/gjson): beats encoding/json; Small payload (190B): 402 ns/op vs encoding/json struct 1,300 ns/op (~3.2x faster); medium (2.4KB): 2,241 vs 9,911 ns/op (~4.4x); large (24KB): 22,756 vs 130,56
+- go-json (https://github.com/goccy/go-json): beats encoding/json; 256.7 MB/s vs encoding/json 128.8 MB/s at 8 threads (~1.99x); 90.8 MB/s vs encoding/json 44.5 MB/s at 1 thread (~2.04x) (derived from page data)
+- Jansson (https://github.com/akheron/jansson): beats JsonCpp 1.0.0 (stringify also beats nlohmann/json 2.0.3); No claim by the project; figures are from the independent suite's committed sample CSV (Jansson v2.7). Stringify total 69.9 ms vs JsonCpp 94.3 ms (1.35x) and Nl
+- jiter (https://github.com/pydantic/jiter): beats serde_json; 209.4 MB/s vs serde_json 104.3 MB/s at 8 threads (~2.01x); 91.9 MB/s vs serde_json 48.0 MB/s at 1 thread (~1.91x) (derived from page data)
+- json-c (https://github.com/json-c/json-c): beats Jansson v2.7 (same suite also: nlohmann/json v2.0.3, JsonCpp 1.0.0, cJSON 1.5.0); Stringify time, sum of the three files (derived from page data): json-c 30.804 ms (16.260 + 9.990 + 4.554) vs Jansson 69.910 ms (about 2.3x), cJSON 71.283 ms (a
+- json-parser (udp/json-parser) (https://github.com/json-parser/json-parser): beats nlohmann/json v2.0.3 (same suite also: json-c 0.12.1, Jansson v2.7, JsonCpp 1.0.0); Parse time, sum of the three files (derived from page data): udp/json-parser 47.338 ms (29.536 + 13.058 + 4.744) vs Nlohmann 72.476 ms (55.591 + 9.875 + 7.010),
+- json.h (https://github.com/sheredom/json.h): beats nlohmann/json (C++11, v2.0.3 as pinned by nativejson-benchmark); the same table also has JsonCpp 1.0.0, Jansson and cJSON; Parse time in ms, json.h vs nlohmann v2.0.3: canada.json 9.418 vs 55.591 (5.9x), citm_catalog.json 5.077 vs 9.875 (1.9x), twitter.json 2.351 vs 7.010 (3.0x); th
+- Jsonifier (https://github.com/nihilai-collective/Jsonifier): beats simdjson; Small-value tests. Each value in the file is parsed as its own tiny document (e.g. [START]true[END]). Double Test Read: 1345.06 vs simdjson 270.869 MB/s (~5.0x)
+- jsoniter (json-iterator/go) (https://github.com/json-iterator/go): beats encoding/json; 233.6 MB/s vs encoding/json 128.8 MB/s at 8 threads (~1.81x); 79.3 MB/s vs encoding/json 44.5 MB/s at 1 thread (~1.78x) (derived from page data)
+- jsoniter-scala (https://github.com/plokhotnyuk/jsoniter-scala): beats RapidJSON; 0.147s (Scala/jsoniter-scala) vs RapidJSON 0.154s (g++) and 0.194s (clang++) (~1.05x-1.32x faster, derived from page data)
+- jsonparser (buger) (https://github.com/buger/jsonparser): beats encoding/json; Large payload (24KB): 20,114 ns/op vs encoding/json struct 130,565 ns/op, '6.5x faster than encoding/json' (verbatim from page), with 0 B/op and 0 allocs/op vs 
+- libjson (vincenthz) (https://github.com/vincenthz/libjson): beats nlohmann/json; Against nlohmann/json v2.0.3, sum of the three files (derived from page data): Stringify 68.767 ms vs 87.732 ms (about 1.28x); per file canada.json 61.512 vs 76
+- libjson (xnacly) (https://github.com/xnacly/libjson): beats encoding/json; 1.94x-2.43x faster in Go benchmarks (ns/op) with 2.1x-3.1x fewer allocations; 1.69x-1.81x faster wall-clock time on 1MB-100MB files
+- LJSON (https://github.com/lengjingzju/json): beats RapidJSON; README headline figures are best-case single files ('最快可达' = 'up to' in README_zh-cn): 'parses 131% faster and prints 147% faster than RapidJSON' on Cortex-A53 
+- metal-json (https://github.com/Brooooooklyn/metal-json): beats simdjson; On twitter-shaped documents, 1.34x-2.71x faster than C++ simdjson from 8 MiB to 512 MiB (1.34x at 8 MiB, 1.81x at 16 MiB, 2.28x at 64 MiB, 2.06x/2.19x/2.71x at 
+- Parson (https://github.com/kgabis/parson): beats JsonCpp (also json-c); Parse, sum of the three files (derived from page data): Parson 89.549 ms vs JsonCpp 1.0.0 165.522 ms (about 1.85x), json-c 0.12.1 134.551 ms (about 1.50x) and Q
+- PicoJSON (https://github.com/kazuho/picojson): beats nlohmann/json; Stringify total 80.2 ms vs 87.7 ms for nlohmann (1.09x) and 94.3 ms for JsonCpp (1.18x); DOM statistics traversal 0.89 ms vs 2.17 ms for nlohmann (2.4x) and 2.6
+- pikkr (https://github.com/pikkr/pikkr): beats serde_json; 1 field ($._id.$oid): pikkr 954.1471 MB/s (basic parsing only) and 1424.6397 MB/s (speculative, train_num=100) vs serde_json 452.4017 MB/s (~2.1x / ~3.1x); 16 f
+- simd-json (Rust) (https://github.com/simd-lite/simd-json): beats serde_json; DOM parse: canada.json 380 vs serde_json 320 MB/s (~1.19x), citm_catalog.json 720 vs 420 MB/s (~1.71x), twitter.json 810 vs 300 MB/s (~2.7x); struct parse: cana
+- simdjson-oxcaml (simdjson-ox) (https://github.com/artempyanykh/simdjson-oxcaml): beats RapidJSON; simdjson-ox-tape-reusable (reusable tape parser) geomean 1247.7 MB/s vs rapidjson-dom 1059.7 MB/s (~1.18x, derived from page data; README states 118% of RapidJS
+- Sonic (https://github.com/bytedance/sonic): beats encoding/json; BenchmarkEncoder_Generic_Sonic 32393 ns/op vs StdLib 106322 ns/op (~3.3x); BenchmarkDecoder_Generic_Sonic 66812 ns/op vs StdLib 124260 ns/op (~1.9x); BenchmarkD
+- sonic-rs (https://github.com/cloudwego/sonic-rs): beats serde_json; README x86_64 Criterion means (ratios derived from page data). Untyped canada deserialize: sonic_rs_dom::from_slice 4.9568 ms vs serde_json::from_slice 16.980 m
+- taoJSON (https://github.com/taocpp/json): beats nlohmann/json (Nlohmann v2.0.3 row in nativejson-benchmark); Parse time summed over the three files: taocpp/json 41.230 ms vs Nlohmann 72.476 ms, about 1.8x faster (derived from page data; canada 25.621 vs 55.591 ms, citm
+- ujson (µjson) (https://bitbucket.org/awangk/ujson): beats nlohmann/json v2.0.3 (as pinned by nativejson-benchmark); Independent shootout rows, derived from page data (CSV times summed over the 3 files): parse 37.15 ms vs nlohmann 72.48 ms (1.95x faster; per file canada 25.19 
+- ujson4c (https://github.com/esnme/ujson4c): beats RapidJSON; Parse to DOM, citm_catalog.json: ujson4c 1.841 ms vs RapidJSON 1.950 ms and RapidJSON_Insitu 1.922 ms (~1.04-1.06x faster); twitter.json: ujson4c 1.114 ms vs Ra
+- YAJL (https://github.com/lloyd/yajl): beats json-c 0.12.1 (also JsonCpp 1.0.0 and Jansson v2.7 in the same suite); Project README: 'YAJL is fast ... My hope is that YAJL will perform comparably to the fastest JSON parser out there' (no numbers). Independent shootout rows, de
+- zenjson (https://github.com/re-esper/zenjson): beats RapidJSON; Parsing (derived from page data): 1.81x-3.57x faster than RapidJSON (twitter.json 2034.7 vs 570.3 MB/s = 3.57x; canada.json 3.048 vs 5.509 ms = 1.81x; citm_cata
+- zzzJSON (https://github.com/dacez/zzzjson): beats RapidJSON; 'All JSON Above' total time 166ms (zzzjson) vs 220ms (RapidJSON) (~1.33x); Random Short JSON 38ms vs 56ms (~1.47x); Random Long JSON 29ms vs 45ms (~1.55x); No-N
+- Boost.JSON (https://github.com/boostorg/json): beats nlohmann/json, RapidJSON; Page charts, in MB/s, listed as clang / gcc / msvc. Parse citm_catalog: boost 476/503/477 vs nlohmann 140/143/148 (~3.3-3.5x, derived from page data), and boost
+- gason (https://github.com/vivkin/gason): beats RapidJSON; kostya/benchmarks JSON test (README update 2026-07-19): gason 0.127 s vs RapidJSON 0.154 s with g++ (1.21x, derived from page data), and 0.133 s vs 0.194 s with
+- json_struct (https://github.com/jorgen/json_struct): beats nlohmann/json v3.11.3; Roundtrip time 5.87 s (json_struct) vs 15.44 s (nlohmann), about 2.6x faster (derived from page data); write 178 MB/s vs 86 MB/s, about 2.1x (derived from page 
+- jsoncons (https://github.com/danielaparker/jsoncons): beats nlohmann/json; Integer file (540.82MB): jsoncons reads in 3.918s and writes in 0.744s vs nlohmann 8.177s / 2.885s (~2.1x read, ~3.9x write faster, derived from page data). Aga
+- JSONSki (https://github.com/AutomataLab/JSONSki): beats RapidJSON, simdjson; README (single large record): "JSONSki runs over 12x faster over ... JPStream ... JSONSki is about 3x faster than Pison, and more than 4x faster than simdjson".
+- libjson (SourceForge) (https://sourceforge.net/projects/libjson/): beats JsonCpp; Visual C++ 11.0 32-bit: 1000 iterations of 500 parsings in 5.2787 to 5.29663 s for libjson vs 5.762 to 5.77978 s for JsonCpp (about 1.09x, derived from page dat
+- Pison (https://github.com/AutomataLab/Pison): beats RapidJSON, simdjson; README: "parallel Pison achieves 5.4X and 3.1X speedups (on average) over simdjson on Server 1 (with 8 threads) and Server 2 (with 4 threads)"; "both Pison and 
+- qajson4c (https://github.com/DeHecht/qajson4c): beats RapidJSON, nlohmann/json; No numbers found. README claims "Top scores at the nativejson-benchmark on category Parsing Memory, Parsing Memory Peak and AllocCount while scoring quite well 
+- UltraJSON (https://github.com/ultrajson/ultrajson): beats CPython json module (stdlib json); orjson README Performance tables (unchanged in 3.9.4; measured with orjson 3.7.9, ujson 5.4.0, Python 3.10.5, Linux amd64), median latency ujson vs stdlib json,
+- easyjson (https://github.com/mailru/easyjson): beats encoding/json; 'easyjson is roughly 5-6 times faster than the standard encoding/json for unmarshaling, and 3-4 times faster for non-concurrent marshaling. Concurrent marshalin
+- fastgron (https://github.com/adamritter/fastgron): beats gron; 50x faster than gron on big files (400MB/s input / 1.8GB/s output on M1 MacBook Pro). Speed section on citylots.json (~190MB): fastgron 0.447s vs gron --no-sort
+- fastjson (valyala) (https://github.com/valyala/fastjson): beats encoding/json; README: 'up to 15x faster than the standard encoding/json'. Parse vs stdjson-map (decode into map[string]interface{}): citm_catalog 918.87 vs 62.19 MB/s (~14.8x
+- ffjson (https://github.com/pquerna/ffjson): beats encoding/json; 1.91x faster than encoding/json on the goser benchmark; 2.11x faster than encoding/json on the go.stripe benchmark
+- jbson (https://github.com/chrismanning/jbson): beats JsonCpp (also QJsonDocument and jsoncons); json_benchmark, README figures: large 43.0072 to 43.0377 s vs jsoncpp 62.7781 to 62.7823 s (1.46x), QJsonDocument 58.1027 to 58.1235 s (1.35x), jsoncons 243.634
+- jist (https://github.com/adelamodwala/jist): beats jq; 3.3GB file (get last element): jist 2.05s vs jq 34.17s (~16.7x, derived from page data), 1600MB/s vs 96MB/s, 4.5GB vs 18GB memory. 28.9GB file: jist 1:30s, 9.7M
+- JsonFusion (https://github.com/tucher/JsonFusion): beats RapidJSON; vs RapidJSON + manual mapping (parse+validate+populate): ~same speed on static embedded config (vs hand-written SAX), 40% faster dynamic embedded config, 20% fa
+- libdart (https://github.com/target/libdart): beats nlohmann/json (version not stated); the same run also has RapidJSON, sajson, YAJL and Jansson; Single-run table, ns per pass over the input: Dart finalized parse 27682 vs nlohmann 254695 (9.2x), Dart dynamic parse 158967 vs nlohmann 254695 (1.6x), Dart ke
+- libJSON (IgnacioPomar) (https://github.com/IgnacioPomar/libJSON): beats nlohmann/json; Read faster than nlohmann/json at every size tested: ~1.25x (small, 21.1us vs 26.4us), ~1.42x (medium, 2632.2us vs 3737.0us), ~1.38x (large, 19772.3us vs 27254.
+- metajson (iod::metajson) (https://github.com/iodcpp/metajson): beats nlohmann/json, RapidJSON; Up to 9x faster than nlohmann/json and 2x faster than RapidJSON (author states these numbers are not from a comprehensive benchmark)
+- Mison (speculative structural-index JSON parser) (None): beats RapidJSON; Paper Sec 6.1.1 / Fig. 8 (Twitter, Q1-Q8, single thread, throughput in GB/s): 'Mison is between 5.5 and 9.1 times faster than the best competitor in this experi
+- NetJSON (https://github.com/rpgmaker/NetJSON): beats Json.NET (Newtonsoft.Json); README states 3.4x faster than JSON.NET, 2.4x than ServiceStack JSON, 1.8x than Jil, 6x than JSON.NET BSON, 16.5x than JavaScriptSerializer, 4.3x than DataContr
+- orjson (https://github.com/ijl/orjson): beats Python json (stdlib); Median latency vs. stdlib json: twitter.json serialize 0.1ms vs 1.3ms (11.1x), deserialize 0.5ms vs 2.2ms (4.2x); github.json serialize 0.01ms vs 0.13ms (13.6x)
+- reflect-cpp (https://github.com/getml/reflect-cpp): beats RapidJSON, nlohmann/json; Benchmarks README: 'reflect-cpp is consistently faster than RapidJSON, usually about twice as fast' and 'consistently about 10 times faster than nlohmann/json';
+- sajson (https://github.com/chadaustin/sajson): beats RapidJSON; Paper text: "In practice, we find that another C++ parser, sajson, is faster [than RapidJSON]". Paper Table 10 (Skylake i7-6700, GCC 9.1, GB/s): sajson (static 
+- segmentio/encoding (encoding/json replacement) (https://github.com/segmentio/encoding): beats encoding/json; Vs encoding/json v1.16.2 (Go 1.16.2 stdlib), Core i9-8950HK, benchstat n=5+5: Marshal/*json.codeResponse2 6.40ms -> 3.82ms (-40.29%), Unmarshal 28.1ms -> 5.6ms 
+- simdjson-go (https://github.com/minio/simdjson-go): beats encoding/json; README: 'Compared to Golang's standard package encoding/json, simdjson-go is about 10x faster' and it 'runs on average at about 40% to 60% of the speed of simdj
+- simdjson_nodejs (https://github.com/luizperes/simdjson_nodejs): beats V8 JSON.parse (Node.js built-in); Page 'X faster' column (simdjson.lazyParse vs JSON.parse) ranges from 0.77x to 2.30x and is faster on 11 of 15 files. Examples: sf_citylots.json 1492.166 ms vs 
+- Sonic-Cpp (https://github.com/bytedance/sonic-cpp): beats RapidJSON (also nlohmann/json and taocpp/json in the nativejson-benchmark chart; simdjson, yyjson, cJSON and JsonCpp in the project's own benchmark); No figures in the README text; numbers exist only as bar charts. Values below are read off the chart images, approximate, not printed. nativejson parse chart (d
+- sonnet (https://github.com/sugawarayuuta/sonnet): beats encoding/json; Unmarshal canada_geometry: 271 MB/s vs encoding/json 62 MB/s (result.txt: 271.30 vs 62.63 MB/s, ~4.3x); citm_catalog: 511 vs 112 MB/s (511.58 vs 112.56 MB/s, ~4
+- ssrJSON (https://github.com/Antares0982/ssrJSON): beats Python json (stdlib); README text: 'ssrjson.dumps() is about 4x-31x as fast as json.dumps()' and 'ssrjson.loads() is about 2x-8x as fast as json.loads()' for both str and bytes input
+- Tachyon JSON (Rust, TachyonConcepts) (https://github.com/TachyonConcepts/TachyonJson): beats serde_json; Serde (zero-copy): 23 ns; Tachyon JSON: 8 ns, 1,000,000 iterations encoding {"message":"Hello, world!"} (~2.9x faster, derived from page data)
+- zimdjson (https://github.com/EzequielRamis/zimdjson): beats simdjson; zimdjson (On-Demand) beats simdjson (On-Demand) on 3 of the 5 tasks in bench_ondemand.png: find-system ~1.74 vs ~1.17 GB/s (~1.5x), top-factions ~1.59 vs ~1.04 
+- jsmn (https://github.com/zserge/jsmn): beats nlohmann/json; The project claim "world fastest JSON parser/tokenizer" is not supported. Paper Table 10 (Skylake i7-6700, GCC 9.1, GB/s): jsmn beats JSON for Modern C++ (nlohm
+
+=====================================================================
+PROCESS
+=====================================================================
+1. Open repo_url. Read the README, the main header/API surface, and the
+   benchmark page at benchmark_url. Skim the source enough to identify the
+   core technique (open addressing + SIMD probe groups, radix partitioning,
+   branchless binary search, io_uring, etc.).
+2. Check: header-only or built? Dependencies? Minimum language standard or
+   toolchain version? Platforms/architectures supported? Thread safety?
+   Exceptions? Allocator customization? ABI stability?
+3. Look for known failure modes: issues tagged "bug"/"performance", pathological
+   inputs the README warns about, CVEs, "not recommended for" notes.
+4. Identify 1–3 alternatives in the same category from the catalog
+   (the SIBLING ENTRIES listed under the input record) and say when you'd pick this one over them.
+5. Write the entry. Every claim you make must be traceable to something you
+   read this session. If you don't know, say "not documented" rather than
+   guessing.
+
+=====================================================================
+STYLE
+=====================================================================
+- Plain, direct, no marketing language. "2.3x faster lookups on 64-bit keys"
+  not "blazing fast".
+- Each field has a length cap. Respect it; brevity is the point.
+- Write for someone who knows the baseline well and has never heard of this.
+- Do not restate the JSON fields verbatim; they're rendered separately.
+
+=====================================================================
+OUTPUT — return ONLY this JSON object
+=====================================================================
+{
+  "id": "<repo canonical url>",
+  "one_liner": "<=20 words: what it is and what it beats",
+  "what_it_does": "2-4 sentences. The problem it solves and the API shape (drop-in? different interface?).",
+  "how_it_is_fast": "2-4 sentences. The core technique(s) that produce the speedup. Name the algorithm/idea so a reader can look it up.",
+  "when_to_use": [
+    "3-5 bullets, each a concrete situation: workload shape, key/value types, size ranges, latency vs throughput needs, platform"
+  ],
+  "when_not_to_use": [
+    "3-5 bullets: workloads where it loses or is risky, missing features, platform gaps, pathological cases, memory cost, maturity concerns"
+  ],
+  "integration": {
+    "form": "header-only | static lib | shared lib | crate | module | source-drop",
+    "dependencies": "none | list",
+    "min_toolchain": "e.g. C++17, GCC 9+, Rust 1.70",
+    "platforms": "e.g. x86-64 (AVX2 required), aarch64, any",
+    "thread_safety": "string or 'not documented'",
+    "drop_in_for_baseline": true | false | "partial — explain"
+  },
+  "gotchas": [
+    "0-4 bullets: surprising behavior, iterator invalidation rules, hash quality requirements, alignment needs, unsafe blocks, etc."
+  ],
+  "pick_this_over_siblings_when": "1-2 sentences comparing to the SIBLING ENTRIES listed under the input record, or 'no siblings catalogued yet'",
+  "verified_claims_summary": "1-2 sentences restating the benchmark result in your own words with the baseline, stdlib/compiler, and hardware, so the reader knows what was actually measured",
+  "status_note": "1 sentence on maintenance_status and usability, e.g. 'Abandoned since 2019 but MIT-licensed and small enough to vendor; last known-good compiler GCC 9.'",
+  "sources_read": ["every URL you opened"],
+  "confidence": 0.0-1.0
+}
+
+=====================================================================
+ORCHESTRATOR HARNESS NOTES (environment-specific; these override only
+the output-delivery rule above)
+=====================================================================
+- Tools: WebSearch and WebFetch (if they are not loaded yet, load them
+  with ToolSearch query "select:WebSearch,WebFetch"). The `gh` CLI is
+  authenticated; for GitHub repos prefer it over WebFetch:
+    gh api repos/OWNER/REPO/readme -H "Accept: application/vnd.github.raw"
+    gh api repos/OWNER/REPO/contents/PATH -H "Accept: application/vnd.github.raw"
+    gh api "repos/OWNER/REPO/git/trees/HEAD?recursive=1" --jq '.tree[].path'
+    gh search issues --repo OWNER/REPO "<terms>" --limit 20
+  Fetching content through gh counts as opening the github.com URL.
+- Do not clone repositories or build anything.
+- Never send the user's email address, name or any other personal identifier to an
+  outside service (URLs, headers, payloads). For APIs that want a User-Agent, such as
+  crates.io, use exactly: User-Agent: fastpp-research-bot/1.0
+- The record's `verification` block holds the verifier's notes; treat its
+  corrections as authoritative over older claims.
+- Budget: about 40 tool calls. Token cost is not a concern; read the source and
+  docs deeply enough to fill every field with evidence.
+- Deliver your output by writing the JSON object, and nothing else, to:
+    /home/user/fastpp/data/wave4/enrich/raw/github_com_serde_rs_json.json
+  Then check it parses:
+    python3 -c "import json,sys; json.load(open(sys.argv[1]))" /home/user/fastpp/data/wave4/enrich/raw/github_com_serde_rs_json.json
+- Your final reply to the orchestrator is one line: the entry name and your confidence.

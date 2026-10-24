@@ -3,13 +3,21 @@
 <sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Toolchain and build](../README.md)</sub>
 
 **What these beat:** ccache, sccache, distcc  
-**4 entries:** 0 tier A · 0 tier B · 4 tier C · 0 tier D · 3 copyable, 1 study only
+**12 entries:** 1 tier A · 1 tier B · 10 tier C · 0 tier D · 11 copyable, 1 study only
 
 | # | Project | What it is | Tier | Language | License | Status |
 |--:|---|---|:-:|---|---|---|
-| 1 | [**FASTBuild**](fastbuild-fastbuild.md) | Full build system combining object caching, unity builds and distributed compilation; replaces make/MSBuild, not a wrapper. | **C** | C++ | Zlib | 🟢 active |
-| 2 | [**octobuild**](octobuild-octobuild.md) | Rust compiler cache for Unreal Engine that impersonates IncrediBuild's xgConsole to speed up re-compiles vs. no cache. | **C** | Rust | MIT | 🟢 active |
-| 3 | [**HOMCC**](celonis-homcc.md) | Distributed C/C++ compiler wrapper replacing distcc with server-side dependency caching and compression for thin uplinks. | **C** | Python | MIT | 🟢 active |
-| 4 | [**NativeLink**](tracemachina-nativelink.md) | REAPI remote build-cache and execution server for Bazel/Buck2/CMake; beats local-only, non-distributed builds. | **C** | Rust | FSL-1.1-Apache-2.0 (study only) | 🟢 active |
+| 1 | [**doctest**](doctest-doctest.md) | Single-header C++11 unit-testing framework whose header and asserts compile far faster than Catch2 v2's single header. | **A** | C++ | MIT | 🟢 active |
+| 2 | [**CMake unity (jumbo) builds**](paper-book-cmake-unity-builds.md) | CMake 3.16+ UNITY_BUILD: compiles batches of sources as one translation unit, cutting clean-build time against per-file builds. | **B** | C++ | BSD-3-Clause | 🟢 active |
+| 3 | [**CMake precompiled headers (target_precompile_headers)**](paper-book-cmake-precompiled-headers.md) | CMake 3.16+ target_precompile_headers: parses a shared header set once per target instead of once per source file. | **C** | C++ | BSD-3-Clause | 🟢 active |
+| 4 | [**sccache**](mozilla-sccache.md) | Compiler-cache wrapper for C, C++, CUDA and Rust with local or cloud storage; skips recompiling unchanged units. | **C** | Rust | Apache-2.0 | 🟢 active |
+| 5 | [**[Boost].UT (boost-ext/ut)**](boost-ext-ut.md) | Macro-free C++20 single-header/module unit-testing framework whose 2019 benchmark compiled faster than Boost.Test, GoogleTest and Catch2. | **C** | C++ | BSL-1.0 | 🟢 active |
+| 6 | [**FASTBuild**](fastbuild-fastbuild.md) | Full build system combining object caching, unity builds and distributed compilation; replaces make/MSBuild, not a wrapper. | **C** | C++ | Zlib | 🟢 active |
+| 7 | [**octobuild**](octobuild-octobuild.md) | Rust compiler cache for Unreal Engine that impersonates IncrediBuild's xgConsole to speed up re-compiles vs. no cache. | **C** | Rust | MIT | 🟢 active |
+| 8 | [**HOMCC**](celonis-homcc.md) | Distributed C/C++ compiler wrapper replacing distcc with server-side dependency caching and compression for thin uplinks. | **C** | Python | MIT | 🟢 active |
+| 9 | [**distcc**](distcc-distcc.md) | Compiler front end that farms C/C++ compile jobs out to networked servers; beats a local single-machine make on big parallel builds. | **C** | C | GPL-2.0-or-later | 🟡 stale |
+| 10 | [**icecream (icecc)**](icecc-icecream.md) | SUSE's distcc-derived distributed C/C++ compiler with a central scheduler; beats single-machine make when several networked machines are free. | **C** | C++ | GPL-2.0-or-later | 🟡 stale |
+| 11 | [**clcache**](frerich-clcache.md) | Python ccache-style object cache for MSVC cl.exe that skips recompiling unchanged translation units on repeat builds. | **C** | Python | BSD-3-Clause | 🔴 abandoned |
+| 12 | [**NativeLink**](tracemachina-nativelink.md) | REAPI remote build-cache and execution server for Bazel/Buck2/CMake; beats local-only, non-distributed builds. | **C** | Rust | FSL-1.1-Apache-2.0 (study only) | 🟢 active |
 
 <sub>Tiers: **A** reproducible public benchmark (code, compiler, flags and CPU stated) · **B** independent or peer-reviewed measurement · **C** first-party claim · **D** directional, no numbers. Status: 🟢 active · 🔵 finished · 🟡 slow or stale · 🔴 abandoned · ⚪ unknown. *Study only* means no usable open-source license: read the idea, don't copy the code.</sub>

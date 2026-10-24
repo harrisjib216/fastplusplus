@@ -1,0 +1,48 @@
+{
+  "id": "paper:book-asynchronous-programming-with-cpp-spsc-queue-cached-indices",
+  "one_liner": "Teaching-grade SPSC ring buffer that caches the peer's index; about 1.6x its own uncached variant in the book's run.",
+  "what_it_does": "A bounded single-producer single-consumer queue of T over a power-of-two std::vector, with non-blocking bool push(const T&) and bool pop(T&) that return false when the queue is full or empty. It is not a library: the class template spsc_lock_free_queue_optimized lives inside the Chapter 13 benchmark program 13x08-spsp_lock_free_queue.cpp, next to the uncached spsc_lock_free_queue it is measured against. Compared with a mutex-guarded std::queue or Boost.Lockfree spsc_queue the interface is minimal: no emplace, no move push, no size, no blocking wait.",
+  "how_it_is_fast": "Head and tail are std::atomic<size_t> members on separate 64-byte-aligned slots, published with release stores and read with acquire loads, so neither side takes a lock. The optimisation is index caching: the producer keeps a private copy of the consumer's head (cache_head_) and the consumer a private copy of the producer's tail (cache_tail_), and each reloads the shared atomic only when its cached copy says the queue looks full or empty. Most push and pop calls then touch only their own index's cache line, which cuts cross-core coherency traffic; rigtorp/SPSCQueue documents the same technique. Index wrap-around uses a bit mask instead of modulo.",
+  "when_to_use": [
+    "Exactly one producer thread and one consumer thread passing small trivially copyable items (ints, pointers, POD messages) between pinned cores, for example a market-data or logging hand-off.",
+    "Throughput-bound streaming where the consumer usually trails the producer by several items, so the cached indices stay valid across many operations.",
+    "As a readable reference of about 50 lines for teaching, or for hand-rolling a queue in a codebase that cannot take Boost or a third-party header.",
+    "When both ends can afford to busy-spin and you want to avoid a mutex plus condition variable."
+  ],
+  "when_not_to_use": [
+    "More than one producer or consumer: there is no compare-and-swap anywhere, so concurrent pushes or concurrent pops corrupt the queue; use an MPMC queue.",
+    "Production use without your own tests: the repo ships no unit or stress tests for this queue, and the only evidence is one book run against the authors' own uncached variant, not against Boost.Lockfree or any other library.",
+    "Large or resource-owning element types: items are copied in and out (no move, no emplace), every slot is default-constructed up front, and a popped value stays alive in its slot until it is overwritten.",
+    "Latency ping-pong or a mostly empty queue: when the consumer is always caught up, each pop misses its cached tail and reloads the shared index, so the saving shrinks (reading of the source; the benchmark measured only bulk throughput).",
+    "Running the benchmark program off Linux: it uses pthread_setaffinity_np and cpu_set_t, although the queue class itself is portable C++."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the queue class (standard <atomic> and <vector>); the benchmark program needs pthreads, and the repo's CMake build links every Chapter 13 program against Google Benchmark and, at the top level, requires Boost 1.86, GoogleTest and {fmt}",
+    "min_toolchain": "the queue class uses only C++11 features (alignas, std::atomic, default member initialisers); the repo compiles Chapter 13 with -O3 -DNDEBUG -std=c++20 -march=native, and the README lists GCC 14.2 and Clang 18",
+    "platforms": "any for the queue class; the 13x08 benchmark is Linux/glibc only because of pthread_setaffinity_np, even though the README lists macOS and Windows for the book as a whole",
+    "thread_safety": "one producer thread calling push and one consumer thread calling pop; empty() reads both indices with relaxed loads and is only a hint; no other concurrent use is safe",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The power-of-two capacity check is an assert and the Chapter 13 build defines NDEBUG, so a non-power-of-two capacity silently produces wrong slot indices; usable capacity is capacity minus one.",
+    "alignas(64) on the index members does not pad the members after them, so in the optimised class capacity_ and the vector's pointers share cache_tail_'s line (written by the consumer, read by the producer on every push), and the heap buffer has no padding against neighbouring allocations, which rigtorp/SPSCQueue adds. The book's measured gain therefore also mixes in a layout change between the two classes (reading of the source, effect not measured).",
+    "The benchmark pins the producer to CPU 2 and the consumer to CPU 12 and calls exit(EXIT_FAILURE) when pthread_setaffinity_np fails, so it aborts on machines with 12 or fewer logical CPUs; on other topologies those ids may be SMT siblings or sit in different cache domains, which changes the result.",
+    "Reported ops/sec counts items transferred (one push plus one pop each), from a single run with the uncached queue always run first; consumer() takes its iteration count as int, so raising it past INT_MAX overflows."
+  ],
+  "pick_this_over_siblings_when": "Pick it only to vendor about 50 dependency-free lines or to learn the cached-index technique; for production SPSC traffic Boost.Lockfree spsc_queue, moodycamel::ReaderWriterQueue and atomic_queue are maintained, tested and have independent shootout numbers (about 42 to 51 ns mean ping-pong latency in the catalogued shootout), while this queue has only the book's comparison against its own uncached variant.",
+  "verified_claims_summary": "The book reports, for 1 billion ints through a 2^17-slot queue between CPUs 2 and 12 of an AMD Ryzen Threadripper Pro 5975WX (Ubuntu 24.04, GCC 13 per the lead, -O3 -march=native from the repo's CMake), about 101.6 million items per second for the uncached ring buffer against about 162.5 million for the cached-index version, roughly 1.6x, with perf-reported cache misses falling from 41.30% to 31.39%. The benchmark code is in the repo but its results are not, so this is a first-party single-run comparison of two in-house variants with no standard-library or third-party baseline.",
+  "status_note": "The queue file has had one commit ('Chapter-13 examples', 2024-10-18) and later repo commits only edit the README; it is MIT-licensed, about 50 lines and easy to vendor as a reference, and none of the three open issues (build setup on macOS and Windows, a Chapter 3 timer example) concerns this queue.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/PacktPublishing/Asynchronous-Programming-with-CPP/HEAD/Chapter_13/13x08-spsp_lock_free_queue.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/Asynchronous-Programming-with-CPP/HEAD/Chapter_13/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/Asynchronous-Programming-with-CPP/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/Asynchronous-Programming-with-CPP/HEAD/README.md",
+    "https://github.com/PacktPublishing/Asynchronous-Programming-with-CPP/tree/main/Chapter_13",
+    "https://github.com/PacktPublishing/Asynchronous-Programming-with-CPP/commits/main/Chapter_13/13x08-spsp_lock_free_queue.cpp",
+    "https://github.com/PacktPublishing/Asynchronous-Programming-with-CPP/issues",
+    "https://github.com/PacktPublishing/Asynchronous-Programming-with-CPP/issues/27",
+    "https://raw.githubusercontent.com/rigtorp/SPSCQueue/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}

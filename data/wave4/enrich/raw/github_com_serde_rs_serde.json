@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/serde-rs/serde",
+  "one_liner": "Rust's compile-time derive (de)serialization framework; through serde_json it beat a RapidJSON DOM parse 1.4-1.9x on kostya's JSON test.",
+  "what_it_does": "serde defines the Serialize and Deserialize traits and the Serializer, Deserializer and Visitor interfaces that connect Rust data structures to separate format crates (JSON, Postcard, CBOR, YAML, MessagePack, TOML, RON, BSON, Avro and others). #[derive(Serialize, Deserialize)], from serde_derive, writes those impls at compile time. It plays the role that cereal, Boost.Serialization or a reflection-based serializer plays in C++, but it is Rust-only and the wire format lives in another crate, so a C++ project can use it only across an FFI or process boundary.",
+  "how_it_is_fast": "There is no runtime reflection: serde_derive is a proc macro (syn and quote) that emits per-type code at compile time. For a struct it generates a __Field enum, a match on the key string or index, and a visit_map loop that fills one Option per field by calling the format's next_value directly; unknown keys go to IgnoredAny, so the format skips them without building anything. After monomorphization and inlining this can approach a hand-written parser for that type and format, which the crate documentation claims. &str and &[u8] fields borrow from the input instead of allocating, and Cow fields do so with #[serde(borrow)]. The slow paths are features that need lookahead: #[serde(flatten)] and untagged or internally tagged enums buffer the value in serde's private Content tree and replay it.",
+  "when_to_use": [
+    "Rust code that needs typed (de)serialization for one or more formats from one set of derives. The format crate (serde_json, postcard and so on) decides the throughput.",
+    "Extract-a-few-fields JSON decoding in Rust. In kostya's test, the derive-only Serde Typed row took 0.110 s and 11.12 MiB of extra RSS; a hand-written Visitor attached with #[serde(deserialize_with)] took 0.103 s and 0.00 MiB.",
+    "Zero-copy decoding from an in-memory buffer, using &str or &[u8] fields (borrowed implicitly) or Cow<str> with #[serde(borrow)], with Deserialize<'de> bounds rather than DeserializeOwned.",
+    "no_std targets. The serde crate builds without std (crates.io categories no-std and no-std::no-alloc; alloc and std are features). The MSRV is Rust 1.56 for serde and 1.71 for serde_derive."
+  ],
+  "when_not_to_use": [
+    "C++ projects. serde is Rust-only and has no C++ binding; use one of the C++ reflection or codegen serializers instead.",
+    "Hot paths built on untagged enums or #[serde(flatten)], which go through Content buffering. In issue #2101 a hand-written Deserialize for one untagged enum cut a Cargo.toml parse in toml_edit from 484 us to 181 us. The maintainer's answer was that the slow part is the derive-generated code, and he pointed to a moratorium on new serde_derive attributes to control compile time.",
+    "Builds sensitive to compile time or binary size. Every derived type adds proc-macro expansion and monomorphized code; issue #1146, 'Investigate compile time of serde crate', has been open since 2018 (cost not measured here).",
+    "As evidence against cereal or Boost.Serialization. No such comparison exists. The only numbers are kostya JSON rows that measure serde_json plus serde_derive against DOM parsers, and on those rows DAW JSON Link (0.085-0.089 s) and simdjson On-Demand (0.060-0.062 s) are faster.",
+    "Formats that need exact or unusual number types through flatten or untagged enums. Content cannot carry them: in serde_json, arbitrary_precision breaks there (issues #721 and #1108) and 128-bit integers fail inside untagged enums (#740)."
+  ],
+  "integration": {
+    "form": "crate (serde) plus a proc-macro crate (serde_derive, behind the derive feature) plus a separate format crate",
+    "dependencies": "serde_core (the traits); with the derive feature, serde_derive and its proc-macro2, quote and syn; a format crate such as serde_json",
+    "min_toolchain": "Rust 1.56 for serde, Rust 1.71 for serde_derive (crates.io rust-version and README badges, serde 1.0.229)",
+    "platforms": "Any Rust target; std, alloc-only or no_std through features",
+    "thread_safety": "Not documented. Derive-generated impls are plain functions over a per-call Serializer or Deserializer, so concurrency is governed by the format crate and the user's own types.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Unknown fields are skipped silently (IgnoredAny) unless the container has #[serde(deny_unknown_fields)], while a key that repeats a known struct field is a duplicate_field error.",
+    "Borrowing is decided by type, not by input. Cow<str> never borrows without #[serde(borrow)], and borrowed types cannot be used with DeserializeOwned entry points such as serde_json::from_reader.",
+    "Flatten and untagged or internally tagged enums buffer through Content: they allocate, try variants in order and build an error per failed attempt (issue #2101), and they lose formats' special number handling.",
+    "serde_derive has an opt-in deserialize_in_place cargo feature that generates in-place deserialization to reuse existing allocations. It is off by default."
+  ],
+  "pick_this_over_siblings_when": "No sibling in this category is Rust, so pick serde only when the code is Rust. For C++ binary serialization, bitsery, YAS and struct_pack carry benchmarks against Boost.Serialization, cereal or protobuf; for C++ JSON through reflection or codegen, simdjson's experimental_json_builder and Easy Reflection are the comparable approaches.",
+  "verified_claims_summary": "The serde repository has no benchmark. The only numbers are kostya/benchmarks' Json rows, measured on 2025-08-17 on an Intel Xeon E-2324G with Rust 1.89.0, serde/serde_derive 1.0.219 and serde_json 1.0.142, LTO and target-cpu=native. There, serde_json::from_str into a derived three-field struct took 0.110 s (0.103 s with a custom Visitor), against 0.154 s (g++ 14.2.0) and 0.194 s (clang++ 19.1.7) for a full RapidJSON DOM parse and 1.182-1.266 s for nlohmann/json. The work is unequal (typed skipping against full DOM builds, C++ built without -DNDEBUG), and nothing compares serde with cereal or Boost.Serialization.",
+  "status_note": "Actively maintained (serde 1.0.229 released 2026-07-18, last commit 2026-10-16), MIT OR Apache-2.0, about 1.58 billion crates.io downloads; Rust-only, so for C++ it is a design reference, and its only evidence is the same kostya rows as the serde_json entry.",
+  "sources_read": [
+    "https://github.com/serde-rs/serde",
+    "https://github.com/serde-rs/serde/commits/master",
+    "https://raw.githubusercontent.com/serde-rs/serde/HEAD/README.md",
+    "https://raw.githubusercontent.com/serde-rs/serde/HEAD/crates-io.md",
+    "https://raw.githubusercontent.com/serde-rs/serde/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/serde-rs/serde/HEAD/serde/Cargo.toml",
+    "https://raw.githubusercontent.com/serde-rs/serde/HEAD/serde_core/Cargo.toml",
+    "https://raw.githubusercontent.com/serde-rs/serde/HEAD/serde_derive/Cargo.toml",
+    "https://raw.githubusercontent.com/serde-rs/serde/HEAD/serde/src/lib.rs",
+    "https://raw.githubusercontent.com/serde-rs/serde/HEAD/serde_core/src/lib.rs",
+    "https://raw.githubusercontent.com/serde-rs/serde/HEAD/serde_derive/src/lib.rs",
+    "https://raw.githubusercontent.com/serde-rs/serde/HEAD/serde_derive/src/de.rs",
+    "https://raw.githubusercontent.com/serde-rs/serde/HEAD/serde_derive/src/de/identifier.rs",
+    "https://raw.githubusercontent.com/serde-rs/serde/HEAD/serde_derive/src/de/struct_.rs",
+    "https://raw.githubusercontent.com/serde-rs/serde/HEAD/serde_derive/src/de/enum_untagged.rs",
+    "https://raw.githubusercontent.com/serde-rs/serde/HEAD/serde_derive/src/de/enum_internally.rs",
+    "https://raw.githubusercontent.com/serde-rs/serde/HEAD/serde_derive/src/internals/attr.rs",
+    "https://github.com/serde-rs/serde/issues?q=is%3Aissue+label%3Aperformance",
+    "https://github.com/serde-rs/serde/issues/2101",
+    "https://crates.io/api/v1/crates/serde",
+    "https://raw.githubusercontent.com/serde-rs/json/HEAD/src/de.rs",
+    "https://github.com/serde-rs/json/issues?q=is%3Aissue+is%3Aopen+float",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/README.md",
+    "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/README.md",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/Cargo.toml",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/src/json_struct.rs",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/src/json_pull.rs",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/test_rapid.cpp",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/common/commands.mk"
+  ],
+  "confidence": 0.7
+}

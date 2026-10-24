@@ -3,7 +3,7 @@
 <sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Networking and servers](../README.md)</sub>
 
 **What these beat:** libuv, libevent, epoll, io_uring baseline the benchmark names  
-**44 entries:** 8 tier A · 8 tier B · 27 tier C · 1 tier D · 39 copyable, 5 study only
+**47 entries:** 8 tier A · 8 tier B · 30 tier C · 1 tier D · 42 copyable, 5 study only
 
 | # | Project | What it is | Tier | Language | License | Status |
 |--:|---|---|:-:|---|---|---|
@@ -31,25 +31,28 @@
 | 22 | [**PcapPlusPlus**](seladb-pcapplusplus.md) | C++ packet capture, parsing and crafting library; parses pcap TCP/DNS traffic 1.06-1.26x faster than libtins in its maintainers' run. | **C** | C++ | Unlicense | 🟢 active |
 | 23 | [**may**](xudong-huang-may.md) | Rust stackful-coroutine runtime with Go-style go! and blocking-style I/O; its may_minihttp demo beat pre-1.0 tokio_minihttp by \~15% req/s. | **C** | Rust | MIT OR Apache-2.0 | 🟢 active |
 | 24 | [**PhotonLibOS**](alibaba-photonlibos.md) | Alibaba's stackful-coroutine C++ I/O runtime (epoll/io_uring/kqueue); its echo server beats boost::asio on single-core QPS. | **C** | C++ | Apache-2.0 | 🟢 active |
-| 25 | [**JUring**](davidtos-juring.md) | Java FFM bindings to Linux io_uring (via liburing) for batched file reads/writes; beats FileChannel on small random reads. | **C** | Java | Unlicense | 🟢 active |
-| 26 | [**Boost.Corosio**](cppalliance-corosio.md) | Coroutine-only C++20 Boost-track networking library; 9-49% faster coroutine dispatch than Asio coroutines on Windows IOCP, socket I/O at parity. | **C** | C++ | BSL-1.0 | 🟢 active |
-| 27 | [**redcon.c**](tidwall-redcon-c.md) | Small C framework for Redis-protocol (RESP) servers on epoll/kqueue; its toy clone outruns Redis 6.0.6 under deep pipelining. | **C** | C | MIT | 🟢 active |
-| 28 | [**Rain**](wzxzhuxi-rain.md) | Small header-only C++23 coroutine runtime for Linux: per-thread epoll loops with SO_REUSEPORT, \~1.13x Tokio req/s on one loopback test. | **C** | C++ | MIT | 🟢 active |
-| 29 | [**see (see::sync)**](compio-rs-see.md) | Runtime-agnostic watch (latest-value broadcast) channel with sync and single-threaded variants; beats tokio::sync::watch at 1, 4 and 64 subscribers. | **C** | Rust | Apache-2.0 OR MIT | 🟢 active |
-| 30 | [**ringline**](ringline-rs-ringline.md) | Thread-per-core io_uring runtime for Rust servers: 4-71% faster than default tokio on TCP echo, -10% to +9% versus tuned tokio. | **C** | Rust | MIT OR Apache-2.0 | 🟢 active |
-| 31 | [**uringcore**](ankitkpandey1-uringcore.md) | Rust/PyO3 io_uring asyncio event loop; claims \~3x lower single-op latency than uvloop, but loses on gather(100). | **C** | Rust | Apache-2.0 | 🟢 active |
-| 32 | [**BusterMQ**](bpd1069-bustermq.md) | Zig thread-per-core io_uring server for the core NATS pub/sub protocol; \~1.4x Go nats-server publish rate in its own benchmark. | **C** | Zig | Apache-2.0 | 🟢 active |
-| 33 | [**UCall (formerly ujrpc)**](unum-cloud-ucall.md) | JSON-RPC 2.0 server library in C++ with C and Python APIs; io_uring backend beats FastAPI/uvicorn on small-call latency and throughput. | **C** | C++ | Apache-2.0 | 🟡 stale |
-| 34 | [**io_uring-echo-server (frevib)**](frevib-io-uring-echo-server.md) | Single-threaded \~200-line C TCP echo server on liburing, benchmarked in 2020 against the same author's minimal epoll echo server. | **C** | C | MIT | 🟡 stale |
-| 35 | [**mrloop**](markreedz-mrloop.md) | Tiny single-threaded C event loop on io_uring; README echo test shows 1.51x an unnamed epoll server. | **C** | C | MIT | 🟡 stale |
-| 36 | [**Hinsightd MT (hin10)**](gitlab-com-tiotags-hin10.md) | Tiny multi-threaded io_uring HTTP/1.1 static-file server in C; edges nginx 1-16% on a 102-byte file, loses on larger files. | **C** | C | BSD-3-Clause | 🟡 stale |
-| 37 | [**libev**](enki-libev.md) | Small, embeddable C event loop with io, timer, signal, child and stat watchers; halves libevent 1.4's per-iteration cost when timers churn. | **C** | C | BSD-2-Clause OR… | 🔴 abandoned |
-| 38 | [**libPhenom**](facebook-libphenom.md) | Archived Facebook C eventing framework (epoll/kqueue/ports job scheduler); first-party gut check shows 1.07-1.39x libevent events/s. | **C** | C | Apache-2.0 | 🔴 abandoned |
-| 39 | [**picoev**](kazuho-picoev.md) | Tiny C event loop (\~1k lines; epoll/kqueue/select) that beat 2009-era libevent \~2x on libev's bench.c. | **C** | C | BSD-3-Clause | 🔴 abandoned |
-| 40 | [**uWebSockets (µWebSockets / uSockets)**](unetworking-uwebsockets.md) | C++ HTTP/WebSocket server on the uSockets event layer; author measured 12x the req/s of clustered Node.js/Fastify. | **C** | C++ | Apache-2.0 (study only) | 🟢 active |
-| 41 | [**F-Stack**](f-stack-f-stack.md) | DPDK kernel-bypass framework with a ported FreeBSD TCP/IP stack and epoll/kqueue-style API; beats kernel-stack epoll Nginx on RPS/CPS. | **C** | C | BSD-2-Clause for F-Stack's… (study only) | 🟢 active |
-| 42 | [**exec-rs**](npuichigo-exec-rs.md) | Rust port of C++ P2300 senders/receivers with a mio event loop; its single-threaded echo server beats Tokio 10-26% (self-reported). | **C** | Rust | no license (study only) | 🟢 active |
-| 43 | [**io_uring hybrid storage I/O architecture (Oracle Database)**](paper-io-uring-hybrid-storage-i-o-architecture-oracle-database.md) | Design paper: Oracle Database swaps libaio for io_uring on batched async paths; 29% less CPU per write, sync reads unchanged. | **C** | C | no license (study only) | 🟢 active |
-| 44 | [**LibTorrent (rakshasa)**](rakshasa-libtorrent.md) | C++ BitTorrent engine behind rTorrent that writes mmap'ed file pages straight to sockets; old first-party claim of 3x the mainline client's seeding speed. | **D** | C++ | GPL-2.0 | 🟢 active |
+| 25 | [**OpenOnload (with ef_vi and TCPDirect kernel-bypass APIs)**](xilinx-cns-onload.md) | AMD's user-level TCP/UDP stack that accelerates unmodified BSD-sockets apps by bypassing the Linux kernel network stack. | **C** | C | GPL-2.0 AND BSD-2-Clause | 🟢 active |
+| 26 | [**JUring**](davidtos-juring.md) | Java FFM bindings to Linux io_uring (via liburing) for batched file reads/writes; beats FileChannel on small random reads. | **C** | Java | Unlicense | 🟢 active |
+| 27 | [**COROIO**](resetius-coroio.md) | C++23 coroutine networking library with compile-time epoll/kqueue/IOCP/io_uring backends; lower dispatch latency than libevent at small descriptor counts. | **C** | C++ | BSD-2-Clause | 🟢 active |
+| 28 | [**Boost.Corosio**](cppalliance-corosio.md) | Coroutine-only C++20 Boost-track networking library; 9-49% faster coroutine dispatch than Asio coroutines on Windows IOCP, socket I/O at parity. | **C** | C++ | BSL-1.0 | 🟢 active |
+| 29 | [**redcon.c**](tidwall-redcon-c.md) | Small C framework for Redis-protocol (RESP) servers on epoll/kqueue; its toy clone outruns Redis 6.0.6 under deep pipelining. | **C** | C | MIT | 🟢 active |
+| 30 | [**Rain**](wzxzhuxi-rain.md) | Small header-only C++23 coroutine runtime for Linux: per-thread epoll loops with SO_REUSEPORT, \~1.13x Tokio req/s on one loopback test. | **C** | C++ | MIT | 🟢 active |
+| 31 | [**see (see::sync)**](compio-rs-see.md) | Runtime-agnostic watch (latest-value broadcast) channel with sync and single-threaded variants; beats tokio::sync::watch at 1, 4 and 64 subscribers. | **C** | Rust | Apache-2.0 OR MIT | 🟢 active |
+| 32 | [**ringline**](ringline-rs-ringline.md) | Thread-per-core io_uring runtime for Rust servers: 4-71% faster than default tokio on TCP echo, -10% to +9% versus tuned tokio. | **C** | Rust | MIT OR Apache-2.0 | 🟢 active |
+| 33 | [**uringcore**](ankitkpandey1-uringcore.md) | Rust/PyO3 io_uring asyncio event loop; claims \~3x lower single-op latency than uvloop, but loses on gather(100). | **C** | Rust | Apache-2.0 | 🟢 active |
+| 34 | [**BusterMQ**](bpd1069-bustermq.md) | Zig thread-per-core io_uring server for the core NATS pub/sub protocol; \~1.4x Go nats-server publish rate in its own benchmark. | **C** | Zig | Apache-2.0 | 🟢 active |
+| 35 | [**UCall (formerly ujrpc)**](unum-cloud-ucall.md) | JSON-RPC 2.0 server library in C++ with C and Python APIs; io_uring backend beats FastAPI/uvicorn on small-call latency and throughput. | **C** | C++ | Apache-2.0 | 🟡 stale |
+| 36 | [**io_uring-echo-server (frevib)**](frevib-io-uring-echo-server.md) | Single-threaded \~200-line C TCP echo server on liburing, benchmarked in 2020 against the same author's minimal epoll echo server. | **C** | C | MIT | 🟡 stale |
+| 37 | [**liburing4cpp**](carterli-liburing4cpp.md) | Header-only C++20 coroutine wrapper over liburing; its echo server roughly matches the author's raw C io_uring server. | **C** | C++ | MIT | 🟡 stale |
+| 38 | [**mrloop**](markreedz-mrloop.md) | Tiny single-threaded C event loop on io_uring; README echo test shows 1.51x an unnamed epoll server. | **C** | C | MIT | 🟡 stale |
+| 39 | [**Hinsightd MT (hin10)**](gitlab-com-tiotags-hin10.md) | Tiny multi-threaded io_uring HTTP/1.1 static-file server in C; edges nginx 1-16% on a 102-byte file, loses on larger files. | **C** | C | BSD-3-Clause | 🟡 stale |
+| 40 | [**libev**](enki-libev.md) | Small, embeddable C event loop with io, timer, signal, child and stat watchers; halves libevent 1.4's per-iteration cost when timers churn. | **C** | C | BSD-2-Clause OR… | 🔴 abandoned |
+| 41 | [**libPhenom**](facebook-libphenom.md) | Archived Facebook C eventing framework (epoll/kqueue/ports job scheduler); first-party gut check shows 1.07-1.39x libevent events/s. | **C** | C | Apache-2.0 | 🔴 abandoned |
+| 42 | [**picoev**](kazuho-picoev.md) | Tiny C event loop (\~1k lines; epoll/kqueue/select) that beat 2009-era libevent \~2x on libev's bench.c. | **C** | C | BSD-3-Clause | 🔴 abandoned |
+| 43 | [**uWebSockets (µWebSockets / uSockets)**](unetworking-uwebsockets.md) | C++ HTTP/WebSocket server on the uSockets event layer; author measured 12x the req/s of clustered Node.js/Fastify. | **C** | C++ | Apache-2.0 (study only) | 🟢 active |
+| 44 | [**F-Stack**](f-stack-f-stack.md) | DPDK kernel-bypass framework with a ported FreeBSD TCP/IP stack and epoll/kqueue-style API; beats kernel-stack epoll Nginx on RPS/CPS. | **C** | C | BSD-2-Clause for F-Stack's… (study only) | 🟢 active |
+| 45 | [**exec-rs**](npuichigo-exec-rs.md) | Rust port of C++ P2300 senders/receivers with a mio event loop; its single-threaded echo server beats Tokio 10-26% (self-reported). | **C** | Rust | no license (study only) | 🟢 active |
+| 46 | [**io_uring hybrid storage I/O architecture (Oracle Database)**](paper-io-uring-hybrid-storage-i-o-architecture-oracle-database.md) | Design paper: Oracle Database swaps libaio for io_uring on batched async paths; 29% less CPU per write, sync reads unchanged. | **C** | C | no license (study only) | 🟢 active |
+| 47 | [**LibTorrent (rakshasa)**](rakshasa-libtorrent.md) | C++ BitTorrent engine behind rTorrent that writes mmap'ed file pages straight to sockets; old first-party claim of 3x the mainline client's seeding speed. | **D** | C++ | GPL-2.0 | 🟢 active |
 
 <sub>Tiers: **A** reproducible public benchmark (code, compiler, flags and CPU stated) · **B** independent or peer-reviewed measurement · **C** first-party claim · **D** directional, no numbers. Status: 🟢 active · 🔵 finished · 🟡 slow or stale · 🔴 abandoned · ⚪ unknown. *Study only* means no usable open-source license: read the idea, don't copy the code.</sub>

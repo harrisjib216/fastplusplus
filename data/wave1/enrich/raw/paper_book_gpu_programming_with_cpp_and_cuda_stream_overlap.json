@@ -1,0 +1,60 @@
+{
+  "id": "paper:book-gpu-programming-with-cpp-and-cuda-stream-overlap",
+  "one_liner": "Book CUDA pattern: row chunks copied from pinned memory on two streams so transfers overlap the GEMV kernel.",
+  "what_it_does": "ch8/3_multiplying_with_streams in the Packt book's repository holds two programs that compute a float matrix-vector product for square matrices of 16,380 and 32,760 rows (about 1.07 and 4.29 GB) with the same one-thread-per-row kernel. vec_mat_mul_nostreams.cu copies the whole pageable (malloc) matrix with one blocking cudaMemcpy, launches one kernel and copies the result back; vec_mat_mul_streams.cu keeps the matrix in pinned memory (cudaMallocHost) and walks it in chunks of 273 to 16,380 rows, alternating two streams that each issue cudaMemcpyAsync of a chunk, the kernel on that chunk and an async copy of its slice of the result. It is a pattern to copy, not an API: each compute() call allocates, times one pass and frees everything, and an average() helper (commented out in main) runs it ten times and prints the percentage gain against a no-streams time you supply by hand.",
+  "how_it_is_fast": "Copy/compute overlap with double buffering (software pipelining over CUDA streams): while one stream's kernel works on chunk k, the copy engine is already moving the next chunk for the other stream, so kernel time and the small result copies hide behind the host-to-device transfer. Pinned (page-locked) host memory lets cudaMemcpyAsync run asynchronously and also transfers faster than pageable memory. Every matrix element is used once, so the job is bound by PCIe bandwidth: the book's best streamed times work out to about 12.3 and 12.5 GB/s against about 9.0 and 8.6 GB/s for the no-streams reference times (derived from page data plus the relayed averages), close to the roughly 12 GB/s pinned rate the book reports.",
+  "when_to_use": [
+    "A kernel whose input must cross PCIe on every call and whose compute time is comparable to the transfer time, so overlap can hide the smaller of the two.",
+    "Matrices or datasets larger than GPU memory: the streamed version needs only two chunk buffers on the device, while the no-streams baseline allocates the whole matrix (4.29 GB at 32,760 rows) on the GPU.",
+    "Data that already lives in, or can be produced directly into, pinned host memory, such as a reusable staging buffer.",
+    "Tuning chunk size for a given PCIe link and GPU: the repo sweeps 273 to 16,380 rows per chunk, and the book (relayed) found chunks near 100-200 MB best."
+  ],
+  "when_not_to_use": [
+    "Data that stays on the GPU or is reused by many kernels: copy it once and keep it resident; overlap only pays when every call streams fresh data across PCIe.",
+    "One-off matrix-vector products on host data: the work is capped by the roughly 12 GB/s transfer the book reports, so a multithreaded CPU GEMV reading host memory directly may beat both GPU versions; the repo's CPU loop is naive scalar code and its times are not published.",
+    "When pinning must be paid for: the full matrix (1 to 4 GB) is allocated with cudaMallocHost and filled outside the timed region, so an application that receives data in pageable memory still pays to pin or copy it, and the 27-31% does not include that.",
+    "As a fast GEMV kernel: one thread per row reads row-major data with a whole row between adjacent threads (uncoalesced), small chunks launch tiny grids (2 blocks of 256 threads at 273 rows), and cuBLAS is not compared.",
+    "Row counts that are not a multiple of twice the chunk size: the loop has no tail handling and would read and write past the end of its buffers."
+  ],
+  "integration": {
+    "form": "source-drop (pattern shown in two .cu programs)",
+    "dependencies": "CUDA runtime only (cuda_runtime.h); the repo's devcontainer installs CUDA Toolkit 12.0 and g++ 9 on Ubuntu 20.04",
+    "min_toolchain": "CUDA toolkit with streams and cudaMallocHost (the repo targets CUDA 12); CMake 3.10+ per CMakeLists.txt; README lists CUDA Toolkit 12, g++ 9.4 and CMake 3.16",
+    "platforms": "NVIDIA GPUs with at least one asynchronous copy engine; ch8/2_mem_bandwidth/mem_bandwidth.cu prints the async engine count and concurrent-kernel support, and memcpy_benchmark.cu measures pinned host-to-device bandwidth from 1 MB to 1 GB",
+    "thread_safety": "not documented; each compute() call creates and destroys its own streams and buffers and shares nothing between host threads",
+    "drop_in_for_baseline": "partial — same kernel and results, but the matrix must sit in pinned memory, two device chunk buffers replace the full device matrix, and the row count must be a multiple of twice the chunk size"
+  },
+  "gotchas": [
+    "The comparison changes two things at once: the baseline copies from pageable malloc memory and the streamed version from pinned cudaMallocHost memory, and the repo has no pinned no-streams variant, so how much of the 27-31% is overlap rather than faster pinned transfers is unmeasured; ch8/2_mem_bandwidth/memcpy_benchmark.cu measures pinned bandwidth only, never pageable.",
+    "The no-streams reference times (119.299 ms and 500.615 ms) are constants in commented-out average() calls; the no-streams program times one pass per size and the code tells you to replace the constants with your own measurement, so the printed percentage gain compares a ten-run average with a single number from another program and run.",
+    "No CUDA call is error-checked: a failed 4.29 GB cudaMallocHost (not enough RAM or a locked-memory limit) leaves a null pointer that initializeMatrix then writes through. The timed region also includes a blocking copy of the input vector from pageable memory and the creation of both streams.",
+    "checkResult uses an absolute tolerance of 1e-3, only a few float ulps for row sums in the thousands (matrix and vector values are uniform in [0, 1]), so any rounding difference between the GPU and CPU loops, such as a fused multiply-add on one side, can print a spurious mismatch; it reports only the first one."
+  ],
+  "pick_this_over_siblings_when": "Pick this over the other GPU Programming with C++ and CUDA entries when host-device transfer, not kernel speed, dominates: the ch4 vector-add entry times blocking copies and the kernel one after another, the prime entry moves no data at all, and the ch7 tiled matrix multiply speeds up the kernel itself, which this transfer-bound job would barely notice.",
+  "verified_claims_summary": "The book's Table 8.1, relayed by the seed lead and not in the repo, reports ten-run averages on an Intel Core i7-10750H with a GeForce RTX 2060: the streamed version took 87.03 ms for the 16,380 x 16,380 float matrix (printed as 1020 MB) and 343.555 ms for 32,760 x 32,760 (4092 MB), 27.05% and 31.37% below the no-streams reference times of 119.299 ms and 500.615 ms that appear in the repo's commented-out calls, with 25-31% across chunk sizes. End-to-end GPU time including all copies is measured with CUDA events; compiler flags are not stated and CMakeLists.txt sets none, which matters little for a transfer-bound timing.",
+  "status_note": "MIT-licensed Packt companion repo (117 stars, 40 forks) that is effectively frozen since publication: last code change 2025-08-20, last commit a README banner on 2025-12-15, and PR #1 (open since 2025-10-07, touches these files only to drop a zero initialisation) and issue #3 (another chapter, open since 2026-02-04) have no maintainer reply, so 'stale' fits better than 'active'; copy the pattern, adding error checks, tail handling and a pinned no-streams control.",
+  "sources_read": [
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA",
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/tree/main/ch8",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/ch8/3_multiplying_with_streams/vec_mat_mul_streams.cu",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/ch8/3_multiplying_with_streams/vec_mat_mul_nostreams.cu",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/ch8/3_multiplying_with_streams/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/ch8/readme.md",
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/tree/main/ch8/2_mem_bandwidth",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/ch8/2_mem_bandwidth/mem_bandwidth.cu",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/ch8/2_mem_bandwidth/memcpy_benchmark.cu",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/ch8/2_mem_bandwidth/CMakeLists.txt",
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/tree/main/ch8/1_vector_add",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/ch8/1_vector_add/vector_add.cu",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/ch4/2_vector_add/vector_add.cu",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/.devcontainer/DockerfileUbuntu",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/.devcontainer/devcontainer.json",
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/commits/main",
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/issues?q=is%3Aissue",
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/issues/3",
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/pulls",
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/pull/1/files"
+  ],
+  "confidence": 0.6
+}

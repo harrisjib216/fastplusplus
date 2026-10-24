@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/doctest/doctest",
+  "one_liner": "Single-header C++11 unit-testing framework whose header and asserts compile far faster than Catch2 v2's single header.",
+  "what_it_does": "doctest is a Catch-style unit-testing framework (TEST_CASE, SUBCASE, CHECK/REQUIRE, INFO, test suites, decorators, reporters) shipped as one header, with the test runner instantiated in exactly one translation unit via DOCTEST_CONFIG_IMPLEMENT or DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN. Because including the header is cheap, it is designed for writing tests next to production code, even in headers, and DOCTEST_CONFIG_DISABLE strips every test and most of the framework from the binary. Asserts can also be used outside a test context as a general assert library. It is not a build cache: its speed claim is that test code using it compiles faster.",
+  "how_it_is_fast": "The public part of doctest.h forward-declares what it needs (it even forward-declares std::ostream, std::istream, std::tuple and std::nullptr_t inside namespace std) and pulls no standard headers into user translation units; all the iostream, container and threading includes live only in the implementation TU. Expression-decomposing CHECK(a==b) uses template machinery (ExpressionDecomposer plus a ResultBuilder wrapped in try/catch); DOCTEST_CONFIG_SUPER_FAST_ASSERTS collapses each assert into a single call to an out-of-line, non-inlined function (decomp_assert, binary_assert, unary_assert) with no try/catch, and the binary CHECK_EQ(a,b) form skips expression decomposition entirely. Together these cut per-assert instantiation and code size, which is where the assert-compile gains come from.",
+  "when_to_use": [
+    "Test headers included in many translation units, or tests written inline in production .cpp/.h files: the 2018 run measured 11-23 ms per extra TU for doctest.h against 380-470 ms for Catch 2.3.0's catch.hpp",
+    "Replacing a Catch2 v2 single-header (catch.hpp) setup where header cost dominates the test build; the FAQ gives SECTION and tagged TEST_CASE macro shims for migration",
+    "Codebases held to C++11/14/17, where [Boost].UT (C++20 only) is not an option",
+    "Suites with tens of thousands of asserts where you can switch to CHECK_EQ-style binary asserts and define DOCTEST_CONFIG_SUPER_FAST_ASSERTS (the page's fastest assert-compile configuration)",
+    "Shipping tests inside release sources and removing them from the final binary with DOCTEST_CONFIG_DISABLE"
+  ],
+  "when_not_to_use": [
+    "Already on Catch2 v3 (a compiled library with cheap per-test headers): no benchmark covers it, and issue #1168 (June 2026) reports a 13-file, 1,273-assert executable taking about 30 s with both Catch2 v3.7.1 and doctest 2.5.2 (MSVC 14.44 and GCC 13.1); a maintainer replied that the benchmarks are outdated and that doctest.h now pulls in all of its machinery",
+    "Expecting faster test execution for plain asserts: the page shows parity on Linux GCC Release (0.29 s vs 0.29 s for 10M asserts) and a small gap on Clang Release (0.28 s vs 0.32 s); the big runtime wins appear only with INFO() logging",
+    "Needing death tests or first-class Google Mock integration (the FAQ lists both as gaps versus Google Test), Catch2's micro-benchmarking, or in-process parallel execution of test cases (test cases run serially; parallelism means launching the binary several times with test ranges)",
+    "Generating many SUBCASEs in a loop on doctest 2.5.0-2.5.3: issue #1208 (open) reports super-linear scaling from a linear sibling scan added in 2.5.0, with one reporter's binary going from 112 s on 2.4.12 to 2420 s",
+    "Optimized builds with Visual Studio 2026 cl.exe 19.51+: issue #1138 (open) reports some CHECK()/CHECK_UNARY() calls evaluating incorrectly; the reporter attributes it to an MSVC regression and filed it with Microsoft"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none",
+    "min_toolchain": "C++11 (tag 1.2.9 for C++98); features page (marked partly outdated) lists GCC 4.8-12, Clang 3.5-15 and MSVC 2015-2022 as tested",
+    "platforms": "Windows, Linux and macOS in CI; any C++11 compiler claimed; Windows SEH and POSIX signal handling are configurable",
+    "thread_safety": "Assertion and logging macros may be called from multiple threads spawned by one test case; test cases run serially and SUBCASEs must be used only from the runner thread. DOCTEST_CONFIG_NO_MULTITHREADING removes the threading support for single-threaded speed.",
+    "drop_in_for_baseline": "partial — Catch-like macro surface (TEST_CASE, CHECK, REQUIRE, INFO, Approx), but SECTION becomes SUBCASE, Catch tags must be folded into test names, and Catch matchers, BENCHMARK and other features differ; the FAQ supplies a few #define shims for the common cases"
+  },
+  "gotchas": [
+    "DOCTEST_CONFIG_SUPER_FAST_ASSERTS implies DOCTEST_CONFIG_NO_TRY_CATCH_IN_ASSERTS: an exception thrown while evaluating an assert aborts the whole test case, and a debugger breaks inside doctest's internal function instead of at the assert line",
+    "The default forward declarations of std::ostream, std::tuple and friends inside namespace std are not permitted by the C++ standard; a niche standard library can fail to compile, and DOCTEST_CONFIG_USE_STD_HEADERS fixes it at the cost of including the real headers",
+    "Self-registering tests compiled into a static library are dropped by the linker unless something references their object file; use CMake OBJECT libraries, the shipped doctest_force_link_static_lib_in_target() helper, or /OPT:NOREF or /WHOLEARCHIVE on MSVC",
+    "char* operands are compared as pointers unless DOCTEST_CONFIG_TREAT_CHAR_STAR_AS_STRING is defined"
+  ],
+  "pick_this_over_siblings_when": "Against [Boost].UT, pick doctest when you cannot require C++20, want the more widely used Catch-style macro API, or have large multi-file suites, where UT's own benchmark shows doctest compiling as fast or faster except at gcc9 -O3. The cache and distribution tools in this category (ccache, sccache, distcc, FASTBuild and others) are complementary: they cut rebuild cost of any test framework, while doctest cuts the per-translation-unit cost of the test code itself.",
+  "verified_claims_summary": "The project's own December 2018 benchmark built bench.py-generated CMake projects single-threaded with doctest 2.2.0 and Catch 2.3.0 on an Intel i7 3770k (Windows 7 on SSD with MSVC 2017 15.8 and MinGW GCC 8.1; Ubuntu 17.04 in a VirtualBox VM on HDD with GCC 6.3 and Clang 4.0): including the header in 200 files took 8.71 s vs 87.17 s on MSVC Release and 11.05 s vs 99.48 s on Linux GCC Release, and 50k CHECK(a==b) asserts took 58.73 s vs 448.68 s on MSVC Release but 257.40 s vs 608.94 s on Linux GCC Release (about 2.4x, derived from page data). Runtime of 10M passing asserts was near parity on GCC and Clang Release and several times faster only with INFO() logging.",
+  "status_note": "Actively maintained (v2.5.3 tagged 2026-07-06, dev branch commits through 2026-10-18; master stops at the v2.5.0 release commit of 2026-03-27), MIT-licensed single header that is trivial to vendor, though maintainers themselves call the benchmark suite outdated and plan to redo it for 2.6.",
+  "sources_read": [
+    "https://github.com/doctest/doctest",
+    "https://raw.githubusercontent.com/doctest/doctest/HEAD/README.md",
+    "https://raw.githubusercontent.com/doctest/doctest/HEAD/doc/markdown/benchmarks.md",
+    "https://raw.githubusercontent.com/doctest/doctest/HEAD/doc/markdown/faq.md",
+    "https://raw.githubusercontent.com/doctest/doctest/HEAD/doc/markdown/features.md",
+    "https://raw.githubusercontent.com/doctest/doctest/HEAD/doc/markdown/configuration.md",
+    "https://raw.githubusercontent.com/doctest/doctest/HEAD/doc/markdown/assertions.md",
+    "https://raw.githubusercontent.com/doctest/doctest/HEAD/doc/markdown/build-systems.md",
+    "https://raw.githubusercontent.com/doctest/doctest/HEAD/scripts/bench/bench.py",
+    "https://raw.githubusercontent.com/doctest/doctest/HEAD/scripts/bench/run_all.py",
+    "https://raw.githubusercontent.com/doctest/doctest/HEAD/scripts/bench/tests.json",
+    "https://raw.githubusercontent.com/doctest/doctest/HEAD/doctest/doctest.h",
+    "https://github.com/doctest/doctest/issues?q=is%3Aissue+is%3Aopen",
+    "https://github.com/doctest/doctest/issues?q=is%3Aissue+is%3Aopen+label%3Abug",
+    "https://github.com/doctest/doctest/issues/1168",
+    "https://github.com/doctest/doctest/issues/1208",
+    "https://github.com/doctest/doctest/issues/1138",
+    "https://github.com/doctest/doctest/tags",
+    "https://github.com/doctest/doctest/commits/dev",
+    "https://github.com/doctest/doctest/commits/master",
+    "https://raw.githubusercontent.com/cpp-testing/ut-benchmark/master/results/Compilation_suite+assert+stl.png"
+  ],
+  "confidence": 0.85
+}

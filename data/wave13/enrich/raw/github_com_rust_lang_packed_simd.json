@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/rust-lang/packed_simd",
+  "one_liner": "Archived, nightly-only Rust SIMD vector crate that preceded std::simd; with rayon it roughly matches ISPC on ISPC's examples.",
+  "what_it_does": "packed_simd implements the RFC 2366 proposal for portable SIMD in Rust: a Simd<[T; N]> type with aliases such as f32x4, u8x16 and m32x4 masks, lane-wise arithmetic and comparisons, mask select/any/all, horizontal reductions such as wrapping_sum, numeric casts, and unaligned slice loads and stores. Its examples/ directory ports ISPC's aobench, stencil, mandelbrot and options-pricing programs (plus nbody, spectral_norm, fannkuch_redux and others), using rayon to spread vectorised rows or tiles across cores. It is not a drop-in replacement for ISPC: the kernels are rewritten by hand in Rust.",
+  "how_it_is_fast": "Vectors are #[repr(simd)] types whose operations lower through compiler SIMD intrinsics to LLVM vector IR, so instruction selection follows the RUSTFLAGS target features (for example SSE2 PCMPEQD by default, AVX2 VPCMPEQQ with +avx2). A verify/ crate disassembles the generated code to check it stays efficient. In the ISPC comparisons, the multi-threaded wins come from hand-vectorised kernels (8-wide f32 in the default 256-bit aobench build) run under rayon's work-stealing scheduler; single-threaded, serial ISPC was faster on aobench on every machine.",
+  "when_to_use": [
+    "Maintaining an existing code base that already depends on packed_simd or packed_simd_2 and is pinned to a nightly from before March 2024.",
+    "As reference code when porting ISPC-style SPMD kernels to explicit Rust vectors plus rayon; the examples keep scalar and vector versions of each kernel side by side.",
+    "Reproducing the SIMD-plus-rayon versus ISPC comparison on x86: each example has a benchmark.sh that builds with -C target-cpu=native and times every variant with hyperfine."
+  ],
+  "when_not_to_use": [
+    "Any new code: the repository was archived on 2026-09-16, and a maintainer said in April 2024 that the crate is effectively deprecated in favour of std::simd.",
+    "Current nightly toolchains: 0.3.9 enables #![feature(platform_intrinsics)], which rustc removed (issue #360, first reported on 1.78.0-nightly 2024-03-02); the only workaround reported is pinning a 1.77-era nightly.",
+    "Stable Rust: the crate has always required nightly.",
+    "Expecting single-threaded wins over ISPC: serial ISPC beat serial packed_simd on aobench on all three machines (1158 vs 1328 ms, 576 vs 640 ms, 491 vs 770 ms) and on stencil on two of three.",
+    "Vector transcendental math: per the performance guide's notes, it falls back to scalarised libm calls unless the optional sleef-sys feature (x86_64 only) is enabled."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "cfg-if, num-traits (libm); optional core_arch and, on x86_64, sleef-sys",
+    "min_toolchain": "Rust nightly only, edition 2018; 0.3.9 no longer builds on nightlies from about March 2024 (1.78), so pin a 1.77-era nightly",
+    "platforms": "README matrix: builds and passes tests on x86_64 Linux/macOS/Android, aarch64 Linux, arm/armv7/thumbv7neon Linux and powerpc64le; builds but fails tests on i586/i686, powerpc, powerpc64, s390x and sparc64; iOS targets do not build",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Two crate names: packed_simd_2 (0.3.4 to 0.3.8, 2020 to 2022, about 2.8 million downloads) was the interim release line; packed_simd 0.3.9 (2023-07-30) is the final release.",
+    "Horizontal operations are much slower than vertical ones; the crate docs recommend accumulating in vectors and reducing once at the end. Use mask element widths equal to the data width, except for 512-bit vectors on AVX-512, where 1-bit masks are faster.",
+    "The headline wins over ISPC are against ispc_tasks, whose launch/sync runs on ispc-rs's own Rust task system: it spawns num_cpus threads on first launch, and a syncing thread that finds no chunk left sleeps 50 ms (seen in ispc-rs 1.0.11 and current source; the 2018 version was not checked). That plausibly explains why stencil ispc_tasks is slower than serial ispc on both Xeons (395 vs 287 ms, 401 vs 185 ms).",
+    "hyperfine times the whole process, so process start-up, thread-pool creation and, for aobench, writing the 800x600 PNG are inside the timed region; aobench's main.rs also prints an internal timer around the kernel alone, and the readmes do not say which number the tables show."
+  ],
+  "pick_this_over_siblings_when": "Only when you maintain code already built on it with a pinned pre-2024 nightly. Otherwise use Rust portable SIMD (std::simd), its direct successor with a similar vector API, or ISPC itself when you want the best single-threaded SPMD code generation, since serial ISPC beat serial packed_simd on aobench.",
+  "verified_claims_summary": "The crate's own ports of ISPC's aobench, stencil, mandelbrot and options examples, built with -C target-cpu=native and timed per process with hyperfine on a dual-core AVX i5, a Xeon E5-2690 v4 and a Xeon Gold 6148 (undated, about 2018, with rustc and ISPC versions not stated), range from 1.74x slower to 1.72x faster than ISPC. The wins come from rayon-parallel Rust against ISPC task builds that run on ispc-rs's simple task runtime, while serial ISPC was faster than serial packed_simd on aobench on all three machines.",
+  "status_note": "Abandoned: archived on 2026-09-16, final release 0.3.9 on 2023-07-30, and no longer building on nightlies since March 2024, so treat it as MIT/Apache-2.0 reference code and migrate to std::simd.",
+  "sources_read": [
+    "https://github.com/rust-lang/packed_simd",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/README.md",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/rust-toolchain",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/examples/aobench/readme.md",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/examples/aobench/benchmark.sh",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/examples/aobench/build.rs",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/examples/aobench/Cargo.toml",
+    "https://github.com/rust-lang/packed_simd/tree/master/examples/aobench/src",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/examples/aobench/src/ispc_.rs",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/examples/aobench/src/main.rs",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/examples/aobench/volta/ao.ispc",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/examples/stencil/readme.md",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/examples/stencil/benchmark.sh",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/examples/mandelbrot/readme.md",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/examples/mandelbrot/benchmark.sh",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/examples/options_pricing/readme.md",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/perf-guide/src/SUMMARY.md",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/perf-guide/src/float-math/svml.md",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/perf-guide/src/float-math/fp.md",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/perf-guide/src/target-feature/runtime.md",
+    "https://raw.githubusercontent.com/rust-lang/packed_simd/HEAD/perf-guide/src/target-feature/inlining.md",
+    "https://github.com/rust-lang/packed_simd/issues?q=is%3Aissue%20nightly%20compile",
+    "https://github.com/rust-lang/packed_simd/issues/360",
+    "https://crates.io/api/v1/crates/packed_simd",
+    "https://crates.io/api/v1/crates/packed_simd_2",
+    "https://raw.githubusercontent.com/Twinklebear/ispc-rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/Twinklebear/ispc-rs/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/Twinklebear/ispc-rs/HEAD/compile/src/lib.rs",
+    "https://raw.githubusercontent.com/Twinklebear/ispc-rs/HEAD/runtime/src/lib.rs",
+    "https://raw.githubusercontent.com/Twinklebear/ispc-rs/HEAD/runtime/src/exec.rs",
+    "https://raw.githubusercontent.com/Twinklebear/ispc-rs/1.0.11/runtime/src/exec.rs",
+    "https://github.com/Twinklebear/ispc-rs/tags"
+  ],
+  "confidence": 0.8
+}

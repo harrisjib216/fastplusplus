@@ -1,0 +1,48 @@
+{
+  "id": "paper:book-hands-on-design-patterns-with-cpp-second-edition-local-buffer-function",
+  "one_liner": "About 60-line std::function-style wrapper for trivially copyable callables of up to 16 bytes; the book reports cheaper calls than std::function.",
+  "what_it_does": "Function<R(Args...), Size, Alignment> is a type-erased callable wrapper with std::function's call syntax. It stores the callable in a fixed inline char buffer (two pointers by default) next to one function-pointer 'executor' and never allocates. The class sits inside a benchmark file (Chapter06/09_function.C), so you copy it into your code; it is not a packaged header.",
+  "how_it_is_fast": "It is a manual vtable reduced to one entry: the constructor stores a pointer to a static executor<Callable> instantiation, and a call jumps through it with the arguments passed by value plus a this pointer. A null-object default executor that throws std::bad_function_call replaces the empty-check branch that libstdc++'s std::function::operator() runs on every call. libstdc++'s invoker type also takes its arguments as _ArgTypes&&, so scalar arguments go through memory, while this executor takes Args... by value. Restricting it to trivially copyable, trivially destructible callables removes the manager function, so copying is a byte copy and destruction does nothing.",
+  "when_to_use": [
+    "Hot callback slots that hold captureless lambdas, function pointers or lambdas capturing one or two references or pointers (up to 16 bytes, or a larger Size you pick)",
+    "Code that must never heap-allocate for a callable and would rather fail at compile time than fall back to the heap",
+    "Small embedded or latency-sensitive loops where a sub-nanosecond saving per indirect call matters and the wrapper's restrictions are acceptable",
+    "As a readable starting point for writing your own small-buffer callable"
+  ],
+  "when_not_to_use": [
+    "Callables that capture std::string, std::vector, std::shared_ptr or anything else non-trivially copyable or destructible: static_assert rejects them, and there is no heap fallback",
+    "Move-only callables (use std::move_only_function in C++23, or a sibling such as zoo::Function)",
+    "APIs that need operator bool, target(), target_type(), swap or nullptr assignment: none exist, so an empty Function can only be detected by calling it and catching std::bad_function_call",
+    "When std::function's call cost is not measurable in your profile: the book's gap is under half a nanosecond per call, and std::function is the safer, general tool",
+    "Production code that wants maintenance: it is unmaintained teaching code from a 2023 book's companion repository"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the class (the benchmark in the same file needs Google Benchmark)",
+    "min_toolchain": "C++20 (requires clause and std::same_as); the file uses std::same_as without including <concepts> and relies on a transitive include",
+    "platforms": "any; the default buffer is 2*sizeof(void*) with alignof(void*)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial: same call syntax and copy semantics for trivially copyable callables that fit the buffer, but larger or non-trivial callables fail to compile, and there is no operator bool, target(), swap or nullptr comparison"
+  },
+  "gotchas": [
+    "Closure size grows with the captures (the size of a by-reference capture is implementation-defined), so a lambda that captures several variables can exceed the 16-byte default and trip the static_assert; raise the Size template argument.",
+    "The static_assert messages read 'Use Function for non-trivially-copyable callables', pointing at a more general Function the file does not contain (the Chapter10 variants are separate files).",
+    "libstdc++'s std::function also stores trivially copyable callables of up to 16 bytes inline, so for the benchmarked callables neither side allocates; the gain is in the call path (no empty check, arguments by value), not in avoided allocation.",
+    "Each benchmark builds the wrapper in the same function as its timed loop, so the compiler can see the stored target and may devirtualize part of either wrapper's call. The measured gap depends on the compiler and standard library, and the repo shows no results or assembly."
+  ],
+  "pick_this_over_siblings_when": "Pick it over stdext::inplace_function (SG14) or zoo::Function only when you want a page of code you fully understand and every callable is trivially copyable and small; inplace_function handles non-trivial callables with the same no-heap guarantee and has published comparisons against std::function, and zoo covers move-only captures. Delegate, SmallFunction and sy_callback publish their own numbers, while this one has numbers only in the book.",
+  "verified_claims_summary": "The book (relayed through the seed lead; no numbers in the repository) reports about 0.884 ns per call for Function against 1.33 ns for std::function<int(int,int,int,int)>, roughly 1.5x, with a direct lambda call at 0.219 ns. These are Google Benchmark rows built with -O3 --std=c++20 using g++-11 or clang++; the CPU, standard library and the exact rows the figures come from are not stated. The repository holds the benchmark source only, in three pairs: a noinline function through an invoke helper, a reference-capturing lambda through the helper, and the same lambda called directly.",
+  "status_note": "Stale (last commit 2024-08-29) MIT-licensed book companion code; small enough to copy, but it is a teaching sketch with no tests, and none of the repo's 5 open issues covers Chapter06.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/Chapter06/09_function.C",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/Chapter06/04_std_function.C",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/tree/main/Chapter06",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/tree/main/Chapter10",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/issues",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/Chapter10/10_local_buffer.C",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/Chapter10/11_local_buffer_vtable.C",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/master/libstdc++-v3/include/bits/std_function.h"
+  ],
+  "confidence": 0.6
+}

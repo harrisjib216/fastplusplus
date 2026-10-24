@@ -77,6 +77,7 @@ CATEGORY_TITLES = {
     "number-parsing-formatting": "Number parsing and formatting",
     "ordered-maps-trees": "Ordered maps and trees",
     "perfect-hash-static-tables": "Perfect hashing and static tables",
+    "polymorphic-dispatch": "Polymorphic dispatch",
     "priority-queues-heaps": "Priority queues and heaps",
     "random": "Random numbers",
     "ranges-and-views": "Ranges and views",

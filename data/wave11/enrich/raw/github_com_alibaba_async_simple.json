@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/alibaba/async_simple",
+  "one_liner": "Alibaba's C++20 Lazy coroutine task type; about 3x faster than folly::coro::Task on call-chain and fan-out microbenchmarks, near-parity with cppcoro.",
+  "what_it_does": "async_simple is an asynchronous framework whose main component is Lazy<T>, a lazily started C++20 stackless coroutine task, alongside a stackful Uthread and a Future/Promise pair. Lazy is started with co_await from another Lazy, syncAwait (blocking), .start(callback) or directlyStart(callback, executor), and collectAll/collectAllPara/collectAny combine many tasks. It is not a drop-in replacement for folly::coro::Task or cppcoro::task: the API names differ (syncAwait vs blockingWait/sync_wait, collectAllPara vs collectAllRange/when_all), errors come back through a Try<T>, and executors are user-supplied through an Executor interface.",
+  "how_it_is_fast": "Lazy suspends at initial_suspend and uses symmetric transfer: awaiting a Lazy returns the callee's coroutine_handle from await_suspend, and the FinalAwaiter returns the stored continuation, so a co_await chain resumes without recursion or a scheduler hop unless the RescheduleLazy variant is used. The promise carries only a continuation, an Executor pointer and a LazyLocals pointer, and the result is held in a std::variant<monostate, T, exception_ptr>, so there is no async-stack or context recording on each switch (the extra work the Performance doc names for folly's Task). Frames can come from a user allocator via std::allocator_arg_t, and with clang's [[clang::coro_await_elidable]] a callee's frame is folded into the caller's frame so the co_await chain avoids a heap allocation per call.",
+  "when_to_use": [
+    "Deep co_await call chains of small coroutine functions where per-call task overhead matters (the 1000-deep chain ran about 60 us per run on a Xeon Platinum 8163, about 3.3x less than folly::coro::Task).",
+    "Code that wants Task-style C++20 coroutines without pulling in folly; Lazy is almost header-only and installs through vcpkg, Conan, CMake find_package or Bazel.",
+    "Codebases that bring their own executor and need fan-out helpers (collectAll, collectAllPara, collectAllWindowedPara, collectAny), cancellation signals and coroutine-local data (LazyLocals).",
+    "Allocation-sensitive services built with recent clang, where custom frame allocators or coro_await_elidable can cut coroutine frame allocations."
+  ],
+  "when_not_to_use": [
+    "You need a production event loop or I/O executor out of the box: the Performance doc says async_simple has no production-grade executor, and the ChangeLog (1.2) calls SimpleExecutor and SimpleIOExecutor testing-only.",
+    "You rely on folly's debugging features (async stack traces, context recording on switches) or are already invested in folly::coro; the measured gap is partly the cost of those features.",
+    "Against cppcoro the measured margin is small (about 1.03x on the chain, 1.13x on fan-out), so switching from cppcoro for speed alone buys little.",
+    "Toolchains older than GCC 10.3, clang 10 or Apple clang 14; open issue #449 reports compile errors with GCC 10/11 when coroutines meet template functions, and the README warns of clang 15 bugs with Generator.",
+    "Code that resumes coroutines synchronously with no executor bound (custom callback awaiters, Mutex unlock chains): open issue #404 reports stack overflow in that case, and maintainers advise not starting coroutines without a scheduler."
+  ],
+  "integration": {
+    "form": "header-only (Lazy, Future, collect helpers); static or shared lib for Uthread",
+    "dependencies": "none for Lazy; libaio optional (IO), googletest for tests, Google Benchmark for benchmarks, standalone asio for the demo",
+    "min_toolchain": "C++20; clang 10+, GCC 10.3+ or Apple clang 14+ (GCC 12 needs -Wno-maybe-uninitialized; clang 17+ suggested for Generator; MSVC may need /EHa for C4737); C++20 module build needs clang 16+",
+    "platforms": "Linux, macOS and Windows build instructions (CMake, Bazel, vcpkg, Conan, xmake); libaio IO parts Linux-only; Uthread is not usable in Compiler Explorer and needs installation; CPU architectures for Uthread not documented",
+    "thread_safety": "Not documented for Lazy objects themselves; work moves between threads only through the executor you bind. syncAwait asserts if called from a thread inside the Lazy's own executor (deadlock risk), and LazyLocals are destroyed before the start() callback runs.",
+    "drop_in_for_baseline": "partial — same lazily started Task model as folly::coro::Task and cppcoro::task, but different names for the awaiting and fan-out functions, Try<T> results and its own Executor interface, so call sites must be ported"
+  },
+  "gotchas": [
+    "collectAllPara only runs children in parallel when the awaiting Lazy has an executor; under plain syncAwait with no executor (exactly how the benchmark runs it) the children execute serially on the calling thread, as Lazy.md warns.",
+    "Lazy<T> requires alignof(T) <= alignof(std::max_align_t) (ChangeLog 1.2), and a Lazy may only be co_awaited from inside another Lazy function.",
+    "Statements after a co_await may never run if the awaited task throws; exceptions propagate to the root and are retrieved via syncAwait's throw, the start() callback's Try<T>, or coAwaitTry.",
+    "The benchmarked code predates release 1.4 (2025-07-29), which added cancellation; the current collectAll creates a Signal and one heap-allocated LazyLocalBase per child, and the published numbers were not re-run on it."
+  ],
+  "pick_this_over_siblings_when": "Pick it over cppcoro when you want an actively maintained Task type with executor plumbing, cancellation and GCC support (cppcoro's README lists only MSVC 2017 and Clang 5/6 with libc++, and its Linux io_context is unimplemented), accepting that raw task speed is about the same. Pick libcoro or Boost.Cobalt instead if you want a ready I/O runtime rather than bringing your own executor.",
+  "verified_claims_summary": "In Alibaba's own Google Benchmark run (Clang 13, Intel Xeon Platinum 8163, flags and library versions unstated), a 1000-deep co_await chain took 59.7 us with Lazy vs 195.8 us with folly::coro::Task and 61.3 us with cppcoro::task, and awaiting 5000 tasks of 50-deep chains took 7.9 ms vs 23.8 ms (folly collectAllRange) and 8.9 ms (cppcoro when_all). Only the async_simple rows are in the repo's benchmark source; the doc itself says the test does not show async_simple is better.",
+  "status_note": "Actively maintained (release 1.4 in July 2025, commits through September 2026), Apache-2.0 and mostly header-only, so it is easy to vendor, though issue triage is slow (27 open issues, some from 2022).",
+  "sources_read": [
+    "https://github.com/alibaba/async_simple",
+    "https://raw.githubusercontent.com/alibaba/async_simple/main/README.md",
+    "https://raw.githubusercontent.com/alibaba/async_simple/main/docs/docs.en/Performance.md",
+    "https://raw.githubusercontent.com/alibaba/async_simple/main/benchmarks/Lazy.bench.cpp",
+    "https://raw.githubusercontent.com/alibaba/async_simple/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/alibaba/async_simple/main/async_simple/coro/Lazy.h",
+    "https://raw.githubusercontent.com/alibaba/async_simple/main/async_simple/coro/Collect.h",
+    "https://raw.githubusercontent.com/alibaba/async_simple/main/async_simple/coro/SyncAwait.h",
+    "https://raw.githubusercontent.com/alibaba/async_simple/main/async_simple/coro/PromiseAllocator.h",
+    "https://raw.githubusercontent.com/alibaba/async_simple/main/docs/docs.en/Lazy.md",
+    "https://raw.githubusercontent.com/alibaba/async_simple/main/docs/docs.en/QuantitativeAnalysisReportOfCoroutinePerformance.md",
+    "https://raw.githubusercontent.com/alibaba/async_simple/main/ChangeLog",
+    "https://github.com/alibaba/async_simple/issues?q=is%3Aissue+performance",
+    "https://github.com/alibaba/async_simple/issues",
+    "https://github.com/alibaba/async_simple/issues/404",
+    "https://github.com/lewissbaker/cppcoro"
+  ],
+  "confidence": 0.8
+}

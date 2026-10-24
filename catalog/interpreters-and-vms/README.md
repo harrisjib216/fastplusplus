@@ -4,11 +4,11 @@
 
 Interpreters, JIT compilers, embeddable scripting engines and bytecode VMs measured against CPython, Lua, V8 and wasmtime.
 
-**229 entries in 4 categories:** 38 tier A · 66 tier B · 117 tier C · 8 tier D
+**231 entries in 4 categories:** 38 tier A · 66 tier B · 117 tier C · 10 tier D
 
 | Category | Entries | A | B | C | D | What they beat |
 |---|--:|--:|--:|--:|--:|---|
-| [Bytecode VMs and WebAssembly runtimes](bytecode-vms-and-wasm/README.md) | 56 | 9 | 16 | 28 | 3 | wasmtime, wasmer, WAMR, V8 |
+| [Bytecode VMs and WebAssembly runtimes](bytecode-vms-and-wasm/README.md) | 58 | 9 | 16 | 28 | 5 | wasmtime, wasmer, WAMR, V8 |
 | [Embedded scripting](embedded-scripting/README.md) | 62 | 6 | 29 | 25 | 2 | Lua, Duktape, QuickJS |
 | [JIT compilers](jits/README.md) | 61 | 12 | 11 | 37 | 1 | PyPy, LuaJIT, V8, HotSpot |
 | [Language interpreters](language-interpreters/README.md) | 50 | 11 | 10 | 27 | 2 | CPython, Lua 5.x, Ruby MRI, V8 (for JS) |

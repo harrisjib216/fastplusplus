@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/rayon-rs/rayon",
+  "one_liner": "Rust work-stealing data-parallelism crate (par_iter, join, scope); beats OpenMP only in fine-grained dynamic-schedule cells of a competitor's benchmark.",
+  "what_it_does": "Rayon turns sequential Rust iterator chains into parallel ones by swapping iter() for par_iter(), and also exposes join (fork two closures), scope/spawn (structured tasks) and custom ThreadPool objects with install. The API is not a drop-in for OpenMP: it is a Rust crate whose Send/Sync bounds make data races a compile error, and a parallel iterator returns the same results as its sequential version except for the ordering of side effects.",
+  "how_it_is_fast": "Cilk-style work stealing: join(a, b) pushes b onto the caller's crossbeam-deque (Chase-Lev) and runs a, and idle workers steal from victims starting at a random index; join and parallel-iterator jobs live on the stack (StackJob), while scope/spawn heap-allocate one job per task. Parallel iterators use adaptive splitting: a Splitter starts with one split budget per thread, halves it on each split and resets it to the thread count whenever a piece is stolen, so work is only cut finer where stealing shows idle threads; with_min_len/with_max_len bound the grain. Idle workers yield for 32 rounds, then announce 'sleepy' through a jobs event counter and block on a condition variable (the sleep design from Rayon RFC #5).",
+  "when_to_use": [
+    "Rust code with irregular or recursive parallelism (divide and conquer, tree walks, parallel sort via par_sort_unstable) where dynamic load balancing matters more than per-dispatch latency.",
+    "Coarse fork-join rounds (milliseconds of work each) where a dispatch cost in the tens to hundreds of microseconds is amortized and a one-line par_iter change is worth more than hand scheduling.",
+    "Uneven per-item cost at high thread counts where a shared OpenMP schedule(dynamic, 1) queue collapses: in Fork Union's one-vertex connected-components cells Rayon kept 6.2-6.5 GTEPS against OpenMP's 0.4 on 128-192 threads.",
+    "Projects that want compile-time data-race freedom from the type system rather than pragma discipline."
+  ],
+  "when_not_to_use": [
+    "Many short fork-join rounds on many-core machines: in Fork Union's static connected components Rayon reached 8.5 GTEPS vs OpenMP 28.2 on 128x Intel SPR and 8.4 vs 53.9 on 192x Graviton 5, and N-body dispatch took 483 us vs 115 us on SPR.",
+    "Regular, uniform loops that a static OpenMP schedule handles: Rayon has no fixed per-worker schedule, and issue #968 (open since 2022) reports about 20% slowdowns with non-power-of-two thread counts, suspected to come from even-halving splits overshooting to the next power of two.",
+    "NUMA-sensitive, bandwidth-bound work: no built-in thread pinning or NUMA-local allocation (only start_handler/spawn_handler hooks you write yourself); issue #394, 'Communication costs are quadratic in the number of worker threads', is still open.",
+    "Code that holds a Mutex or initializes a OnceLock across a parallel call: work stealing can re-enter the same lock on the same thread and deadlock (issue #592, open since 2018; #1251 hit it on a 192-thread Threadripper).",
+    "C++ code bases: Rayon is Rust-only, so using it from C++ means an FFI boundary or a rewrite of the loop."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "rayon-core (crossbeam-deque, crossbeam-utils) and either; optional wasm_sync for the web_spin_lock feature",
+    "min_toolchain": "rustc 1.80 for the published rayon 1.12.0 (crates.io rust_version); the main branch now declares rustc 1.85 and edition 2024",
+    "platforms": "any Rust target with std threads; wasm32 targets without threads fall back to sequential execution unless wasm-bindgen-rayon is set up",
+    "thread_safety": "Closures must be Send (and captured shared data Sync), so data races are compile errors; the global pool is process-wide and each rayon-core version carries its own global pool.",
+    "drop_in_for_baseline": "partial — a one-line par_iter change for Rust loops, but not usable from C/C++ OpenMP code without FFI, and there is no static schedule equivalent"
+  },
+  "gotchas": [
+    "Calling par_iter or ThreadPool::install from a thread outside the pool (such as main) injects the job into the global queue and blocks the caller on a Mutex/Condvar latch (in_worker_cold); for many short rounds, run the whole loop inside one install or build the pool with use_current_thread. Fork Union's harness pays this handoff on every round and every N-body half-step.",
+    "A panic inside join or a parallel iterator propagates to the caller, but a panic in a spawned job aborts the process unless a panic_handler is set on the ThreadPoolBuilder.",
+    "Idle workers spin through 32 thread::yield_now rounds before sleeping, which burns CPU between bursts of small work (closed issue #642, 'Rayon uses a lot of CPU when there's not a lot of work to do').",
+    "Two rayon-core versions in one dependency graph mean two global thread pools competing for the same cores (rayon-core README)."
+  ],
+  "pick_this_over_siblings_when": "Pick Rayon over chili or Spice when you need the full parallel-iterator API, scope/spawn and the existing ecosystem (chili lacks scope and spawn per Rayon issue #1235), accepting higher per-join overhead (chili's entry: 51.1 us vs 3.4 us for a 1023-node tree). For repeated flat fork-join loops on 100+ core machines, Fork Union or OpenMP's static schedule are faster per that same benchmark.",
+  "verified_claims_summary": "The only Rayon-vs-OpenMP numbers are in the competing Fork Union README (four machines, every logical core, one 30-second window per cell, -O3 -march=native and target-cpu=native, compilers unnamed except MinGW-GCC on the Windows box): Rayon beats OpenMP when OpenMP uses schedule(dynamic, 1) on one-vertex connected-components claims (6.5 vs 0.4 GTEPS on 128x SPR, 6.2 vs 0.4 on 192x Graviton 5, 5.2 vs 0.1 on 24x RPL) and in N-body on the RPL Windows box (151 vs 360/627 us), and loses most other cells, by up to 6.4x on static connected components on Graviton 5. The Rust harness drives Rayon from the non-pool main thread through pool.install on every round, adding a global-injector push and a condition-variable wake that OpenMP's participating master thread does not pay, and its N-body OpenMP runs pinned (OMP_PROC_BIND=spread) while the Rayon pool is unpinned, so Rayon's dispatch figures are a pessimistic case rather than an idiomatic one.",
+  "status_note": "Actively maintained (rayon 1.12.0 published 2026-04-14, main branch commits through 2026-08-28), dual MIT/Apache-2.0, and one of the most-used Rust crates (about 149M downloads of 1.12.0 alone per crates.io).",
+  "sources_read": [
+    "https://raw.githubusercontent.com/rayon-rs/rayon/HEAD/README.md",
+    "https://raw.githubusercontent.com/rayon-rs/rayon/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/rayon-rs/rayon/HEAD/FAQ.md",
+    "https://raw.githubusercontent.com/rayon-rs/rayon/HEAD/RELEASES.md",
+    "https://raw.githubusercontent.com/rayon-rs/rayon/HEAD/rayon-core/Cargo.toml",
+    "https://raw.githubusercontent.com/rayon-rs/rayon/HEAD/rayon-core/README.md",
+    "https://raw.githubusercontent.com/rayon-rs/rayon/HEAD/rayon-core/src/registry.rs",
+    "https://raw.githubusercontent.com/rayon-rs/rayon/HEAD/rayon-core/src/sleep/mod.rs",
+    "https://raw.githubusercontent.com/rayon-rs/rayon/HEAD/rayon-core/src/sleep/README.md",
+    "https://raw.githubusercontent.com/rayon-rs/rayon/HEAD/rayon-core/src/join/mod.rs",
+    "https://raw.githubusercontent.com/rayon-rs/rayon/HEAD/rayon-core/src/lib.rs",
+    "https://raw.githubusercontent.com/rayon-rs/rayon/HEAD/rayon-core/src/scope/mod.rs",
+    "https://raw.githubusercontent.com/rayon-rs/rayon/HEAD/rayon-core/src/latch.rs",
+    "https://raw.githubusercontent.com/rayon-rs/rayon/HEAD/rayon-core/src/thread_pool/mod.rs",
+    "https://raw.githubusercontent.com/rayon-rs/rayon/HEAD/src/iter/plumbing/mod.rs",
+    "https://raw.githubusercontent.com/rayon-rs/rayon/HEAD/src/iter/plumbing/README.md",
+    "https://crates.io/api/v1/crates/rayon/versions?per_page=3",
+    "https://github.com/rayon-rs/rayon/issues?q=is%3Aissue+label%3Aperformance",
+    "https://github.com/rayon-rs/rayon/issues?q=is%3Aissue+deadlock",
+    "https://github.com/rayon-rs/rayon/issues?q=is%3Aissue+cpu+usage+idle+spin",
+    "https://github.com/rayon-rs/rayon/issues/1251",
+    "https://github.com/rayon-rs/rayon/issues/1235",
+    "https://github.com/rayon-rs/rayon/issues/592",
+    "https://github.com/rayon-rs/rayon/issues/394",
+    "https://github.com/rayon-rs/rayon/issues/968",
+    "https://raw.githubusercontent.com/ashvardanian/fork_union/HEAD/README.md",
+    "https://raw.githubusercontent.com/ashvardanian/fork_union/HEAD/scripts/nbody.rs",
+    "https://raw.githubusercontent.com/ashvardanian/fork_union/HEAD/scripts/nbody.cpp",
+    "https://raw.githubusercontent.com/ashvardanian/fork_union/HEAD/scripts/propagation.rs",
+    "https://raw.githubusercontent.com/ashvardanian/fork_union/HEAD/scripts/propagation.cpp"
+  ],
+  "confidence": 0.75
+}

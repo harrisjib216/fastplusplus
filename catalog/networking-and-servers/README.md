@@ -4,14 +4,14 @@
 
 HTTP parsers and servers, event loops, TLS, QUIC and RPC stacks measured against nginx, libuv, OpenSSL, gRPC and friends.
 
-**181 entries in 6 categories:** 27 tier A · 45 tier B · 104 tier C · 5 tier D
+**186 entries in 6 categories:** 27 tier A · 46 tier B · 108 tier C · 5 tier D
 
 | Category | Entries | A | B | C | D | What they beat |
 |---|--:|--:|--:|--:|--:|---|
 | [DNS, QUIC and HTTP/3](dns-quic-http3/README.md) | 18 | 0 | 8 | 10 | 0 | c-ares, quiche, msquic, nghttp3 |
-| [Event loops and async I/O](event-loops-io/README.md) | 44 | 8 | 8 | 27 | 1 | libuv, libevent, epoll, io_uring baseline the benchmark names |
+| [Event loops and async I/O](event-loops-io/README.md) | 47 | 8 | 8 | 30 | 1 | libuv, libevent, epoll, io_uring baseline the benchmark names |
 | [HTTP parsers](http-parsers/README.md) | 25 | 5 | 1 | 18 | 1 | llhttp, http-parser, picohttpparser |
-| [HTTP servers and frameworks](http-servers-frameworks/README.md) | 53 | 6 | 22 | 22 | 3 | nginx, Go net/http, Boost.Beast, actix-web, uvloop |
+| [HTTP servers and frameworks](http-servers-frameworks/README.md) | 55 | 6 | 23 | 23 | 3 | nginx, Go net/http, Boost.Beast, actix-web, uvloop |
 | [TLS](tls/README.md) | 16 | 3 | 4 | 9 | 0 | OpenSSL, BoringSSL, rustls |
 | [WebSocket, gRPC and RPC](websocket-grpc-rpc/README.md) | 25 | 5 | 2 | 18 | 0 | gRPC, uWebSockets, Thrift |
 

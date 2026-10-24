@@ -1,0 +1,52 @@
+{
+  "id": "paper:book-rust-for-cpp-developers-simd-f32x4",
+  "one_liner": "Book example: nightly std::simd f32x4 inner product in a naive Vec<Vec<f32>> matrix multiply, book-reported 1.7x over its scalar loop.",
+  "what_it_does": "matrix_multiply_simd in chapter_10/src/simd.rs of the Packt book companion repo multiplies two Matrix = Vec<Vec<f32>> values with the same signature as the scalar versions in lib.rs; with the crate's nightly cargo feature it becomes the matrix_multiply alias that the benchmark and CLI call. For each output element it loads four consecutive elements of a's row with f32x4::from_slice, builds a four-lane vector from b[p..p+4][j] with four unchecked scalar loads, multiplies and adds into an f32x4 accumulator, and finishes with two swizzle-and-add steps that leave (s0+s1)+(s2+s3) in lane 0. It is the last step of the book's chapter-10 chain (hoisted accumulator, get_unchecked indexing, SIMD).",
+  "how_it_is_fast": "A four-lane accumulator: four independent partial sums cut the serial floating-point add chain per output element from 100 dependent scalar adds to 25 dependent vector adds, and each vector multiply does four products. Rust will not reassociate float sums, so the compiler cannot vectorize the scalar reduction itself; the explicit lanes grant that reordering. The gain is capped by the b side, which is not transposed or packed: every b vector is gathered from four different row Vecs (four row-pointer loads, four element loads and lane inserts), so the book reports about 1.7x rather than anything near 4x; there is no FMA, only one accumulator and no blocking.",
+  "when_to_use": [
+    "Learning Rust's portable SIMD API on nightly: it shows a slice load (from_slice), building a vector from scattered scalars (from_array) and a swizzle-based horizontal sum in about 35 lines.",
+    "As a starting template for a hand-vectorized dot-product kernel, after adding a scalar tail loop and transposing or packing b so both operands load contiguously.",
+    "When you need a float reduction in Rust to vectorize without fast-math flags: a lane-wise accumulator like this one is the explicit, portable way to permit the reordering.",
+    "Code that must run on both x86-64 and aarch64 without target-cpu flags: f32x4 is a 128-bit vector, inside the baseline SSE2 and NEON feature sets."
+  ],
+  "when_not_to_use": [
+    "Any shared dimension that is not a multiple of 4: the loop skips the last partial group (if p + 4 <= a_cols), so the product is silently wrong, and all zeros when a_cols < 4.",
+    "Stable Rust or production builds: std::simd needs #![feature(portable_simd)] on nightly, the repo pins no nightly date, and the unstable API can change under it.",
+    "Results that must match the scalar versions bit for bit: four partial sums plus the horizontal add change the summation order and therefore the rounding.",
+    "Real matrix multiplies or larger sizes: the book figure is about 9.6 GFLOPS at 100x100 (derived: 2*100^3 flops in 208 us), with column gathers through a Vec<Vec<f32>> and no blocking; the catalogued BLAS-class siblings are far faster.",
+    "Untrusted shapes: the b loads use get_unchecked and nothing validates dimensions, so a b with too few rows or ragged rows is undefined behavior rather than a panic."
+  ],
+  "integration": {
+    "form": "source-drop (a 36-line function in chapter_10/src/simd.rs, compiled only with the performance_test crate's nightly feature)",
+    "dependencies": "none for the function beyond std::simd; the chapter crate pulls rand 0.8.5, elapsed 0.1.2 and flame 0.2.2, plus criterion 0.5.1 as a dev-dependency (Cargo.lock)",
+    "min_toolchain": "nightly Rust with portable_simd (README: run cargo +nightly bench --features nightly); no rust-toolchain file, so no nightly date is pinned; the README asks for Rust 1.82.0 or newer for the repo overall",
+    "platforms": "any target std::simd supports; the 128-bit f32x4 needs no extra target features on x86-64 (SSE2) or aarch64 (NEON); the repo sets no RUSTFLAGS or target-cpu",
+    "thread_safety": "pure function on owned inputs with no shared state; single-threaded",
+    "drop_in_for_baseline": "partial — same signature as matrix_multiply_unsafe_indexing, but it needs nightly, gives wrong results unless the shared dimension is a multiple of 4, and rounds differently"
+  },
+  "gotchas": [
+    "Tail bug: for p in (0..a_cols).step_by(4) with an if p + 4 <= a_cols guard drops the last a_cols % 4 terms of every dot product; the 100x100 benchmark never hits it, and the repo has no tests comparing the output with the scalar versions.",
+    "The baseline and SIMD figures come from separate runs on possibly different compilers: the README runs the scalar alias with cargo bench (default toolchain) and the SIMD alias with cargo +nightly bench --features nightly; the book's numbers, CPU and rustc versions are not in the repo.",
+    "The Criterion closure clones both inputs (about 202 heap allocations and 80 KB of copying) and allocates and drops the 101-allocation output inside the timed region; that fixed cost dilutes the ratio, more so at the faster 208 us step.",
+    "Only the a side is bounds-checked (the a[i][p..p + 4] slice); the b gathers and the output store use get_unchecked, so there is no panic path for malformed b."
+  ],
+  "pick_this_over_siblings_when": "Never as a replacement for the catalogued GEMM libraries: for real multiplies in Rust pick faer, and for sizes around 100 consider BLASFEO, which targets small matrices. Pick this entry only to study the std::simd idiom; the sibling Rust-for-CPP-Developers entries (hoisted accumulator, unsafe indexing) are the stable-Rust steps that precede it.",
+  "verified_claims_summary": "Nothing is measured in the repo. The book, as relayed by the lead, reports the Criterion 100x100 f32 benchmark at about 359 us for the scalar get_unchecked loop and about 208 us for the f32x4 version (about 41 percent less time, about 1.7x derived; about 10.8x cumulative over the 2.24 ms naive loop), with the release profile, the scalar run on the default toolchain and the SIMD run on nightly, no RUSTFLAGS and an unstated CPU.",
+  "status_note": "A Packt book companion snapshot (MIT, 11 stars, 3 commits, content committed 2026-03-13, an unmerged Dependabot PR #2 bumping rand to 0.8.6) rather than a maintained library; the function is short enough to copy, but fix the tail before using it.",
+  "sources_read": [
+    "https://github.com/PacktPublishing/Rust-for-CPP-Developers",
+    "https://github.com/PacktPublishing/Rust-for-CPP-Developers/commits/main",
+    "https://github.com/PacktPublishing/Rust-for-CPP-Developers/issues",
+    "https://github.com/PacktPublishing/Rust-for-CPP-Developers/pulls",
+    "https://github.com/PacktPublishing/Rust-for-CPP-Developers/pull/2",
+    "https://github.com/PacktPublishing/Rust-for-CPP-Developers/tree/main/chapter_10",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/chapter_10/Cargo.toml",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/chapter_10/Cargo.lock",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/chapter_10/src/lib.rs",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/chapter_10/src/simd.rs",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/chapter_10/benches/multiply.rs",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/chapter_10/src/bin/cli.rs"
+  ],
+  "confidence": 0.6
+}

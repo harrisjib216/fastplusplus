@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/nvidia/cutlass",
+  "one_liner": "NVIDIA's header-only CUDA C++ templates (CuTe) and Python DSLs for building GEMM/conv kernels; matches cuBLAS at best, wins on fusion and flexibility.",
+  "what_it_does": "CUTLASS is a collection of CUDA C++ template components for writing GEMM, grouped GEMM, implicit-GEMM convolution and related kernels, covering FP64 through FP8, block-scaled NVFP4/MXFP4/MXFP6/MXFP8, int4/int8 and binary types on Volta through Blackwell (Rubin in preview). You do not call a BLAS function: you instantiate a kernel type from template arguments (element types, layouts, tile shape, pipeline stages, architecture, epilogue) and launch it, or generate kernels in Python with the CuTe DSL added in CUTLASS 4. A command-line profiler (cutlass_profiler) enumerates, verifies against cuBLAS and times the instantiated kernels.",
+  "how_it_is_fast": "It decomposes GEMM hierarchically (threadblock, warp and thread tiles) to match the GPU memory hierarchy, staging operands in shared memory and registers and feeding tensor cores through mma/wgmma instructions. The main loop is software-pipelined (double buffering, multistage async copies), and Hopper/Blackwell kernels use TMA with warp specialization: producer warps load, consumer warp groups compute, in persistent cooperative or ping-pong schedules. Threadblock rasterization (swizzling) improves L2 reuse, split-K, sliced-K and Stream-K spread the K loop when output tiles cannot fill all SMs, and fused epilogues avoid extra passes over the output. CuTe layouts describe the thread and data mappings.",
+  "when_to_use": [
+    "A GEMM or convolution that needs a fused epilogue (bias, activation, scaling, quantize/dequantize, reductions) that a closed cublasGemmEx/cuBLASLt call cannot express, so you save a separate elementwise kernel and a round trip through memory.",
+    "New or unusual data types on Hopper/Blackwell: FP8, block-scaled NVFP4/MXFP formats, mixed-input (e.g. int4 weights with fp16 activations), or FP32 emulation with 3xTF32 on tensor cores.",
+    "Grouped GEMM (MoE-style batches of different shapes) or awkward shapes where tile quantization leaves SMs idle and Stream-K or split-K decomposition helps.",
+    "Writing your own attention, normalization or GEMM-like kernels on CuTe or the CuTe DSL; catalogued entries such as FlashAttention-4 and QuACK are built that way.",
+    "Shape-specific tuning: cutlass_profiler --enable-best-kernel-for-fixed-shape searches tile configurations for one (m, n, k) and verifies results against cuBLAS."
+  ],
+  "when_not_to_use": [
+    "Plain GEMM in standard precisions: no opened source shows CUTLASS beating cuBLAS; issue #11 (GTX 1080) has CUTLASS sgemm at about 93% of cuBLAS, and issue #3390 (RTX 4070 SUPER, 2026) has the public SIMT SGEMM 1.15x slower than cuBLAS.",
+    "Projects that need fast builds or small binaries: kernels are instantiated per type, layout, tile and architecture, and building all profiler kernels means tens of thousands of kernels, long builds and possible linker failures.",
+    "Windows builds (the README says CUTLASS 3.x builds are known to be down on Windows for all CUDA toolkits), pre-Volta GPUs (minimum compute capability 7.0, CUDA 11.4) and non-NVIDIA hardware.",
+    "Teams without CUDA template expertise who only need a stable BLAS-style API: the 2.x and 3.x C++ APIs differ, and the CuTe DSL is still marked public beta in the 4.8.1 README."
+  ],
+  "integration": {
+    "form": "header-only (include/ directory); CMake only for tests, examples, profiler and the generated kernel library; Python DSL as a pip package (nvidia-cutlass-dsl)",
+    "dependencies": "CUDA Toolkit; cuBLAS and cuDNN optional (used only as profiler reference/verification providers)",
+    "min_toolchain": "C++17 host compiler, CUDA 11.4 (12.8 recommended; Blackwell needs 12.8, B300/Thor/DGX Spark 13.0); GCC 7.5 or 9+ (GCC 8.5 has known regressions)",
+    "platforms": "NVIDIA GPUs compute capability 7.0+ (Volta, Turing, Ampere, Ada, Hopper, Blackwell; Rubin SM107 in preview); tested on Ubuntu 18.04-22.04; Windows builds broken for 3.x per README",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Hopper and Blackwell tensor-core kernels need architecture-specific targets (sm_90a, sm_100a): a kernel using SM90a features built for plain sm_90 fails at runtime, and sm_100a kernels do not run on RTX 50-series (SM120) GPUs.",
+    "Kernel choice matters more than the library: in issue #1567 a wildcard filter picked a SIMT (non-tensor-core) hgemm kernel at about 36,000 GFLOP/s against about 50,000 for cublasHgemm on a T4.",
+    "cuBLAS itself dispatches CUTLASS-derived kernels (issue #3390's Nsight trace shows cuBLAS running cutlass_80_simt_sgemm_256x128_8x4_nn_align1), so a hand-instantiated CUTLASS kernel usually ties cuBLAS unless you add fusion or tune for the shape.",
+    "The 4.8 README lists CUDA toolkit codegen bugs: some packed mixed-input ops compile incorrectly on Rubin (sm107a/sm107f) and are flagged rather than rewritten."
+  ],
+  "pick_this_over_siblings_when": "Pick CUTLASS over single-purpose hand-tuned kernels such as blackwell-tensorcore-kernels, gpu-compute or CUDA-L2 when you need a maintained, general toolkit with fusion, many data types and architectures rather than a win on one GPU and shape; those siblings report beating cuBLAS on specific shapes, which CUTLASS as shipped does not claim.",
+  "verified_claims_summary": "Only parity is shown. A 2018 user run (issue #11, GTX 1080, CUDA 9.2, no flags) measured CUTLASS sgemm_tt at 2840.5 GFLOPS against 3065.46 GFLOPS for the CUDA sample matrixMulCUBLAS at m=640, n=320, k=480 (about 93% of cuBLAS); a 2026 user run (issue #3390, RTX 4070 SUPER at a locked 2400 MHz, CUDA 12.8, cuBLAS 12.8.5.5, CUTLASS 4.5.1, GCC 13.3 -O3, median of CUDA events) measured the public SIMT SGEMM at 19.696 ms against 17.124 ms for cuBLAS at 8192x4096x6144, and the README charts show percent of theoretical peak, not a cuBLAS comparison.",
+  "status_note": "Very active (CUTLASS 4.8.1, Oct 2026; last commit 2026-10-20; 10.7k stars), BSD-3-Clause and header-only, so easy to vendor, though API generations (2.x, 3.x, CuTe DSL) and per-architecture targets change often.",
+  "sources_read": [
+    "https://github.com/NVIDIA/cutlass",
+    "https://raw.githubusercontent.com/NVIDIA/cutlass/HEAD/README.md",
+    "https://raw.githubusercontent.com/NVIDIA/cutlass/HEAD/media/docs/cpp/profiler.md",
+    "https://raw.githubusercontent.com/NVIDIA/cutlass/HEAD/media/docs/cpp/efficient_gemm.md",
+    "https://github.com/NVIDIA/cutlass/issues/11",
+    "https://github.com/NVIDIA/cutlass/issues?q=is%3Aissue+cublas+slower",
+    "https://github.com/NVIDIA/cutlass/issues/3390",
+    "https://github.com/NVIDIA/cutlass/issues/1567"
+  ],
+  "confidence": 0.75
+}

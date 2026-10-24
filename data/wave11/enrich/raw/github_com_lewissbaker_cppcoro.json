@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/lewissbaker/cppcoro",
+  "one_liner": "C++ coroutine library whose work-stealing static_thread_pool runs fork-join tasks 20-86x faster than concurrencpp or HPX.",
+  "what_it_does": "cppcoro is a library of coroutine building blocks written against the Coroutines TS: lazy task<T> and shared_task<T>, generator, recursive_generator and async_generator, async_mutex, events, latch, sequence barriers and sequencers, when_all, sync_wait, cancellation tokens, a static_thread_pool scheduler and (on Windows) an io_service with file and socket I/O. You write coroutines that co_await tp.schedule() to hop onto the pool and co_await when_all(...) to fork and join; it is its own interface, not a drop-in for std::async/std::future or for another runtime's task type.",
+  "how_it_is_fast": "static_thread_pool is a work-stealing scheduler: work enqueued from a pool thread goes into that thread's lock-free LIFO ring buffer (initially 256 slots, doubled on demand), work from outside goes into a global lock-free FIFO list, and idle threads drain the global queue, then steal from the back of other threads' queues, spinning about 30 rounds before sleeping on an event. schedule() never throws and normally allocates nothing because the schedule_operation node lives in the awaiting coroutine's frame and is linked intrusively. task<T> is lazy and, on Clang 7+, hands control back to the awaiting coroutine through symmetric transfer (await_suspend returning a coroutine_handle) instead of an atomic handshake; when_all joins children with a single atomic countdown (when_all_counter), so per-task overhead is the heap frame, an intrusive queue push and one fetch_sub.",
+  "when_to_use": [
+    "Recursive fork-join on a CPU pool (divide-and-conquer, tree search, parallel reductions) where you want lazy tasks plus when_all and the alternative is concurrencpp or HPX: about 86x and 83x faster than them on 100M-task skynet in the third-party suite",
+    "Clang builds on Linux or Windows where symmetric transfer is enabled and you can pair it with mimalloc or jemalloc, since every coroutine frame is a heap allocation",
+    "Code that needs coroutine-aware synchronisation primitives (async_mutex, async_manual_reset_event, async_latch, single/multi_producer_sequencer) on top of a thread pool",
+    "Teaching or prototyping coroutine abstractions: the README documents every type in detail and the code is small enough to read and vendor"
+  ],
+  "when_not_to_use": [
+    "Peak fork-join throughput: it trails citor, libfork, TooManyCooks, TBB and Taskflow on mean ratio (3.67x vs 1.06-3.34x), and Coros on skynet (144907 vs 94532 us) and fib(39) (269384 vs 187136 us)",
+    "Memory-constrained hosts: peak RSS was about 134 MB on skynet, nqueens and fib(39) against 9-14 MB for TBB, Taskflow, libfork, TooManyCooks, Coros and concurrencpp",
+    "Single-threaded socket servers: in the io_socket_st row it was the slowest of four (524717 us vs libcoro 483074, Boost.Cobalt 393036, TooManyCooks 339340), and upstream has no Linux io_service, file I/O or networking at all",
+    "GCC users or anyone needing a maintained upstream: lewissbaker/cppcoro hard-codes <experimental/coroutine>, enables symmetric transfer only for Clang, builds with the Python 2.7 Cake system, and has 92 open issues and 21 open PRs without activity since 2022",
+    "Code that cannot tolerate known open bugs: issue #209 (ThreadSanitizer race in sync_wait with static_thread_pool) and #221 (cancellation deadlock) are open with no response"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none beyond the C++ standard library; upstream Linux builds need Clang + libc++ and Python 2.7 for the Cake build, Windows needs the Windows 10 SDK; the andreasbuhr fork builds with CMake",
+    "min_toolchain": "Upstream: Coroutines TS with MSVC 2017 (/await) or Clang 5.0+ and libc++ (<experimental/coroutine>). andreasbuhr fork: C++20 coroutines, tested on GCC 10.2-16, Clang 13-22, MSVC 2017-2026",
+    "platforms": "Windows (x86, x64) fully; Linux upstream only for tasks, generators, sync primitives and static_thread_pool (no io_service, file or socket I/O); the andreasbuhr fork adds an epoll-based io_service and sockets on Linux; macOS not documented",
+    "thread_safety": "static_thread_pool, async_mutex, async events, async_latch and the sequencers are built for multi-threaded use; single_consumer_* types allow one awaiter; task<T> is a move-only single-awaiter handle, shared_task<T> supports concurrent awaiters at a reference-counting cost",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The benchmarked code is the andreasbuhr/cppcoro fork, not this repo. The fork's README lists only include, namespace, CMake and CI changes, but its static_thread_pool also differs (notify_intent_to_sleep uses an exchange so each sleeper is counted once, upstream uses a plain store) and it adds a Linux epoll io_service, so the io_socket_st row cannot be reproduced with upstream on Linux.",
+    "Symmetric transfer is switched on only for Clang 7+ in config.hpp; on GCC and MSVC task<T> falls back to a void await_suspend with an atomic<bool> continuation handshake (issue #216 asks for GCC/MSVC support), so the Clang 21 numbers may not carry over.",
+    "The per-thread local queue cap check compares m_mask (size minus 1) with max_local_queue_size (a power of two), so the intended 1 MB cap is never hit and a thread's ring buffer keeps doubling under very wide fork trees; the same code is in the fork.",
+    "Every task allocates its frame on the heap, and the suite's CMake notes cppcoro is allocator-sensitive: it links mimalloc or jemalloc if found, skips tcmalloc on Linux because it was slower for cppcoro, and otherwise uses glibc malloc."
+  ],
+  "pick_this_over_siblings_when": "Pick cppcoro (via the andreasbuhr fork) over Marl or Coros when you want lazy C++20 tasks with when_all on a work-stealing pool and a rich set of async primitives; pick async_simple Lazy for a maintained library with similar task cost (59745 vs 61308 ns on its chain test), Boost.Cobalt or libcoro for single-threaded I/O, and libfork or TooManyCooks if raw fork-join speed and memory matter most.",
+  "verified_claims_summary": "In tzcnt/runtime-benchmarks on an AMD EPYC 7742 with 64 worker threads, Clang 21.1.7 -O3 -march=native, the andreasbuhr fork's static_thread_pool took 144907 us on skynet (100M tasks) against 12514888 us for concurrencpp and 11965484 us for HPX, about 86x and 83x faster (derived from page data), with 49x/21x on nqueens and 77x/40x on fib(39); matmul(2048) is a tie. Each cell is one timed run after one warm-up with no variance reported, the suite's author also writes the competing TooManyCooks, and the baselines got tcmalloc while cppcoro got mimalloc, jemalloc or glibc malloc, which if anything disadvantages cppcoro.",
+  "status_note": "Upstream is dormant since 2022-09-02 with 92 open issues and 21 open PRs, but MIT-licensed; use the andreasbuhr/cppcoro fork (MIT, commits through June 2026, CI on current GCC, Clang and MSVC), which is the code that was benchmarked.",
+  "sources_read": [
+    "https://github.com/lewissbaker/cppcoro",
+    "https://raw.githubusercontent.com/lewissbaker/cppcoro/HEAD/README.md",
+    "https://raw.githubusercontent.com/lewissbaker/cppcoro/HEAD/lib/static_thread_pool.cpp",
+    "https://raw.githubusercontent.com/lewissbaker/cppcoro/HEAD/include/cppcoro/static_thread_pool.hpp",
+    "https://raw.githubusercontent.com/lewissbaker/cppcoro/HEAD/include/cppcoro/task.hpp",
+    "https://raw.githubusercontent.com/lewissbaker/cppcoro/HEAD/include/cppcoro/config.hpp",
+    "https://raw.githubusercontent.com/lewissbaker/cppcoro/HEAD/lib/io_service.cpp",
+    "https://raw.githubusercontent.com/lewissbaker/cppcoro/HEAD/include/cppcoro/detail/when_all_ready_awaitable.hpp",
+    "https://github.com/lewissbaker/cppcoro/issues",
+    "https://github.com/lewissbaker/cppcoro/issues/209",
+    "https://github.com/andreasbuhr/cppcoro",
+    "https://github.com/andreasbuhr/cppcoro/commits/main",
+    "https://raw.githubusercontent.com/andreasbuhr/cppcoro/HEAD/README.md",
+    "https://raw.githubusercontent.com/andreasbuhr/cppcoro/HEAD/lib/static_thread_pool.cpp",
+    "https://raw.githubusercontent.com/andreasbuhr/cppcoro/HEAD/lib/io_service.cpp",
+    "https://raw.githubusercontent.com/andreasbuhr/cppcoro/HEAD/include/cppcoro/config.hpp",
+    "https://raw.githubusercontent.com/andreasbuhr/cppcoro/HEAD/include/cppcoro/detail/when_all_ready_awaitable.hpp",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/build_and_bench_all.py",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/cppcoro/CMakeLists.txt",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/cppcoro/skynet.cpp",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/cppcoro/fib.cpp",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/cppcoro/io_socket_st.cpp",
+    "https://raw.githubusercontent.com/andreasbuhr/cppcoro/HEAD/include/cppcoro/detail/when_all_counter.hpp"
+  ],
+  "confidence": 0.8
+}
