@@ -18,7 +18,7 @@ KEYS = {"name", "repo_url", "listed_description", "listed_license", "performance
 def main():
     known = {canonical(u) for u in read_url_list(KNOWN_LIST)}
     seeds, report = {}, []
-    dropped_known = dropped_bad = 0
+    dropped_known = dropped_bad = dropped_no_url = 0
     for raw in sorted((SEEDS / "raw").glob("*.json")):
         try:
             entries = json.loads(raw.read_text())
@@ -28,8 +28,10 @@ def main():
             report.append(f"{raw.name}: not a list"); continue
         n_new = 0
         for e in entries:
-            if not isinstance(e, dict) or not e.get("repo_url"):
+            if not isinstance(e, dict):
                 dropped_bad += 1; continue
+            if not e.get("repo_url"):  # book techniques and projects the miner could not resolve
+                dropped_no_url += 1; continue
             missing = KEYS - set(e)
             for k in missing:
                 e[k] = None if k != "performance_claim_in_description" else False
@@ -50,7 +52,7 @@ def main():
     (SEEDS / "seeds.json").write_text(json.dumps(out, indent=2) + "\n")
     print("\n".join(report))
     print(f"\nseeds: {len(out)} unique ({sum(1 for e in out if e['performance_claim_in_description'])} with a claim); "
-          f"dropped {dropped_known} known, {dropped_bad} malformed")
+          f"dropped {dropped_known} known, {dropped_bad} malformed, {dropped_no_url} without a URL")
     for w, n in sorted(Counter(str(e["guessed_wave"]) for e in out).items()):
         c = sum(1 for e in out if str(e["guessed_wave"]) == w and e["performance_claim_in_description"])
         print(f"  {w}: {n} ({c} with claim)")

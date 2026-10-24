@@ -45,6 +45,9 @@ extension passes further down. Waves 1-14 are closed (see docs/build-log.md); ex
 7. **Usage-limit lesson:** 15-20 Opus or Sonnet agents at once exhausted the session limit on 2026-10-02 and
    again on 2026-10-06 (nine enrichers killed mid-run; their complete output files were kept). 8-12 at a time,
    recording each report before launching more, runs a full day without a kill.
+8. **Book mining** (added 2026-10-24; waiting on the user to attach C++ books to a cloud session): run
+   `pipeline/books.py` per book, launch one Sonnet miner per chunk, then `seeds_merge.py` and `seed_backfill.py`
+   as for the curated lists (section F, "Books").
 
 Closed waves, for reference: wave 8 (398 then 401 verified), wave 9 (136 then 141), wave 10 (254 then 265),
 wave 11 (144 then 145), wave 12 (220 then 227), wave 13 (303), wave 14 (274); details in docs/build-log.md.
@@ -342,6 +345,24 @@ OUTPUT SCHEMA
   }
 ]
 ```
+
+### Books
+
+C++ books (a user's own copies, attached to a cloud session) are a seed source like the curated lists: they name
+libraries, benchmark std:: facilities against alternatives and often ship a companion code repository.
+`python3 pipeline/books.py <file> --title "<title, edition>" --work <scratch dir> --today <date>` extracts the text
+(pdftotext for PDF with `[p. N]` page markers, pandoc for EPUB/DOCX/HTML), splits it into ~150k-character chunks and
+renders one mining prompt per chunk into the work directory. Each Sonnet miner writes
+`data/seeds/raw/book-<slug>__<NN>.json` in the seed schema plus `kind` (library or technique) and `book_benchmark`
+(what the book measured); `seed_backfill.py` passes `book_benchmark` to the seed agent as part of the lead.
+
+- Books are copyrighted: the book file, its extracted text, the chunks and the prompts stay in the scratch work
+  directory (`books.py` refuses a work directory inside the repository) and are deleted when the session ends. Only
+  the miners' JSON arrays are committed; they paraphrase and quote at most 25 words per entry, and never copy code.
+- A book's own timings are first-party evidence (tier C at most) unless they rerun someone else's published
+  benchmark; the companion repository can lift an entry to A when it carries the benchmark code, flags and CPU.
+- Techniques with numbers but no public code keep `repo_url` null; `seeds_merge.py` counts them as "without a URL"
+  and they stay in the raw file for a later pass.
 
 ### What the orchestrator does with seeds
 

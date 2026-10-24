@@ -42,6 +42,8 @@ build history is `docs/build-log.md`).
   overwrite `README.md`, since macOS file names are case-insensitive). Check `git status` after each report and
   restore or delete strays.
 - Never disable the sandbox.
+- Books are copyrighted: book files, their extracted text, chunks and book prompts stay in the scratchpad, never in
+  the repo; only the miners' JSON seed arrays are committed (`docs/QUEUE.md` section F, "Books").
 - No personal data, home-directory paths or credentials in tracked files or commit metadata. Prompts rendered on a
   local machine embed the checkout's absolute path: run `python3 pipeline/check_pii.py --fix` before committing them
   (CI runs the same check with `--commits`). Copyright lines say "the fastpp contributors".

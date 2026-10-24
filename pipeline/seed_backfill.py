@@ -76,7 +76,8 @@ def main():
             projects = [{"name": s["name"], "repo_url": s["repo_url"], "domain": w,
                          "category": s.get("guessed_category") or "<pick from the wave's categories>",
                          "baselines": s.get("guessed_baseline") or "<guess from the project's role>",
-                         "lead": f"Listed as: {s.get('listed_description') or ''} (claim words: {s.get('claim_text')}; licence tag: {s.get('listed_license')}; {s.get('found_in')})"}
+                         "lead": f"Listed as: {s.get('listed_description') or ''} (claim words: {s.get('claim_text')}; licence tag: {s.get('listed_license')}; {s.get('found_in')})"
+                                 + (f" Book benchmark: {s['book_benchmark']}" if s.get("book_benchmark") else "")}
                         for s in group]
             manifest["assignments"].append({"id": aid, "batch": "mine", "projects": projects})
             existing.add(aid)

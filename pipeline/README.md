@@ -20,6 +20,7 @@ pages; the searching, verifying and writing is done by Claude Code agents that r
 |---|---|
 | `render.py data/waveN --batch bK` | Renders the search prompts for one source batch of a wave into `data/waveN/prompts/`. |
 | `seed.py data/waveN --batch seed` | Renders seed-record prompts for named projects (leads, known-list entries). |
+| `books.py <file> --title T --work DIR --today D` | Book mining: extracts a C++ book's text into a scratch work directory outside the repo, splits it into page-tagged chunks and renders one seed-mining prompt per chunk (outputs go to `data/seeds/raw/book-*.json`). |
 | `mine.py`, `seeds_merge.py`, `seed_backfill.py` | Seed-list mining: split a curated list into sections, merge the mined seeds, and group them into backfill seed passes per wave. |
 | `merge.py data/waveN` | Merges and deduplicates a wave's raw search output into `merged.json` and regenerates `data/known_list.txt`. |
 | `verify.py render data/waveN --assignments <ids>` | Renders verifier prompts (three records per batch) for the named assignments' new records. |
