@@ -115,7 +115,7 @@ run as 14 waves (one domain each) plus backfill passes that mined curated lists 
 <!-- fastpp:pipeline -->
 ```mermaid
 flowchart LR
-  S["Search agents<br/>952 reports"] --> M["Merge and dedup"]
+  S["Search agents<br/>953 reports"] --> M["Merge and dedup"]
   M --> V["Verifier agents<br/>1,199 batches"]
   V --> E["Enrichment agents<br/>3,033 write-ups"]
   E --> R["Retier checks and decisions<br/>111 retier files, 2,951 decisions"]
