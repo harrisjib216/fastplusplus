@@ -8,8 +8,22 @@ import argparse, json, string
 from pathlib import Path
 
 import seed  # noqa: E402  (same directory)
+from seeds_merge import has_numbers  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def book_techniques(s, limit=12):
+    """Lead text for a book companion repo: the book's benchmarked techniques, measured ones first."""
+    ts = sorted(s.get("techniques") or [], key=lambda t: (not has_numbers(t), not t["claim_text"]))
+    if not ts:
+        return ""
+    items = [f"{t['name']}: {t['claim_text'] or 'no numbers'}"
+             + (f" [measured: {t['book_benchmark']}]" if has_numbers(t) and t["book_benchmark"] else "")
+             + f" ({t['found_in']})"
+             for t in ts[:limit]]
+    more = f"; {len(ts) - limit} more in data/seeds/seeds.json" if len(ts) > limit else ""
+    return " Book techniques, one candidate record each if the repo carries the code: " + "; ".join(items) + more
 SEEDS = ROOT / "data" / "seeds"
 WAVE_DIR = {"stdlib-replacements": "wave1", "toolchain-and-build": "wave2", "parsing-and-text": "wave3",
             "serialization-and-formats": "wave4", "networking-and-servers": "wave5", "storage-and-data": "wave6",
@@ -77,7 +91,8 @@ def main():
                          "category": s.get("guessed_category") or "<pick from the wave's categories>",
                          "baselines": s.get("guessed_baseline") or "<guess from the project's role>",
                          "lead": f"Listed as: {s.get('listed_description') or ''} (claim words: {s.get('claim_text')}; licence tag: {s.get('listed_license')}; {s.get('found_in')})"
-                                 + (f" Book benchmark: {s['book_benchmark']}" if s.get("book_benchmark") else "")}
+                                 + (f" Book benchmark: {s['book_benchmark']}" if s.get("book_benchmark") else "")
+                                 + book_techniques(s)}
                         for s in group]
             manifest["assignments"].append({"id": aid, "batch": "mine", "projects": projects})
             existing.add(aid)
