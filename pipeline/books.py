@@ -54,9 +54,6 @@ HARD RULES
   unless the book ran someone else's published benchmark.
 - Never send the user's email, name or other personal identifiers to any
   outside service. Write nothing in the repository except the output file.
-- Style: caveman ultra in all your own text and your final reply (fragments,
-  no articles, no filler, no arrows, no invented abbreviations; names,
-  numbers and errors exact); the JSON output stays normal prose.
 - Write ONLY the JSON array (an empty array when the chunk names nothing) to:
     {output_path}
   then check it parses: python3 -c "import json,sys; json.load(open(sys.argv[1]))" {output_path}

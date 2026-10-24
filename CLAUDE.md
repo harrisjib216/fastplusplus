@@ -24,8 +24,7 @@ build history is `docs/build-log.md`).
 - **Models:** Sonnet for search (get coverage from more search agents, not a bigger model), Opus for verify, enrich
   and re-tier checks.
 - **Final replies:** every subagent prompt ends with a terse final-reply rule (max ~8 lines; the JSON output stays
-  normal prose) and asks for caveman ultra in all the agent's own text. The prompt templates (`render.py`,
-  `seed.py`, `enrich.py`, `verifier_prompt.txt`) carry it; the wording is in `pipeline/cloud_harness.md`.
+  normal prose). The wording is in `pipeline/cloud_harness.md`.
 - **docs/QUEUE.md** holds later extensions. Its first section, "Unfinished work", is the open backlog of the wave
   loop (deferred searches, retier checks, seed passes); resume from there and keep it current.
 - **Developer source:** a private repository, not published yet. Its 8 entries carry ids `private:developer-source[#category]`, are
