@@ -3,7 +3,7 @@
 <sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Interpreters and VMs](../README.md)</sub>
 
 **What these beat:** wasmtime, wasmer, WAMR, V8  
-**57 entries:** 9 tier A · 16 tier B · 28 tier C · 4 tier D · 54 copyable, 3 study only
+**58 entries:** 9 tier A · 16 tier B · 28 tier C · 5 tier D · 55 copyable, 3 study only
 
 | # | Project | What it is | Tier | Language | License | Status |
 |--:|---|---|:-:|---|---|---|
@@ -61,8 +61,9 @@
 | 52 | [**Mitey JIT (csjh/mitey-jit)**](csjh-mitey-jit.md) | Experimental Arm64/macOS WebAssembly JIT with a fused validate-and-compile pass; starts big modules about 3x faster than Wasmtime. | **C** | C++ | no license (study only) | 🟢 active |
 | 53 | [**EOS VM**](antelopeio-eos-vm.md) | Header-only C++ WebAssembly interpreter and x86-64 single-pass JIT for Antelope blockchains; vendor claims up to 16x over the Binaryen interpreter. | **C** | C++ | EOS VM License v1.0… (study only) | 🟡 stale |
 | 54 | [**AssemblyScript (TypeScript-like to Wasm compiler)**](assemblyscript-assemblyscript.md) | Ahead-of-time compiler from a strict TypeScript dialect to WebAssembly via Binaryen; its 7.2x-over-JavaScript n-body claim is mostly a harness artifact. | **D** | TypeScript | Apache-2.0 | 🟢 active |
-| 55 | [**Software Architecture with C++ 2E: tail-recursive Fibonacci…**](paper-book-software-architecture-with-cpp-2e-tail-recursive-fibonacci-musttail.md) | Book microbenchmark of musttail tail recursion against loops and plain recursion; shows parity, no speedup from musttail. | **D** | C++ | MIT | 🟢 active |
-| 56 | [**EOS VM Optimized Compiler (eosvmoc in AntelopeIO/spring)**](antelopeio-spring.md) | LLVM-based tier-up compiler for Wasm smart contracts inside Antelope's nodeos; claimed faster than EOS VM JIT, no published numbers. | **D** | C++ | MIT | 🟢 active |
-| 57 | [**BEAM.com (Erlang/OTP + Elixir single Cosmopolitan binary)**](sntran-beam-com.md) | Erlang/OTP 29 plus Elixir 1.20 as one Cosmopolitan executable; beats only its own interpreter build, not stock OTP. | **D** | Erlang | Apache-2.0 | 🟢 active |
+| 55 | [**Software Architecture with C++ 2E: computed-goto bytecode…**](paper-book-software-architecture-with-cpp-2e-computed-goto-bytecode-dispatch.md) | Book sample: computed-goto (labels-as-values) dispatch for a toy 7-opcode VM, reported about 1.29x faster than a switch loop. | **D** | C++ | MIT | 🟢 active |
+| 56 | [**Software Architecture with C++ 2E: tail-recursive Fibonacci…**](paper-book-software-architecture-with-cpp-2e-tail-recursive-fibonacci-musttail.md) | Book microbenchmark of musttail tail recursion against loops and plain recursion; shows parity, no speedup from musttail. | **D** | C++ | MIT | 🟢 active |
+| 57 | [**EOS VM Optimized Compiler (eosvmoc in AntelopeIO/spring)**](antelopeio-spring.md) | LLVM-based tier-up compiler for Wasm smart contracts inside Antelope's nodeos; claimed faster than EOS VM JIT, no published numbers. | **D** | C++ | MIT | 🟢 active |
+| 58 | [**BEAM.com (Erlang/OTP + Elixir single Cosmopolitan binary)**](sntran-beam-com.md) | Erlang/OTP 29 plus Elixir 1.20 as one Cosmopolitan executable; beats only its own interpreter build, not stock OTP. | **D** | Erlang | Apache-2.0 | 🟢 active |
 
 <sub>Tiers: **A** reproducible public benchmark (code, compiler, flags and CPU stated) · **B** independent or peer-reviewed measurement · **C** first-party claim · **D** directional, no numbers. Status: 🟢 active · 🔵 finished · 🟡 slow or stale · 🔴 abandoned · ⚪ unknown. *Study only* means no usable open-source license: read the idea, don't copy the code.</sub>

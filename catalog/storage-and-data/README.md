@@ -4,7 +4,7 @@
 
 Embedded key-value stores, caches, indexes, probabilistic filters, columnar engines and message logs measured against RocksDB, Redis, Kafka and others.
 
-**233 entries in 7 categories:** 24 tier A · 77 tier B · 128 tier C · 4 tier D
+**234 entries in 7 categories:** 24 tier A · 77 tier B · 129 tier C · 4 tier D
 
 | Category | Entries | A | B | C | D | What they beat |
 |---|--:|--:|--:|--:|--:|---|
@@ -13,7 +13,7 @@ Embedded key-value stores, caches, indexes, probabilistic filters, columnar engi
 | [Database client drivers](database-client-drivers/README.md) | 1 | 0 | 0 | 1 | 0 | QtSql with the QMYSQL driver |
 | [Embedded key-value stores](embedded-kv/README.md) | 52 | 4 | 13 | 32 | 3 | RocksDB, LevelDB, LMDB, SQLite |
 | [Indexes](indexes/README.md) | 34 | 3 | 20 | 11 | 0 | B-tree/LSM in the above; learned index baselines |
-| [Message queues and logs](message-queues-logs/README.md) | 28 | 2 | 2 | 24 | 0 | Kafka, NATS, ZeroMQ |
+| [Message queues and logs](message-queues-logs/README.md) | 29 | 2 | 2 | 25 | 0 | Kafka, NATS, ZeroMQ |
 | [Probabilistic filters](probabilistic-filters/README.md) | 43 | 10 | 13 | 19 | 1 | Bloom filter, cuckoo filter, xor filter |
 
 ## Most-adopted tier A picks

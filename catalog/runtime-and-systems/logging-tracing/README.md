@@ -3,7 +3,7 @@
 <sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Runtime and systems](../README.md)</sub>
 
 **What these beat:** spdlog, glog, OpenTelemetry SDK  
-**23 entries:** 14 tier A · 0 tier B · 8 tier C · 1 tier D · 22 copyable, 1 study only
+**25 entries:** 14 tier A · 1 tier B · 9 tier C · 1 tier D · 24 copyable, 1 study only
 
 | # | Project | What it is | Tier | Language | License | Status |
 |--:|---|---|:-:|---|---|---|
@@ -21,14 +21,16 @@
 | 12 | [**binlog**](morganstanley-binlog.md) | Asynchronous C++ logger writing structured binary logs; about 15x lower p50 call-site latency than async spdlog in Quill's harness. | **A** | C++ | Apache-2.0 | 🔴 abandoned |
 | 13 | [**NanoLog (Iyengar111)**](iyengar111-nanolog.md) | Small asynchronous C++11 stream-style logger; lower median caller latency than spdlog async, far behind Quill/fmtlog/PlatformLab NanoLog. | **A** | C++ | MIT (full text in… | 🔴 abandoned |
 | 14 | [**lockfreelog**](nluke17-lockfreelog.md) | Tiny header-only C++20 SPSC ring-buffer logger; about 5.3x spdlog async throughput to /dev/null on an Apple M3. | **A** | C++ | no license (study only) | 🟢 active |
-| 15 | [**Coost co/log**](idealvin-coost.md) | Asynchronous double-buffered logger inside the coost C++17 base library; first-party numbers claim it beats glog and synchronous spdlog. | **C** | C++ | MIT | 🟢 active |
-| 16 | [**zlog**](hardysimpson-zlog.md) | Pure-C, config-file-driven logging library (log4j-style categories and rules); claims about 1000x syslog(3) throughput, unmeasured in the repo. | **C** | C | Apache-2.0 | 🟢 active |
-| 17 | [**fastrace**](fast-fastrace.md) | Rust timeline-tracing library (successor to minitrace) whose span creation costs 19-151x less than tokio-tracing in its own benchmark. | **C** | Rust | Apache-2.0 | 🟢 active |
-| 18 | [**lwlog**](christianpanov-lwlog.md) | C++17 policy-based logger with allocation-free log calls and an SPSC/MPSC ring-buffer async mode; README claims 2.5-20x over spdlog. | **C** | C++ | MIT | 🟢 active |
-| 19 | [**Boost.Log**](boostorg-log.md) | Boost's attribute-based logging framework; beats a flush-every-line std::fstream only under multithreaded or disk-stalled load. | **C** | C++ | BSL-1.0 | 🟢 active |
-| 20 | [**low-latency-log**](wang-lp-low-latency-log.md) | Small async Rust file logger with deferred formatting; higher backend throughput than spdlog-rs, fast_log, ftlog in its own harness. | **C** | Rust | Apache-2.0 (some code from… | 🟡 stale |
-| 21 | [**llcpp**](blapid-llcpp.md) | Header-only C++17 synchronous binary logger: writes format string plus raw argument bytes, about 4x lower median latency than spdlog. | **C** | C++ | MIT | 🔴 abandoned |
-| 22 | [**Serenity Logger**](usafrenzy-serenity-logger.md) | Alpha C++20 synchronous logger (console, file, rotating targets) whose own crude benchmark beats spdlog's single-threaded sinks. | **C** | C++ | MIT | 🔴 abandoned |
-| 23 | [**P7Baical (libP7)**](cmakeports-libp7-baical.md) | Binary trace/telemetry logger with deferred formatting; its call-site enqueue beats vsprintf-to-buffer and printf-to-console in its own test. | **D** | C++ | LGPL-3.0-or-later | 🔴 abandoned |
+| 15 | [**Fluent Bit**](fluent-fluent-bit.md) | C telemetry agent that collects, parses and forwards logs, metrics and traces; about 8x Fluentd's regex-parsing throughput per core. | **B** | C | Apache-2.0 | 🟢 active |
+| 16 | [**Coost co/log**](idealvin-coost.md) | Asynchronous double-buffered logger inside the coost C++17 base library; first-party numbers claim it beats glog and synchronous spdlog. | **C** | C++ | MIT | 🟢 active |
+| 17 | [**zlog**](hardysimpson-zlog.md) | Pure-C, config-file-driven logging library (log4j-style categories and rules); claims about 1000x syslog(3) throughput, unmeasured in the repo. | **C** | C | Apache-2.0 | 🟢 active |
+| 18 | [**fastrace**](fast-fastrace.md) | Rust timeline-tracing library (successor to minitrace) whose span creation costs 19-151x less than tokio-tracing in its own benchmark. | **C** | Rust | Apache-2.0 | 🟢 active |
+| 19 | [**lwlog**](christianpanov-lwlog.md) | C++17 policy-based logger with allocation-free log calls and an SPSC/MPSC ring-buffer async mode; README claims 2.5-20x over spdlog. | **C** | C++ | MIT | 🟢 active |
+| 20 | [**Boost.Log**](boostorg-log.md) | Boost's attribute-based logging framework; beats a flush-every-line std::fstream only under multithreaded or disk-stalled load. | **C** | C++ | BSL-1.0 | 🟢 active |
+| 21 | [**low-latency-log**](wang-lp-low-latency-log.md) | Small async Rust file logger with deferred formatting; higher backend throughput than spdlog-rs, fast_log, ftlog in its own harness. | **C** | Rust | Apache-2.0 (some code from… | 🟡 stale |
+| 22 | [**Easylogging++**](abumq-easyloggingpp.md) | Archived feature-heavy synchronous C++ stream logger; 6-9% faster than glog at 1-10 threads in spdlog's old bench, 4x slower at 100. | **C** | C++ | MIT | 🔴 abandoned |
+| 23 | [**llcpp**](blapid-llcpp.md) | Header-only C++17 synchronous binary logger: writes format string plus raw argument bytes, about 4x lower median latency than spdlog. | **C** | C++ | MIT | 🔴 abandoned |
+| 24 | [**Serenity Logger**](usafrenzy-serenity-logger.md) | Alpha C++20 synchronous logger (console, file, rotating targets) whose own crude benchmark beats spdlog's single-threaded sinks. | **C** | C++ | MIT | 🔴 abandoned |
+| 25 | [**P7Baical (libP7)**](cmakeports-libp7-baical.md) | Binary trace/telemetry logger with deferred formatting; its call-site enqueue beats vsprintf-to-buffer and printf-to-console in its own test. | **D** | C++ | LGPL-3.0-or-later | 🔴 abandoned |
 
 <sub>Tiers: **A** reproducible public benchmark (code, compiler, flags and CPU stated) · **B** independent or peer-reviewed measurement · **C** first-party claim · **D** directional, no numbers. Status: 🟢 active · 🔵 finished · 🟡 slow or stale · 🔴 abandoned · ⚪ unknown. *Study only* means no usable open-source license: read the idea, don't copy the code.</sub>

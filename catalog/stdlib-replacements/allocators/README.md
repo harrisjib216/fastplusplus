@@ -3,7 +3,7 @@
 <sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [C++ standard library replacements](../README.md)</sub>
 
 **What these beat:** std::allocator, operator new/delete, std::pmr  
-**17 entries:** 4 tier A · 4 tier B · 8 tier C · 1 tier D · 15 copyable, 2 study only
+**18 entries:** 4 tier A · 4 tier B · 9 tier C · 1 tier D · 16 copyable, 2 study only
 
 | # | Project | What it is | Tier | Language | License | Status |
 |--:|---|---|:-:|---|---|---|
@@ -22,7 +22,8 @@
 | 13 | [**fastcpp::arena (developer source)**](private-developer-source-allocators.md) | Header-only bump/arena allocator for same-lifetime objects; 5.4x faster than glibc new/delete when a whole batch is freed at once. | **C** | C++ | MIT | 🟢 active |
 | 14 | [**smmalloc**](sergeymakeev-smmalloc.md) | Lock-free, thread-cached proxy allocator for small (16-992B) game allocations; passes everything else through to CRT malloc. | **C** | C++ | MIT | 🟡 stale |
 | 15 | [**Lockless Memory Allocator**](locklessinc-com.md) | Abandoned GPL x86 malloc replacement (per-thread slabs, lock-free remote frees); 1.15-1.48x faster than glibc malloc in Ruby tests. | **C** | C | GPL-3.0-or-later | 🔴 abandoned |
-| 16 | [**arena-allocator (ShortAlloc)**](shantanu-arena-allocator.md) | Single-file bump-pointer arena allocator with an STL-compatible wrapper; beats glibc malloc via std::vector, especially above the mmap threshold. | **C** | C++ | no license (study only) | 🟡 stale |
-| 17 | [**TCMalloc (google/tcmalloc)**](google-tcmalloc.md) | Google's per-CPU-cache C/C++ allocator, positioned as a faster-at-scale alternative to glibc malloc, though unquantified in the repo. | **D** | C++ | Apache-2.0 | 🟢 active |
+| 16 | [**FreeGuard**](utsasrg-freeguard.md) | Research secure malloc (CCS 2017) with near-glibc speed, far faster than the DieHarder and OpenBSD secure allocators. | **C** | C++ | GPL-2.0 | 🔴 abandoned |
+| 17 | [**arena-allocator (ShortAlloc)**](shantanu-arena-allocator.md) | Single-file bump-pointer arena allocator with an STL-compatible wrapper; beats glibc malloc via std::vector, especially above the mmap threshold. | **C** | C++ | no license (study only) | 🟡 stale |
+| 18 | [**TCMalloc (google/tcmalloc)**](google-tcmalloc.md) | Google's per-CPU-cache C/C++ allocator, positioned as a faster-at-scale alternative to glibc malloc, though unquantified in the repo. | **D** | C++ | Apache-2.0 | 🟢 active |
 
 <sub>Tiers: **A** reproducible public benchmark (code, compiler, flags and CPU stated) · **B** independent or peer-reviewed measurement · **C** first-party claim · **D** directional, no numbers. Status: 🟢 active · 🔵 finished · 🟡 slow or stale · 🔴 abandoned · ⚪ unknown. *Study only* means no usable open-source license: read the idea, don't copy the code.</sub>

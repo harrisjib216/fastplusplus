@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/rust-lang/portable-simd",
+  "one_liner": "Rust nightly's std::simd: one portable Simd<T, N> type that beat scalar and autovectorized Rust loops 5-13x in a byte count.",
+  "what_it_does": "The development repository for core::simd/std::simd, Rust's architecture-independent SIMD API. You write Simd<T, N> values (f32x4, u8x16, up to 64 lanes) with ordinary operators, lane-wise comparisons that return masks, select, swizzles, gathers and scatters, and reductions such as reduce_sum. The same source compiles for every target; where a target lacks SIMD, the compiler emits scalar code. It is not a drop-in replacement for a scalar loop: you restructure the loop into vector chunks (slice::as_simd gives a scalar head, an aligned SIMD body and a scalar tail).",
+  "how_it_is_fast": "Simd<T, N> is a #[repr(simd)] type whose operations lower to LLVM's generic vector IR and simd_* compiler intrinsics, so LLVM picks the target's instructions (SSE/AVX/AVX-512, NEON, wasm simd128 and others). In the fast-sp test the code compares 16 bytes per iteration against splatted 's' and 'p', turns the masks into 0/-1 lanes and reduces within narrow i8 lanes. The scalar baselines either stay scalar (branchless cinc/csel) or autovectorize into an isize-wide sum that fits only two lanes per 128-bit register.",
+  "when_to_use": [
+    "You already use nightly Rust and want one SIMD source that compiles for x86-64, aarch64 and other targets without per-architecture std::arch code.",
+    "Byte scanning, counting, comparison and other lane-wise kernels where LLVM's autovectorizer gives up or picks a poor accumulator width, as in the fast-sp count (about 19.9 GiB/s against 4.0 GiB/s for the autovectorized iterator on an M1).",
+    "Floating-point loops that do not autovectorize because float addition is not associative; an open issue (#297) shows SIMD f64 sums about 4x faster than a plain f64 loop, while integer sums gained nothing.",
+    "Code that should behave identically on every target: the docs promise IEEE-consistent semantics (for example simd_min matching f32::min) except subnormal flushing on armv7 and powerpc."
+  ],
+  "when_not_to_use": [
+    "Stable Rust: the API is behind #![feature(portable_simd)], and the 'critical issues before stabilization' thread (#364, opened 2023) was still waiting on two structural API changes (PRs #493 and #483) in August 2026.",
+    "Kernels that need a specific instruction or non-IEEE semantics: the docs say std::arch can be slightly faster (for example _mm_min_ps against simd_min), and open issues report masks that do not optimize as well as hand-written x86 code (#472), bad codegen for OR/AND masks (#303) and functions that scalarize after inlining (#321).",
+    "Integer reductions that LLVM already autovectorizes: issue #297 measured u64/i64 SIMD sums on AVX-512 no faster than a plain iterator loop.",
+    "Vector transcendental math: StdFloat sin/cos/exp/ln lower to LLVM intrinsics that, per the crate's own docs, may fall back to the platform math.h; use a dedicated vector math library for those.",
+    "Runtime CPU dispatch across feature levels: features are fixed at compile time, running a binary built for a feature the CPU lacks is undefined behaviour, and swizzle_dyn's implementation is chosen when std itself is built (-Zbuild-std may be needed)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (ships in nightly core/std as core::simd and std::simd; std_float math trait needs std)",
+    "min_toolchain": "Rust nightly with #![feature(portable_simd)]; the repository itself pins nightly-2026-04-28 and edition 2024",
+    "platforms": "any Rust target (scalar fallback where SIMD is missing); tuned paths for x86/x86-64, aarch64 and armv7 NEON, wasm32, powerpc, loongarch64 and hexagon",
+    "thread_safety": "not documented; Simd<T, N> is a plain value type with no shared state",
+    "drop_in_for_baseline": "partial — scalar loops must be rewritten into vector chunks with explicit head and tail handling; there is no automatic vectorizing iterator"
+  },
+  "gotchas": [
+    "Float reduce_sum and reduce_product use ordered (sequential) LLVM reductions, and float reduce_max/reduce_min fold over the array in scalar code; keep accumulators in vectors and reduce once at the end.",
+    "Simd<T, N> is passed and returned through memory unless the call is inlined, so the docs recommend #[inline] on functions that take or return vectors.",
+    "Integer operators wrap silently even in debug builds, integer division by zero still panics, N must be 1 to 64, and mask layout is unspecified.",
+    "Simd<T, N> has a larger alignment than [T; N]: read and write through raw pointers with read_unaligned/write_unaligned or use as_simd; aligned read on a T-aligned slice is undefined behaviour."
+  ],
+  "pick_this_over_siblings_when": "Pick it over packed_simd for any new Rust code, because packed_simd is archived and superseded by this API. Pick glam or ultraviolet instead when you only need small linear-algebra types, and EVE or std::experimental::simd (marcelcases/simd) when the project is C++.",
+  "verified_claims_summary": "A third-party demo (eddieantonio/fast-sp) counted 's' minus 'p' bytes over 12 MiB inputs with Rust's #[bench] harness on an Apple M1, using rustc 1.68.0-nightly (2023-01-12, LLVM 15.0.6) and Apple clang 14 with -mcpu=apple-m1 for C. The portable_simd version (u8x16) reached 19.87 GiB/s against 3.98 GiB/s for the autovectorized Rust iterator and about 1.48 GiB/s for the scalar Rust and C loops, with all versions asserted equal on both inputs.",
+  "status_note": "Actively developed (last commit 2026-09-16, 94 open issues) and dual MIT/Apache-2.0, but nightly-only with no stabilization date, so production use means pinning a nightly toolchain.",
+  "sources_read": [
+    "https://github.com/rust-lang/portable-simd",
+    "https://raw.githubusercontent.com/rust-lang/portable-simd/HEAD/README.md",
+    "https://raw.githubusercontent.com/rust-lang/portable-simd/HEAD/beginners-guide.md",
+    "https://raw.githubusercontent.com/rust-lang/portable-simd/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/rust-lang/portable-simd/HEAD/rust-toolchain.toml",
+    "https://raw.githubusercontent.com/rust-lang/portable-simd/HEAD/crates/core_simd/Cargo.toml",
+    "https://raw.githubusercontent.com/rust-lang/portable-simd/HEAD/crates/core_simd/src/lib.rs",
+    "https://raw.githubusercontent.com/rust-lang/portable-simd/HEAD/crates/core_simd/src/mod.rs",
+    "https://raw.githubusercontent.com/rust-lang/portable-simd/HEAD/crates/core_simd/src/core_simd_docs.md",
+    "https://raw.githubusercontent.com/rust-lang/portable-simd/HEAD/crates/core_simd/src/vector.rs",
+    "https://raw.githubusercontent.com/rust-lang/portable-simd/HEAD/crates/core_simd/src/simd/num/float.rs",
+    "https://raw.githubusercontent.com/rust-lang/portable-simd/HEAD/crates/core_simd/src/swizzle_dyn.rs",
+    "https://raw.githubusercontent.com/rust-lang/portable-simd/HEAD/crates/std_float/src/lib.rs",
+    "https://github.com/rust-lang/portable-simd/issues?q=is%3Aissue%20state%3Aopen%20performance",
+    "https://github.com/rust-lang/portable-simd/labels",
+    "https://github.com/rust-lang/portable-simd/issues/364",
+    "https://github.com/rust-lang/portable-simd/issues/297",
+    "https://github.com/rust-lang/portable-simd/issues/472",
+    "https://github.com/eddieantonio/fast-sp/commits/main",
+    "https://raw.githubusercontent.com/eddieantonio/fast-sp/HEAD/README.md",
+    "https://raw.githubusercontent.com/eddieantonio/fast-sp/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/eddieantonio/fast-sp/HEAD/build.rs",
+    "https://raw.githubusercontent.com/eddieantonio/fast-sp/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/eddieantonio/fast-sp/HEAD/src/implementations/mod.rs",
+    "https://raw.githubusercontent.com/eddieantonio/fast-sp/HEAD/src/implementations/rust_portable_simd.rs",
+    "https://raw.githubusercontent.com/eddieantonio/fast-sp/HEAD/src/implementations/rust_portable_simd_v2.rs",
+    "https://raw.githubusercontent.com/eddieantonio/fast-sp/HEAD/src/implementations/rust_iter.rs",
+    "https://raw.githubusercontent.com/eddieantonio/fast-sp/HEAD/src/implementations/rust_for_loop.rs",
+    "https://raw.githubusercontent.com/eddieantonio/fast-sp/HEAD/c/with-explicit-size.c"
+  ],
+  "confidence": 0.8
+}

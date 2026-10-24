@@ -4585,6 +4585,93 @@
     }
   },
   {
+    "name": "serde_json (typed, #[derive(Deserialize)])",
+    "repo_url": "https://github.com/serde-rs/json",
+    "language": "Rust",
+    "domain": "serialization-and-formats",
+    "category": "json",
+    "baseline": "RapidJSON (DOM parser) and nlohmann/json; simdjson is faster",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "Parse a generated, pretty-printed JSON file (json/generate_json.rb: 524,288 objects, each with x, y and z doubles, a name string and an opts object holding a one-element array, plus a top-level info string) and average the x, y and z values (kostya/benchmarks 'Json' test). Timed region is parse plus averaging; reading the file and the self-test run before the timer. The Serde Typed row is serde_json::from_str into a #[derive(Deserialize)] struct with only x, y and z fields; the C++ rows build a full DOM.",
+    "claimed_speedup": "kostya/benchmarks Json table (medians; rows measured in the 2025-08-17 update and carried unchanged into the README dated 2026-07-19): Rust Serde Typed 0.110 s vs C++ RapidJSON 0.154 s (g++) and 0.194 s (clang++), RapidJSON Precise 0.212 s (g++) and 0.262 s (clang++), and nlohmann/json 1.266 s (g++) and 1.182 s (clang++). That is about 1.4x-1.8x faster than default RapidJSON, 1.9x-2.4x faster than RapidJSON Precise and 10.7x-11.5x faster than nlohmann/json (derived from page data). Rust Serde Custom (derive plus a hand-written visitor that folds the array without storing it) takes 0.103 s. Not faster than simdjson On-Demand 0.060 s (g++) / 0.062 s (clang++) or DAW JSON Link 0.085 s (clang++) / 0.089 s (g++); about equal to simdjson DOM 0.103 s (clang++) / 0.107 s (g++). The like-for-like DOM row, Rust Serde Untyped (serde_json::Value) at 0.557 s, is about 2.1x-2.3x faster than nlohmann/json but about 2.9x-3.6x slower than RapidJSON DOM (derived from page data).",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/kostya/benchmarks#json",
+    "baseline_stdlib": [
+      "libstdc++",
+      "libc++"
+    ],
+    "compiler_and_flags": "Measured toolchain (the Json rows date from the 2025-08-17 update, kostya/benchmarks commit 63ffa65, and are identical in the 2026-07-19 README, whose Versions table lists newer compilers that did not produce them): Rust 1.89.0, cargo build --release with RUSTFLAGS='-C target-cpu=native -C llvm-args=--x86-branches-within-32B-boundaries' and profile.release lto=true, codegen-units=1, panic=abort, strip=true (edition 2024); json.rs/Cargo.lock at that commit pinned serde_json 1.0.142 and serde/serde_derive 1.0.219, with no float_roundtrip feature. C++ baselines: g++ 14.2.0 and clang++ 19.1.7 (clang++ with -stdlib=libc++), -Wall -Wextra -pedantic -Wcast-align -O3 -march=native -flto=auto -Wa,-mbranches-within-32B-boundaries -std=c++23 and no -DNDEBUG; RapidJSON built without RAPIDJSON_SSE2 or RAPIDJSON_SSE42; RapidJSON (miloyip/rapidjson), nlohmann/json and simdjson shallow-cloned from master at build time (json/Makefile, common/commands.mk).",
+    "hardware": "Intel(R) Xeon(R) E-2324G; Docker image based on Debian GNU/Linux trixie/sid at the 2025-08-17 measurement (the 2026-07-19 README's Environment section now says forky/sid, but the Json rows for Rust, RapidJSON and nlohmann/json were not re-measured then).",
+    "compared_against_cpp_std_directly": false,
+    "license": "MIT OR Apache-2.0",
+    "usability": "copyable",
+    "last_commit": "2026-10-16",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "5.7k stars",
+    "has_code": true,
+    "tradeoffs": "Rust crate; a C++ project must reach it through an FFI or a separate process. Typed deserialization needs the target types known at compile time (derive), ignores unknown fields by default and uses far less memory than a DOM (111.75 MiB base + 11.12 MiB for Serde Typed vs 113.21 + 123.44 MiB for g++ RapidJSON and 447.88 MiB increase for g++ nlohmann/json on the same page). The untyped serde_json::Value DOM is much slower (0.557 s) and uses 839.75 MiB extra. float_roundtrip (exact float round-tripping) is an opt-in feature that costs about 2x float-parse speed per the crate's Cargo.toml comment.",
+    "caveats": "1) Not like for like: the typed Rust rows deserialize only x, y and z and skip name and opts without allocating (Serde Custom does not even store the array), while the RapidJSON and nlohmann/json rows build the whole document; the like-for-like DOM row (Serde Untyped, 0.557 s) loses to RapidJSON (0.154-0.194 s). 2) Asymmetric builds: the C++ flags carry no -DNDEBUG, so RAPIDJSON_ASSERT and nlohmann's JSON_ASSERT stay live as assert() (cost not measured), while the Rust release profile turns debug assertions off; RapidJSON is also built without RAPIDJSON_SSE2/SSE42, so its SIMD whitespace skipping is off on a pretty-printed, whitespace-heavy file. 3) Version drift: the README's Versions table (Rust 1.97.1, g++ 16.1.0, clang++ 22.1.8, serde_json 1.0.150) does not describe these rows; they were measured on 2025-08-17 with Rust 1.89.0, g++ 14.2.0, clang++ 19.1.7 and serde_json 1.0.142. 4) Float handling: the kostya Cargo.toml enables no float_roundtrip, so serde_json parses floats best-effort (an emulation by a wave14 enricher put 1-2 ULP errors on about 35% of the x values and about 10% of y and z); the README's list of inexact parsers names default RapidJSON but omits serde_json, and only the RapidJSON Precise rows (0.212/0.262 s) are exact, so the margin over Precise is not a same-accuracy comparison. UTF-8 validation of the input runs in fs::read_to_string outside the Rust timer. 5) simdjson On-Demand (0.060 s g++, 0.062 s clang++) is about 1.8x faster than Serde Typed and DAW JSON Link (0.085-0.089 s) about 1.2x-1.3x faster (derived from page data), so serde_json is not the fastest JSON option here. 6) Single workload on one machine from a third-party multi-language suite; medians with median absolute deviation. 7) The crate README's claim ('500 to 1000 megabytes per second deserialization and 600 to 900 megabytes per second serialization ... competitive with the fastest C and C++ JSON libraries or even 30% faster for many use cases') carries no table; its linked https://github.com/serde-rs/json-benchmark (archived by its owner 2024-05-20; serde_json 1.0.72, rustc 1.59.0-nightly 2021-12-07, Intel Core i7-6600U; C++ built with -std=c++1z -O3 under clang 11.0.0 and gcc 10.1.0) shows serde_json DOM parse at 320/420/300 MB/s (canada/citm_catalog/twitter), slower than RapidJSON's 380-390/680-890/320-440 MB/s on all three files; DOM stringify is faster on canada (430 vs 200-250 MB/s) and twitter (910 vs 600-870 MB/s) but slower on citm_catalog (560 vs 1090-1650 MB/s); struct parse is 580/710/550 MB/s with no labelled C++ struct column. That Rust harness sets jemalloc as the global allocator while the C++ harness uses the default allocator, the README's RapidJSON table does not say whether its columns are DOM or struct, and the committed cpp/main.cc runs only canada.json (citm_catalog and twitter are commented out), so those rows are not reproducible as committed. 8) serde_json is itself one of the json category's listed baselines.",
+    "found_via": [
+      "seed-record pass: started from https://github.com/serde-rs/json README (Performance section), then https://github.com/serde-rs/json-benchmark, then https://github.com/kostya/benchmarks (Json section, Rust Serde rows) and its json/Makefile, common/commands.mk, json.rs/Cargo.toml and test_*.cpp sources; one WebSearch for serde_json vs RapidJSON comparisons found no other suite with all three."
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.75,
+    "assignment_ids": [
+      "w4-mine-n"
+    ],
+    "id": "https://github.com/serde-rs/json",
+    "verification": {
+      "date": "2026-09-25",
+      "verdict": "downgrade",
+      "tier_before": "A",
+      "tier_reason": "The kostya/benchmarks Json table has every quoted row, and the harness is public (json/json.rs/src/json_struct.rs, json_pull.rs and json_value.rs against json/test_rapid.cpp and test_nlohmann_json.cpp; flags in common/commands.mk and json/Makefile; Xeon E-2324G), but the win over RapidJSON and nlohmann/json comes from unequal work (typed decoding that skips name and opts against full DOM builds; the like-for-like serde_json::Value row is 2.9x-3.6x slower than RapidJSON) and from C++ baselines built without -DNDEBUG or RapidJSON SIMD, so it is capped at C, matching the tier given to the same rows in wave14 (lang:rust/kostya/benchmarks#json). The record's compiler versions were also wrong: these rows date from the 2025-08-17 run.",
+      "notes": "Numbers match the kostya README exactly, but the Json rows for Rust, RapidJSON and nlohmann/json are byte-identical to the 2025-08-17 README (commit 63ffa65), so they were measured with Rust 1.89.0 / g++ 14.2.0 / clang++ 19.1.7, not the versions in the current table; all compared rows come from that same run. The same rows already back wave14's lang:rust/kostya/benchmarks#json (tier C); that entry's yyjson rows (0.131/0.132 s) first appeared in the 2026-07-19 update, so its Serde Custom vs yyjson ratio is a cross-run comparison and its recorded Rust 1.97.1 / serde_json 1.0.150 toolchain is wrong (retier candidate).",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/kostya/benchmarks/master/README.md",
+        "https://github.com/kostya/benchmarks/tree/master/json",
+        "https://github.com/kostya/benchmarks/commits/master/README.md",
+        "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/README.md",
+        "https://raw.githubusercontent.com/kostya/benchmarks/4d4ac9a/README.md",
+        "https://raw.githubusercontent.com/kostya/benchmarks/199aa74/README.md",
+        "https://raw.githubusercontent.com/kostya/benchmarks/master/json/Makefile",
+        "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/json/Makefile",
+        "https://raw.githubusercontent.com/kostya/benchmarks/master/common/commands.mk",
+        "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/common/commands.mk",
+        "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/Cargo.toml",
+        "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/json/json.rs/Cargo.toml",
+        "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/json/json.rs/Cargo.lock",
+        "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/Cargo.lock",
+        "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/src/json_struct.rs",
+        "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/src/json_pull.rs",
+        "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/src/json_value.rs",
+        "https://raw.githubusercontent.com/kostya/benchmarks/master/json/test_rapid.cpp",
+        "https://raw.githubusercontent.com/kostya/benchmarks/master/json/test_nlohmann_json.cpp",
+        "https://raw.githubusercontent.com/kostya/benchmarks/master/json/generate_json.rb",
+        "https://raw.githubusercontent.com/Tencent/rapidjson/master/include/rapidjson/rapidjson.h",
+        "https://raw.githubusercontent.com/nlohmann/json/develop/include/nlohmann/detail/macro_scope.hpp",
+        "https://github.com/serde-rs/json",
+        "https://github.com/serde-rs/json/commits/master",
+        "https://github.com/serde-rs/json-benchmark",
+        "https://raw.githubusercontent.com/serde-rs/json-benchmark/master/README.md",
+        "https://raw.githubusercontent.com/serde-rs/json-benchmark/master/cpp/main.cc",
+        "https://raw.githubusercontent.com/serde-rs/json-benchmark/master/cpp/Makefile",
+        "https://raw.githubusercontent.com/serde-rs/json-benchmark/master/Cargo.toml",
+        "https://raw.githubusercontent.com/serde-rs/json-benchmark/master/src/main.rs"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "claimed_speedup": "Rust Serde Typed 0.110 s vs RapidJSON 0.154 s (g++) and 0.194 s (clang++) and RapidJSON Precise 0.212 s (g++) and 0.262 s (clang++), and vs nlohmann/json 1.266 s (g++) and 1.182 s (clang++): about 1.4x-1.8x faster than default RapidJSON and about 10.7x-11.5x faster than nlohmann/json (derived from page data). Rust Serde Custom (derive plus hand-written visitor) 0.103 s. Not faster than simdjson On-Demand 0.060 s (g++) / 0.062 s (clang++) or DAW JSON Link 0.085-0.089 s; about equal to simdjson DOM 0.103-0.107 s. Rust Serde Untyped (serde_json::Value DOM) 0.557 s is about 2.1x-2.3x faster than nlohmann/json but about 2.9x-3.6x slower than RapidJSON DOM (derived from page data).",
+      "compiler_and_flags": "Rust (Serde rows): rustc 1.97.1, cargo build --release with RUSTFLAGS='-C target-cpu=native -C llvm-args=--x86-branches-within-32B-boundaries' and profile.release lto=true, codegen-units=1, panic=abort, strip=true; Cargo version requirements serde_json 1.0.150 and serde 1.0.228 (derive) with no extra serde_json features (no float_roundtrip). C++ baselines: g++ 16.1.0 and clang++ 22.1.8 with -Wall -Wextra -pedantic -Wcast-align -O3 -march=native -flto=auto -Wa,-mbranches-within-32B-boundaries -std=c++23 (clang++ also -stdlib=libc++); RapidJSON, nlohmann/json and simdjson cloned from their GitHub master at build time (kostya/benchmarks json/Makefile and common/commands.mk).",
+      "hardware": "Intel(R) Xeon(R) E-2324G, Docker image based on Debian GNU/Linux forky/sid (kostya/benchmarks README, Environment section; table updated 2026-07-19)",
+      "workload": "Parse a generated JSON file of 524,288 objects (each with x, y, z doubles, a name string and a nested opts array; json/generate_json.rb) and average the coordinates (kostya/benchmarks 'Json' test: parsing and simple calculating of values from a big JSON file); the Serde Typed row is serde_json::from_str into a #[derive(Deserialize)] struct.",
+      "caveats": "1) Not like for like: the typed Rust row skips the name and opts fields, while the C++ DOM rows build the whole document; the like-for-like DOM row (Serde Untyped, 0.557 s) loses to RapidJSON (0.154-0.194 s). 2) Float handling: the kostya Cargo.toml enables no float_roundtrip, so serde_json parses floats best-effort like default RapidJSON; the README itself notes that default RapidJSON has number-parsing inaccuracies, and only the Precise rows (0.212/0.262 s) are exact, so the 1.9x-2.4x margin over Precise is not a same-accuracy comparison. 3) simdjson On-Demand (0.060 s g++, 0.062 s clang++) is about 1.8x faster than Serde Typed (derived from page data) and DAW JSON Link (0.085-0.089 s) about 1.2x-1.3x faster, so serde_json is not the fastest JSON option here. 4) Single workload (large pretty-printed file, three double fields averaged) from one multi-language suite that is maintained by a third party; error bars shown, one machine. 5) The crate README performance claim ('500 to 1000 megabytes per second deserialization and 600 to 900 megabytes per second serialization ... competitive with the fastest C and C++ JSON libraries or even 30% faster for many use cases') carries no table; its linked https://github.com/serde-rs/json-benchmark (archived by its owner 2024-05-20; serde_json 1.0.72, rustc 1.59.0-nightly 2021-12-07, Intel Core i7-6600U, C++ built with -std=c++1z -O3 under clang 11.0.0 and gcc 10.1.0) shows serde_json DOM parse of 320/420/300 MB/s (canada/citm_catalog/twitter) slower than RapidJSON's 380-390/680-890/320-440 MB/s on all three files, DOM stringify faster on canada (430 vs 200-250 MB/s) and twitter (910 vs 600-870 MB/s) but slower on citm_catalog (560 vs 1090-1650 MB/s), and struct parse 580/710/550 MB/s with no C++ struct column labelled in the README. In that repo the Rust harness links jemalloc while the C++ harness uses the default allocator, the README's RapidJSON table does not say which columns are DOM or struct, and the committed cpp/main.cc benchmarks only canada.json (citm_catalog and twitter are commented out), so those rows are not reproducible as committed."
+    }
+  },
+  {
     "name": "simd-json (Rust)",
     "repo_url": "https://github.com/simd-lite/simd-json",
     "language": "Rust",
@@ -7430,6 +7517,78 @@
       "claimed_speedup": "Cista++ 'offset': serialize 4ms vs cereal 216ms (~54x), deserialize 0.16ms vs cereal 111ms (~694x), deserialize+traverse 66ms vs cereal 174ms (~2.6x); compile time (clang-7) 1.351s vs cereal 1.827s",
       "compiler_and_flags": "GCC 11, CMAKE_BUILD_TYPE=Release (compile-time table uses clang-7)",
       "caveats": "Benchmark numbers come from felixguendling's own companion repo (cpp-serialization-benchmark), so it is first-party, but methodology (code, compiler, OS, exact CPU) is fully public, which is why it still qualifies for tier A. The main cista README shows a second run of the same benchmark with different absolute numbers (72ms vs 239ms serialize) from a different session; both point the same direction. The very large deserialize speedup vs cereal is an architectural effect of zero-copy access (no parsing step), not a benchmarking artifact."
+    }
+  },
+  {
+    "name": "serde (serde_derive typed deserialization)",
+    "repo_url": "https://github.com/serde-rs/serde",
+    "language": "Rust",
+    "domain": "serialization-and-formats",
+    "category": "reflection-and-codegen",
+    "baseline": "RapidJSON DOM parser and nlohmann/json (JSON libraries in the same suite; no Cereal or Boost.Serialization comparison found)",
+    "baseline_in_list": false,
+    "metric": "throughput",
+    "workload": "Parse a generated, pretty-printed JSON file (json/generate_json.rb: 524,288 objects, each with x, y and z doubles, a name string and an opts object holding a one-element array, plus a top-level info string) and average the x, y and z values (kostya/benchmarks 'Json' test). Timed region is parse plus averaging; reading the file and the self-test run before the timer. The Serde Typed row is serde_json::from_str into a struct with #[derive(Deserialize)] (serde_derive code generation) holding only x, y and z; the Serde Custom row adds a hand-written Visitor through #[serde(deserialize_with)] that sums the array without storing it. The C++ rows build a full DOM.",
+    "claimed_speedup": "kostya/benchmarks Json table (medians; rows measured in the 2025-08-17 update and carried unchanged into the README dated 2026-07-19): Serde Typed (derive) 0.110 s and Serde Custom (derive plus visitor) 0.103 s vs C++ RapidJSON DOM 0.154 s (g++) and 0.194 s (clang++) and nlohmann/json 1.266 s (g++) and 1.182 s (clang++): about 1.4x-1.9x faster than default RapidJSON and about 10.7x-12.3x faster than nlohmann/json (derived from page data). Not faster than the closest declarative type-mapped C++ comparator in the suite, DAW JSON Link (0.085 s clang++, 0.089 s g++), nor than simdjson On-Demand (0.060-0.062 s). No comparison against Boost.Serialization or cereal exists.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/kostya/benchmarks#json",
+    "baseline_stdlib": [
+      "libstdc++",
+      "libc++"
+    ],
+    "compiler_and_flags": "Measured toolchain (the Json rows date from the 2025-08-17 update, kostya/benchmarks commit 63ffa65, and are identical in the 2026-07-19 README, whose Versions table lists newer compilers that did not produce them): Rust 1.89.0, cargo build --release with RUSTFLAGS='-C target-cpu=native -C llvm-args=--x86-branches-within-32B-boundaries' and profile.release lto=true, codegen-units=1, panic=abort, strip=true (edition 2024); json.rs/Cargo.lock at that commit pinned serde/serde_derive 1.0.219 and serde_json 1.0.142, with no float_roundtrip feature. C++ baselines: g++ 14.2.0 and clang++ 19.1.7 (clang++ with -stdlib=libc++), -Wall -Wextra -pedantic -Wcast-align -O3 -march=native -flto=auto -Wa,-mbranches-within-32B-boundaries -std=c++23 and no -DNDEBUG; RapidJSON built without RAPIDJSON_SSE2 or RAPIDJSON_SSE42; RapidJSON (miloyip/rapidjson) and nlohmann/json shallow-cloned from master at build time (json/Makefile, common/commands.mk).",
+    "hardware": "Intel(R) Xeon(R) E-2324G; Docker image based on Debian GNU/Linux trixie/sid at the 2025-08-17 measurement (the 2026-07-19 README's Environment section now says forky/sid, but these Json rows were not re-measured then).",
+    "compared_against_cpp_std_directly": false,
+    "license": "MIT OR Apache-2.0",
+    "usability": "copyable",
+    "last_commit": "2026-10-16",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "10.9k stars",
+    "has_code": true,
+    "tradeoffs": "Rust-only framework: derive macros generate the (de)serializers at compile time (no runtime reflection), so a C++ project can only use it across an FFI or a separate process. Typed deserialization uses far less memory than a DOM (111.75 MiB base + 11.12 MiB for Serde Typed vs 113.21 + 123.44 MiB for g++ RapidJSON on the same page). Derive-generated code adds compile time and binary size (not measured here).",
+    "caveats": "The serde repository itself has no benchmark or performance numbers (its README only says 'efficiently'); the only numbers found are the kostya/benchmarks Serde rows, which exercise serde's derive path through serde_json on JSON text, so this measures serde_json plus serde_derive, not serde as a format-agnostic framework. No comparison against Boost.Serialization, cereal or a C++ reflection-based serializer was found; the baselines beaten (RapidJSON, nlohmann/json) are DOM-style JSON parsers outside the category's listed baselines. Not like for like: the typed rows skip the name and opts fields without allocating while the C++ rows build the whole document; the DOM-style serde_json::Value row (0.557 s) is slower than RapidJSON DOM (0.154-0.194 s). Asymmetric builds: the C++ flags carry no -DNDEBUG, so RAPIDJSON_ASSERT and nlohmann's JSON_ASSERT stay live as assert() (cost not measured), while the Rust release profile turns debug assertions off; RapidJSON is built without RAPIDJSON_SSE2/SSE42 on a whitespace-heavy pretty-printed file. Version drift: the README's Versions table (Rust 1.97.1, g++ 16.1.0, clang++ 22.1.8) does not describe these rows, which were measured on 2025-08-17 with Rust 1.89.0, g++ 14.2.0, clang++ 19.1.7, serde 1.0.219 and serde_json 1.0.142. The kostya build does not enable serde_json's float_roundtrip, so floats are parsed best-effort, as in default RapidJSON; RapidJSON Precise rows are 0.212 s (g++) and 0.262 s (clang++). UTF-8 validation runs in fs::read_to_string outside the Rust timer. The closest declarative, type-mapped C++ comparator, DAW JSON Link, is faster (0.085-0.089 s) and simdjson On-Demand is about 1.8x faster (0.060 s g++, derived from page data), so serde does not beat the best C++ typed parsers on this workload. The same suite and rows back the serde_json record (https://github.com/serde-rs/json) in this wave and wave14's lang:rust/kostya/benchmarks#json, so this record may fold into those. Single workload, one machine.",
+    "found_via": [
+      "seed-record pass: started from https://github.com/serde-rs/serde (README has no benchmarks), followed the serde_json README Performance section to https://github.com/serde-rs/json-benchmark and https://github.com/kostya/benchmarks (Json section, Serde Typed and Serde Custom rows; json.rs/src/json_struct.rs and json_pull.rs)."
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.5,
+    "assignment_ids": [
+      "w4-mine-n"
+    ],
+    "id": "https://github.com/serde-rs/serde",
+    "verification": {
+      "date": "2026-09-25",
+      "verdict": "downgrade",
+      "tier_before": "A",
+      "tier_reason": "The only numbers are the kostya/benchmarks Json rows (public code json/json.rs/src/json_struct.rs and json_pull.rs against json/test_rapid.cpp and test_nlohmann_json.cpp; flags in common/commands.mk; Xeon E-2324G), which test serde's derive path through serde_json against DOM JSON parsers, not against the category baselines Boost.Serialization or cereal. The win rests on unequal work (typed decoding that skips fields against full DOM builds) and on C++ baselines built without -DNDEBUG, so it is capped at C like the same rows in wave14's lang:rust/kostya/benchmarks#json; the record's compiler versions were also wrong (rows measured 2025-08-17).",
+      "notes": "Same kostya rows as the serde_json record in this batch; nothing serde-specific beyond the derive path and no reflection-and-codegen baseline (Boost.Serialization, cereal), so recording it as a duplicate of https://github.com/serde-rs/json is reasonable. Metadata confirmed: MIT OR Apache-2.0, 10.9k stars, last commit 2026-10-16, not archived or a fork.",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/kostya/benchmarks/master/README.md",
+        "https://github.com/kostya/benchmarks/commits/master/README.md",
+        "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/README.md",
+        "https://raw.githubusercontent.com/kostya/benchmarks/4d4ac9a/README.md",
+        "https://raw.githubusercontent.com/kostya/benchmarks/master/json/Makefile",
+        "https://raw.githubusercontent.com/kostya/benchmarks/master/common/commands.mk",
+        "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/json/json.rs/Cargo.lock",
+        "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/Cargo.toml",
+        "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/src/json_struct.rs",
+        "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/src/json_pull.rs",
+        "https://raw.githubusercontent.com/kostya/benchmarks/master/json/test_rapid.cpp",
+        "https://raw.githubusercontent.com/kostya/benchmarks/master/json/test_nlohmann_json.cpp",
+        "https://raw.githubusercontent.com/kostya/benchmarks/master/json/generate_json.rb",
+        "https://github.com/serde-rs/serde",
+        "https://github.com/serde-rs/serde/commits/master"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "claimed_speedup": "Serde Typed (derive) 0.110 s and Serde Custom (derive plus visitor) 0.103 s vs RapidJSON 0.154 s (g++) and 0.194 s (clang++), and vs nlohmann/json 1.266 s (g++) and 1.182 s (clang++): about 1.4x-1.9x faster than default RapidJSON and about 10.7x-11.5x faster than nlohmann/json (derived from page data). Not faster than the closest declarative type-mapped C++ comparator in the suite, DAW JSON Link (0.085 s clang++, 0.089 s g++), nor than simdjson On-Demand (0.060-0.062 s).",
+      "compiler_and_flags": "Rust (Serde rows): rustc 1.97.1, cargo build --release with RUSTFLAGS='-C target-cpu=native -C llvm-args=--x86-branches-within-32B-boundaries' and profile.release lto=true, codegen-units=1, panic=abort, strip=true; Cargo version requirements serde_json 1.0.150 and serde 1.0.228 (derive) with no extra serde_json features (no float_roundtrip). C++ baselines: g++ 16.1.0 and clang++ 22.1.8 with -Wall -Wextra -pedantic -Wcast-align -O3 -march=native -flto=auto -Wa,-mbranches-within-32B-boundaries -std=c++23 (clang++ also -stdlib=libc++); RapidJSON, nlohmann/json and simdjson cloned from their GitHub master at build time (kostya/benchmarks json/Makefile and common/commands.mk).",
+      "hardware": "Intel(R) Xeon(R) E-2324G, Docker image based on Debian GNU/Linux forky/sid (kostya/benchmarks README, Environment section; table updated 2026-07-19)",
+      "workload": "Parse a generated JSON file of 524,288 objects (each with x, y, z doubles, a name string and a nested opts array; json/generate_json.rb) and average the coordinates (kostya/benchmarks 'Json' test: parsing and simple calculating of values from a big JSON file); the Serde Typed row is serde_json::from_str into a struct with #[derive(Deserialize)] (serde_derive code generation) and the Serde Custom row adds a hand-written Visitor through #[serde(deserialize_with)].",
+      "caveats": "The serde repository itself has no benchmark or performance numbers (its README only says 'efficiently'); the only numbers found are the kostya/benchmarks Serde rows, which exercise serde's derive path through serde_json on JSON text. No comparison against Cereal, Boost.Serialization or a C++ reflection-based binary serializer was found (web searches surfaced only C++-only suites such as cpp-serializers and Rust-only suites); the baselines beaten here (RapidJSON, nlohmann/json) are DOM-style JSON parsers outside the listed baselines, hence baseline_in_list false. Not like for like: the typed rows skip the name and opts fields while the C++ DOM rows build the whole document; the DOM-style serde_json::Value row (0.557 s) is slower than RapidJSON DOM (0.154-0.194 s). The kostya build does not enable serde_json's float_roundtrip, so floats are parsed best-effort, as in default RapidJSON; RapidJSON Precise rows are 0.212 s (g++) and 0.262 s (clang++). The closest declarative, type-mapped C++ comparator DAW JSON Link is faster (0.085-0.089 s) and simdjson On-Demand is about 1.8x faster (0.060 s g++), so serde does not beat the best C++ typed parsers on this workload. The same suite and rows back the serde_json record (https://github.com/serde-rs/json) from this pass, so this record may fold into that one. Single workload, one machine, table updated 2026-07-19."
     }
   },
   {

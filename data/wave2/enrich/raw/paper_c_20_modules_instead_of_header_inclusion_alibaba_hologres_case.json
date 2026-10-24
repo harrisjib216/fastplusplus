@@ -1,0 +1,43 @@
+{
+  "id": "paper:c-20-modules-instead-of-header-inclusion-alibaba-hologres-case",
+  "one_liner": "Field report: moving Alibaba's Hologres code base from #include headers to C++20 named modules cut its compile time 42%.",
+  "what_it_does": "This is a technique entry, not a library: replace textual #include of project and standard-library headers with C++20 named modules (export module / import), so each interface is parsed once into a Built Module Interface (BMI) and imported by every translation unit that needs it. Alibaba Cloud reports doing this on the Hologres data-warehouse mainline with its in-house Clang/LLVM-based Alibaba Cloud Compiler, which also ships a modularised standard library (std module). It is not a drop-in switch: sources, the build graph and often the library ABI change, and the build system must scan sources for module dependencies.",
+  "how_it_is_fast": "Header inclusion re-preprocesses and re-parses the same headers in every translation unit (the post's hello-world example says <iostream> alone expands to about 30,000 lines, roughly 1 MB, under libstdc++); a module interface is compiled once to a BMI and later imports deserialize it lazily. Clang's documentation describes modules as 'a kind of cache to speed up compilation'; Reduced BMIs (-fmodules-reduced-bmi) and, from Clang 19, non-cascading BMI changes cut the rebuilds caused by edits to transitive dependencies. Clang can also preload a prebuilt std BMI with -fmodule-file=<std BMI> to get most of the std-module benefit without rewriting includes.",
+  "when_to_use": [
+    "Large C++ code bases where front-end time on heavy, widely included headers (standard library, template-heavy internal libraries) dominates full builds.",
+    "Teams that control the whole toolchain: Clang 16+ (or GCC 14+, MSVC 14.34+) with CMake 3.28+ and Ninja 1.11+, and Clang 18.1.2+ / GCC 15+ / MSVC 14.36+ if you want import std through CMake.",
+    "New code or internal libraries that can adopt module interfaces from the start, or libraries that can ship a named-module wrapper next to their headers (the export-using style that keeps the ABI).",
+    "Projects whose header hygiene is already good, since duplicated global-module-fragment includes erase much of the gain."
+  ],
+  "when_not_to_use": [
+    "Code bases that already build fast with precompiled headers, unity builds or a lightweight core API: the {fmt} author reported no measurable build speed-up from modules over the lightweight core API (search snippet), and the Hologres post's baseline may not have included PCH.",
+    "When many module units include the same big headers in their global module fragments: Clang's performance tips warn that duplicated declarations make importers compile more slowly, and an LLVM Discourse thread ('Modules increased build times', snippet only) found half the compile time spent reading modules.",
+    "Mixed toolchains or IDE/tooling pipelines that do not yet understand modules, Make-based builds, or Visual Studio generators if you need import std (CMake supports import std only with Ninja generators).",
+    "Builds that rely on CMake UNITY_BUILD: scanned module sources are excluded from unity builds.",
+    "Shipping libraries to outside users whose ABI must not change: the ABI-breaking transition style changes name mangling and module initializers."
+  ],
+  "integration": {
+    "form": "language feature (C++20 named modules); no package to install",
+    "dependencies": "A module-aware compiler and a dependency-scanning build system: CMake 3.28+ with the Ninja (1.11+) or Visual Studio 17 2022+ generators, or xmake; Hologres itself used Alibaba Cloud Compiler (in-house, based on open-source Clang/LLVM, per post snippets).",
+    "min_toolchain": "C++20. CMake scanning: Clang 16.0+, GCC 14+, MSVC toolset 14.34+ (VS 17.4+). CMake import std: Clang 18.1.2+ with libc++ or libstdc++, GCC 15+ (16+ on macOS), MSVC 14.36+ (VS 17.6+). Hologres compiler version not documented.",
+    "platforms": "Any platform the compiler supports; the Hologres post's experiments ran on Alibaba Cloud Linux (Alinux, per snippet). CMake notes Ubuntu releases before 26.04 ship broken libstdc++.modules.json files for import std.",
+    "thread_safety": "not applicable (compile-time technique)",
+    "drop_in_for_baseline": "partial — the std module can be preloaded with Clang's -fmodule-file without source changes, but converting project headers means writing module interface units, reordering includes and imports, and possibly changing the library ABI."
+  },
+  "gotchas": [
+    "Clang rejects a BMI used with different language-dialect options (for example built with -std=c++20, imported with -std=c++23); every importer must match the module's dialect flags.",
+    "#include of a header after an import of a module that already contains it is rejected in Clang today (llvm-project issue #61465); keep includes before imports or move everything to imports.",
+    "Clang's cross-TU ODR checking has many false positives and is disabled for the global module fragment by default; BMIs drop the preferred_name attribute, so debuggers show uglier type names.",
+    "The reported 0.03 s 'import std' hello-world time excludes building the std module itself, which is precompiled once; the 42% figure does not say whether it covers full or incremental builds."
+  ],
+  "pick_this_over_siblings_when": "The siblings (asp staged parsers, RapidProto, Zserio, FlatBuffers, vtprotobuf) speed up generated code at run time; this entry is the one to read when the problem is your own C++ build time rather than parse or serialization speed.",
+  "verified_claims_summary": "Alibaba Cloud's blog (English and Chinese versions, both seen only through search snippets because the pages did not resolve here) says C++20 modules have run on the Hologres mainline for more than a year and a half and reduced its compile time by 42%, using Alibaba Cloud Compiler built from open-source Clang/LLVM; the baseline is header inclusion with no stated use of precompiled headers, and no compiler version, flags, hardware, build type or full-versus-incremental split is published. Other projects report anything from roughly halving full builds (Infinity, per snippet) to slower builds (LLVM Discourse thread), so the 42% is project-specific.",
+  "status_note": "Reference-only first-party case study from a closed commercial code base with no public code; the technique itself is standard C++20, and Alibaba's open-source async_simple carries an experimental named-module wrapper (Clang 16+, CMake 3.26+ or xmake) that shows a related, copyable style.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/llvm/llvm-project/main/clang/docs/StandardCPlusPlusModules.md",
+    "https://github.com/llvm/llvm-project/tree/main/clang/docs",
+    "https://raw.githubusercontent.com/Kitware/CMake/master/Help/manual/cmake-cxxmodules.7.rst",
+    "https://raw.githubusercontent.com/alibaba/async_simple/HEAD/README.md"
+  ],
+  "confidence": 0.45
+}

@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/dropbox/rust-brotli",
+  "one_liner": "Safe, no_std-capable Rust port of Google's Brotli encoder and decoder; slower than the C reference, not faster.",
+  "what_it_does": "The brotli crate is a line-by-line port of google/brotli's compressor (and, through its brotli-decompressor dependency, the decompressor) to Rust, with io::Read/io::Write wrappers (CompressorReader, CompressorWriter, Decompressor, DecompressorWriter), one-shot BrotliCompress/BrotliDecompress stream copies, and a manual BrotliState/BrotliDecompressStream interface that mirrors the C API. It runs without the Rust standard library behind a pluggable allocator, and an optional ffi-api feature builds a libbrotli.so (cd c && make) that the README calls a drop-in replacement for the C library. Extras over C include multithreaded single-file compression (compress_multi), catable/appendable streams with a catbrotli tool, custom and serialized shared dictionaries (9.0.0), and a validation mode.",
+  "how_it_is_fast": "It is not faster than the baseline: it reuses the same algorithms as C Brotli (LZ77 with hash-chain or binary-tree matchers, context modeling, Huffman coding) in safe Rust, so speed tracks C minus safety costs. The decompressor README names the expected losses: an extra indirection in the Huffman-group tables, array bounds checks on every access, and no aligned 64- or 128-bit loads from a byte slice. brotli-decompressor's optional unsafe feature swaps slice indexing for get_unchecked and skips memory initialisation, and its 6.1.0/6.1.1 releases (October 2026) add bulk back-reference and dictionary copies, a faster bit-reader refill and leaner Huffman-tree lookups, none of which has published numbers.",
+  "when_to_use": [
+    "You need the Brotli format in pure safe Rust: wasm, cross-compiles without a C toolchain, or a no_std kernel or embedded target with your own allocator.",
+    "Sandboxed decoding where every allocation is front-loaded into a memory pool before SECCOMP or a similar jail is switched on.",
+    "Splitting work across cores or chunks: compress_multi for multithreaded compression of one buffer, or catable/appendable streams joined by byte concatenation or catbrotli.",
+    "HTTP content-encoding in Rust servers at moderate quality (tower-http depends on it and sets quality 4), where encoder CPU rather than decode throughput is the concern.",
+    "Brotli with custom LZ77 prefix dictionaries or serialized shared dictionaries (draft-vandevenne-shared-brotli-format) from Rust."
+  ],
+  "when_not_to_use": [
+    "Decode throughput matters: every published number puts it behind C, from 72-82% of C speed (Dropbox 2016) to 1.56x slower in a 2026 third-party test; that project (android-doctor) switched to vendored C libbrotli 1.1.0 and cut its firmware extraction from 4.65 s to 2.28 s.",
+    "You can choose the format: the catalog's zstd and LZ4 entries report decompression at 1,550 and 4,970 MB/s, far above the 250-391 MB/s Brotli decode figures here (different hardware, so only indicative).",
+    "You want the newest decoder optimisations through this crate: brotli 9.0.0 pins brotli-decompressor ~6.0 (>=6.0.0, <6.1.0), so the 6.1.x speed work is only reachable by depending on brotli-decompressor directly for decoding.",
+    "Your policy excludes AI-authored code: brotli-decompressor 6.0.0's changelog says its commits were 'effectively authored by Claude' and advises such users to stay on 5.x, which brotli 9.0.0 cannot use.",
+    "You need bit-exact output with C at quality 10 or 11: the README only promises identical output at levels 0-9."
+  ],
+  "integration": {
+    "form": "crate (brotli on crates.io); optional C shared library via the ffi-api feature",
+    "dependencies": "alloc-no-stdlib 3.x, brotli-decompressor ~6.0, alloc-stdlib 0.3.x with the default std feature; sha2 ~0.10 only with the validation feature",
+    "min_toolchain": "Rust 1.59 (rust-version), edition 2015; the simd feature needs nightly",
+    "platforms": "any Rust target; no_std with default-features = false; no hardware SIMD unless the nightly simd feature is enabled",
+    "thread_safety": "Not documented for the stream objects; each Compressor/Decompressor owns its state, and compress_multi requires Send allocators per thread. 9.0.0 fixed #257, where the FFI's SendableMemoryBlock<T> claimed Send for non-Send T.",
+    "drop_in_for_baseline": "partial — the ffi-api build exports the C libbrotli interface (README: drop-in for google/brotli), but the FFI has been off by default since 5.0.0 to avoid symbol conflicts, and the Rust API is not the C API."
+  },
+  "gotchas": [
+    "BrotliEncoderParams::default() uses quality 11 (lgwin 22), which is very slow; issue #93 (open since 2023-03-21) asks for a lower default, and tower-http overrides it to 4.",
+    "Quality 10 is reused as a proxy for '9.5' (a hash-chain H9 mode) in the one-shot compressor, so it does not mean C's quality 10; the portable-float feature also changes emitted bytes (about 0.006% ratio).",
+    "brotli 9.0.0 has no unsafe feature of its own; brotli-decompressor's unsafe feature (get_unchecked indexing, no memory initialisation) is only reachable by adding that crate directly with the feature enabled so Cargo unifies it.",
+    "The Cargo description says all included code is safe and the README excepts only the FFI bindings, but the seccomp feature turns on alloc-no-stdlib's unsafe calloc-backed pools; the 'safe' feature removes the FFI's unsafe Send impls along with the encoder and multicompress FFI entry points."
+  ],
+  "pick_this_over_siblings_when": "Choose it over the C codecs in this category (zstd, LZ4, zlib-ng, libdeflate) only when the Brotli format is required and a pure safe-Rust, no_std or C-toolchain-free build matters more than speed. Unlike lz4_flex, which matches or beats its C reference, this port trails C Brotli decoding by roughly 1.2x to 2x.",
+  "verified_claims_summary": "Dropbox's 2016 post, seen only as search snippets because dropbox.tech does not resolve here, measured the safe Rust decompressor at 217 MB/s, 72% of the C decompressor built with gcc-4.9 -O3, on 4 MB blocks on an Intel Core i7-4790 at 3.60 GHz, rising to 249 MB/s (82%) with the unsafe feature; the Rust toolchain was not stated and no benchmark code is public. Independently, android-doctor issue #74 (October 2026, 10-core Apple Silicon, release build) measured brotli 9.0 decoding at 250 MB/s against 391 MB/s for C via Python brotli (1.56x slower), then 4.65 s against 2.28 s end to end after switching to vendored libbrotli 1.1.0; neither run states quality, Python brotli version or compiler flags, and both predate brotli-decompressor 6.1.x. No compression-speed comparison with C exists.",
+  "status_note": "Actively maintained (9.0.0 on 2026-09-02, brotli-decompressor 6.1.1 on 2026-10-21), BSD-3-Clause AND MIT, about 302.6 million crates.io downloads; the safe, portable Brotli choice in Rust, not the fast one.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/dropbox/rust-brotli/HEAD/README.md",
+    "https://raw.githubusercontent.com/dropbox/rust-brotli/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/dropbox/rust-brotli/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/dropbox/rust-brotli/HEAD/src/enc/mod.rs",
+    "https://raw.githubusercontent.com/dropbox/rust-brotli/HEAD/src/enc/encode.rs",
+    "https://raw.githubusercontent.com/dropbox/rust-brotli/HEAD/src/enc/multithreading.rs",
+    "https://raw.githubusercontent.com/dropbox/rust-brotli/HEAD/src/enc/backward_references/mod.rs",
+    "https://github.com/dropbox/rust-brotli/commits/master",
+    "https://github.com/dropbox/rust-brotli/issues?q=is%3Aissue+slow+OR+performance+OR+speed",
+    "https://github.com/dropbox/rust-brotli/issues/76",
+    "https://github.com/dropbox/rust-brotli/issues/93",
+    "https://raw.githubusercontent.com/dropbox/rust-brotli-decompressor/HEAD/README.md",
+    "https://raw.githubusercontent.com/dropbox/rust-brotli-decompressor/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/dropbox/rust-brotli-decompressor/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/dropbox/rust-brotli-decompressor/HEAD/src/memory.rs",
+    "https://raw.githubusercontent.com/dropbox/rust-brotli-decompressor/HEAD/src/decode.rs",
+    "https://github.com/dropbox/rust-brotli-decompressor/tree/master/src",
+    "https://github.com/dropbox/rust-brotli-decompressor/commits/master",
+    "https://crates.io/api/v1/crates/brotli",
+    "https://crates.io/api/v1/crates/brotli-decompressor",
+    "https://github.com/Vaibhav91one/android-doctor/issues/74"
+  ],
+  "confidence": 0.75
+}

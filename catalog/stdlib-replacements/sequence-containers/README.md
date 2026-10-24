@@ -3,7 +3,7 @@
 <sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [C++ standard library replacements](../README.md)</sub>
 
 **What these beat:** std::vector, std::deque, std::list, std::array  
-**12 entries:** 3 tier A · 0 tier B · 7 tier C · 2 tier D · 12 copyable, 0 study only
+**13 entries:** 3 tier A · 0 tier B · 8 tier C · 2 tier D · 13 copyable, 0 study only
 
 | # | Project | What it is | Tier | Language | License | Status |
 |--:|---|---|:-:|---|---|---|
@@ -16,8 +16,9 @@
 | 7 | [**veque**](shmoopty-veque.md) | Header-only C++20 double-ended vector: std::vector's contiguous storage plus std::deque's fast front growth. | **C** | C++ | BSL-1.0 | 🟢 active |
 | 8 | [**plf::stack**](mattreecebentley-plf-stack.md) | Header-only LIFO container on chained, never-relocated memory blocks; author reports it beats std::stack over std::deque. | **C** | C++ | Zlib | 🟢 active |
 | 9 | [**libcdada**](msune-libcdada.md) | Pure C API (list, set, map, queue, stack, string, bitmap) wrapping libstdc++ containers; matches libstdc++ at best, never beats it. | **C** | C | BSD-2-Clause | 🟢 active |
-| 10 | [**fast_vector (sigerror/fast-vector)**](sigerror-fast-vector.md) | Header-only C++17 vector without zero-init, exceptions, or a real allocator; beats std::vector on trivial-type push_back workloads. | **C** | C++ | MIT | 🔴 abandoned |
-| 11 | [**sfl-library small and static containers (sfl::small_vector…**](slavenf-sfl-library.md) | Header-only C++11 small_vector, static_vector and small_flat_map that avoid heap allocation for up to N elements; no benchmark numbers. | **D** | C++ | Zlib | 🟢 active |
-| 12 | [**rpp (TheNumbat/rpp) compile-time-oriented containers and…**](thenumbat-rpp.md) | Rust-style C++20 base library (Vec, Map, String, allocators, threads, async) that avoids STL headers to cut compile time. | **D** | C++ | MIT | 🟡 stale |
+| 10 | [**Data Structures and Algorithms with the C++ STL…**](paper-book-data-structures-and-algorithms-with-the-cpp-stl-vector-reserve.md) | Book sample timing std::vector&lt;int&gt;::reserve(n) before 100,000 push_back calls against the same loop without reserve. | **C** | C++ | MIT | 🟡 stale |
+| 11 | [**fast_vector (sigerror/fast-vector)**](sigerror-fast-vector.md) | Header-only C++17 vector without zero-init, exceptions, or a real allocator; beats std::vector on trivial-type push_back workloads. | **C** | C++ | MIT | 🔴 abandoned |
+| 12 | [**sfl-library small and static containers (sfl::small_vector…**](slavenf-sfl-library.md) | Header-only C++11 small_vector, static_vector and small_flat_map that avoid heap allocation for up to N elements; no benchmark numbers. | **D** | C++ | Zlib | 🟢 active |
+| 13 | [**rpp (TheNumbat/rpp) compile-time-oriented containers and…**](thenumbat-rpp.md) | Rust-style C++20 base library (Vec, Map, String, allocators, threads, async) that avoids STL headers to cut compile time. | **D** | C++ | MIT | 🟡 stale |
 
 <sub>Tiers: **A** reproducible public benchmark (code, compiler, flags and CPU stated) · **B** independent or peer-reviewed measurement · **C** first-party claim · **D** directional, no numbers. Status: 🟢 active · 🔵 finished · 🟡 slow or stale · 🔴 abandoned · ⚪ unknown. *Study only* means no usable open-source license: read the idea, don't copy the code.</sub>

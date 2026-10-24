@@ -1,0 +1,47 @@
+{
+  "id": "paper:book-extreme-c-row-major-matrix-traversal",
+  "one_liner": "Book example: summing a row-major C int matrix in memory order instead of column by column, for cache locality.",
+  "what_it_does": "Example 5.6 from the Packt book Extreme C (ch05-stack-and-heap/ExtremeC_examples_chapter5_6.c) is a command-line program that mallocs a rows x columns int matrix as one flat row-major array, fills it, and then prints it or sums it with friendly_sum (rows outer, columns inner, so addresses rise by 4 bytes) or not_friendly_sum (columns outer, so each step jumps a whole row). There is no library: the takeaway is to order nested loops so the innermost index walks contiguous memory. The book times each mode as a separate process with the shell's time command on a 20,000 x 20,000 matrix.",
+  "how_it_is_fast": "Spatial locality: the row-order walk uses every int of each cache line it loads (16 per 64-byte line) and gives the hardware prefetcher one sequential stream. The column-order walk on a 20,000-column matrix strides 80,000 bytes per step, so every access lands on a different cache line and a different 4 KB page; the roughly 1.3 MB of lines one column touches exceed the inner caches before the next column reuses them, and 20,000 distinct pages per column overflow the TLB. The fix is loop interchange; for patterns that must walk both ways (transpose, matrix multiply) the standard follow-up is loop tiling (blocking).",
+  "when_to_use": [
+    "Any loop nest over a row-major buffer (C 2-D arrays, a flat std::vector indexed i*cols+j, image rows, row-major tensors): make the last index the innermost loop.",
+    "Matrices or images much larger than the caches, where a strided walk costs a cache miss and often a TLB miss per element; the example's 1.6 GB matrix is the extreme case.",
+    "Builds where the compiler will not reorder the loops for you: unoptimised builds, or optimised builds without loop interchange (GCC turns -floop-interchange on only at -O3).",
+    "Column-major data (Fortran and BLAS/LAPACK conventions): the same rule applies with the roles swapped, so the row index goes innermost."
+  ],
+  "when_not_to_use": [
+    "Algorithms that must read the same data in both orders (transpose, matrix multiply, column reductions alongside row reductions): interchange alone cannot make both sides sequential; use tiling or a tuned BLAS from the catalog's blas-lapack category.",
+    "Matrices that fit in L1 or L2: the gap comes from cache and TLB misses, so it shrinks once the data stays cached (the example does not measure small sizes).",
+    "As copyable code: the sample accumulates into a signed int that overflows at the book's size, never checks malloc, does its size and index arithmetic in int (overflow above about 2.1 billion elements) and fills each row with its row number rather than a running counter.",
+    "Floating-point reductions where bit-exact results matter: interchanging the loops changes the summation order and can change the rounding."
+  ],
+  "integration": {
+    "form": "source-drop (a loop-order idiom; the example is one C file)",
+    "dependencies": "none (C standard library: stdio.h, stdlib.h, string.h)",
+    "min_toolchain": "C99 (declarations inside for statements); the chapter's CMakeLists.txt sets no standard, build type or flags, and the root CMakeLists.txt never builds chapter 5 (its add_subdirectory(ch05) line is commented out and names a folder that is actually ch05-stack-and-heap), so it is compiled by hand",
+    "platforms": "any; the size of the gap depends on cache line size, cache sizes, TLB reach and the prefetchers",
+    "thread_safety": "not applicable (single-threaded example; the sums only read the matrix)",
+    "drop_in_for_baseline": "partial — swap the two loops over the same data; integer results stay the same (absent overflow), floating-point reductions may round differently"
+  },
+  "gotchas": [
+    "The book's figures time the whole process with the shell, so the 1.6 GB malloc, its page faults and a row-order fill() pass are inside both timings; since that setup is the same in both modes, the traversal-only ratio is larger than the relayed about 3.0x.",
+    "The sum of the 20,000 x 20,000 matrix is about 4.0e12, far beyond a 32-bit int; signed overflow is undefined behaviour in C, which an optimiser may exploit. Use a 64-bit accumulator.",
+    "One shell-timed run per mode, no repetitions, flags or CPU stated; with an optimising compiler that performs loop interchange (GCC at -O3) not_friendly_sum may be rewritten into the friendly order and the gap can vanish (not measured here).",
+    "The usage path is broken: the first printf has a %s with no argument and argv[0] is passed to the second printf, which has no conversion; it only runs when arguments are missing."
+  ],
+  "pick_this_over_siblings_when": "The siblings are container libraries (EASTL, plf::colony, veque) that replace data structures; this entry is a zero-cost loop-order fix for code that already holds a contiguous row-major buffer. It pairs with The Art of Writing Efficient Programs vector-versus-list entry: that one makes the data contiguous, this one walks contiguous data in memory order.",
+  "verified_claims_summary": "The book reports one run of example 5.6 on a 20,000 x 20,000 int matrix built with clang on macOS, flags and CPU not stated: about 5.2 s for the row-order sum against about 15.4 s column by column, about 3.0x (derived from the relayed numbers), each timed with the shell's time around a whole process that also allocates and fills the 1.6 GB matrix. The numbers come from the book via the seed lead; no repo page carries them.",
+  "status_note": "Abandoned Packt companion repo (last commit 2023-01-18 on book-promotion notices; this file unchanged since its 2019-08-16 import), MIT-licensed; the idea needs no code, and the sample should not be vendored as-is because of its overflow and unchecked-malloc bugs.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/PacktPublishing/Extreme-C/master/ch05-stack-and-heap/ExtremeC_examples_chapter5_6.c",
+    "https://raw.githubusercontent.com/PacktPublishing/Extreme-C/master/ch05-stack-and-heap/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/Extreme-C/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/Extreme-C/master/README.md",
+    "https://github.com/PacktPublishing/Extreme-C",
+    "https://github.com/PacktPublishing/Extreme-C/commits/master",
+    "https://github.com/PacktPublishing/Extreme-C/commits/master/ch05-stack-and-heap/ExtremeC_examples_chapter5_6.c",
+    "https://github.com/PacktPublishing/Extreme-C/issues?q=is%3Aissue",
+    "https://github.com/PacktPublishing/Extreme-C/issues/4"
+  ],
+  "confidence": 0.6
+}

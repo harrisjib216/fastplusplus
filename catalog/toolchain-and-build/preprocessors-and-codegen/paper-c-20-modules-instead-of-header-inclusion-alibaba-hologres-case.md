@@ -12,6 +12,7 @@
 | **Claimed result** | Alibaba reports C++20 modules cut Hologres compile time by 42% (blog title '42% Boost in Compilation Efficiency! A Practical Analysis of C++ Modules'); snippet says modules have run on the Hologres mainline for more than a year and a half. A snippet also mentions an import-std test of about 0.03 s, 'an order of magnitude' better than headers (unverified). |
 | **Workload** | Compile time of Alibaba's Hologres mainline code base after moving from header inclusion to C++20 modules (per search-result snippet of the Alibaba Cloud blog; the page itself could not be opened). |
 | **Metric** | compile-time |
+| **Compiler and flags** | Alibaba Cloud Compiler, an in-house Clang/LLVM-based compiler (per search snippet); version and flags not stated. |
 | **Adoption** | Used on the Hologres mainline (Alibaba Cloud data warehouse), per the blog snippet |
 | **Links** | [benchmark](https://www.alibabacloud.com/blog/42%25-boost-in-compilation-efficiency-a-practical-analysis-of-c%2B%2B-modules_601974) |
 
@@ -63,10 +64,11 @@ The siblings (asp staged parsers, RapidProto, Zserio, FlatBuffers, vtprotobuf) s
 ## Known shortcomings
 
 - Snippet only (the Alibaba Cloud post was unreachable); a 42% compile-time cut on an in-house Clang/LLVM build of a closed codebase; import std at 0.03 s excludes building the std module; no public code.
+- Enricher: still snippet only (alibabacloud.com, help.aliyun.com, discourse.llvm.org unreachable); no stated baseline (PCH or not, full or incremental); in-house Clang-based compiler; the 0.03 s import std excludes building the std module; other projects report mixed module results.
 
 ## Caveats and trade-offs
 
-Snippet only: www.alibabacloud.com failed to resolve (getaddrinfo ENOTFOUND) in this session, so the numbers, compiler, flags, hardware and baseline details come from WebSearch result summaries, not from the page. Vendor blog about a product the vendor sells, so tier C at best. Hologres is a commercial Alibaba Cloud product with no public source repository found, no benchmark code is public, compiler and flags are unknown, and it is unclear whether the 42% covers full or incremental builds, whether it includes the standard library, or whether a precompiled-header baseline was used. Independent reports in the same search put module speedups between 10% and 50% and one LLVM forum thread reports build times increasing after migrating to modules, so the figure is plausible but project-specific. Listed 'repo_url' in the assignment is the blog page, not a code repository. [verifier] Re-checked by snippet only: the English post and its Chinese original (https://developer.aliyun.com/article/1634418) were both unreachable (getaddrinfo ENOTFOUND). Snippets say the compiler is Alibaba's in-house build based on open-source Clang/LLVM, not a stock release, and that the import std hello-world is fast because the standard library module was precompiled, so that 0.03 s figure excludes the cost of building the std module.
+Snippet only: www.alibabacloud.com failed to resolve (getaddrinfo ENOTFOUND) in this session, so the numbers, compiler, flags, hardware and baseline details come from WebSearch result summaries, not from the page. Vendor blog about a product the vendor sells, so tier C at best. Hologres is a commercial Alibaba Cloud product with no public source repository found, no benchmark code is public, compiler and flags are unknown, and it is unclear whether the 42% covers full or incremental builds, whether it includes the standard library, or whether a precompiled-header baseline was used. Independent reports in the same search put module speedups between 10% and 50% and one LLVM forum thread reports build times increasing after migrating to modules, so the figure is plausible but project-specific. Listed 'repo_url' in the assignment is the blog page, not a code repository. [verifier] Re-checked by snippet only: the English post and its Chinese original (https://developer.aliyun.com/article/1634418) were both unreachable (getaddrinfo ENOTFOUND). Snippets say the compiler is Alibaba's in-house build based on open-source Clang/LLVM, not a stock release, and that the import std hello-world is fast because the standard library module was precompiled, so that 0.03 s figure excludes the cost of building the std module. [retier] Enricher: no baseline is stated (headers with or without PCH, full or incremental build); the 0.03 s import std figure excludes building the std module itself. Other projects report mixed results: Infinity halved its build time, an LLVM Discourse thread saw slower builds, and {fmt} saw no gain.
 
 Needs a compiler with working C++20 module support and a build system that scans module dependencies; the technique is a language feature, so there is nothing to copy except the migration approach described in the post.
 
@@ -80,8 +82,8 @@ Reference-only first-party case study from a closed commercial code base with no
 - **Verification** (2026-09-24): confirm; tier before verification C, tier now C.
 - **Tier reason:** Vendor (Alibaba Cloud) blog reporting a 42% compile-time cut on its own Hologres code base; the page and its Chinese mirror were unreachable (getaddrinfo ENOTFOUND), so the claim is confirmed from WebSearch snippets only. First-party, no public code, compiler, flags or hardware, so C at best.
 - **Verifier notes:** Two fetch failures (alibabacloud.com, developer.aliyun.com); WebSearch snippets confirm 42% and the 1.5-year mainline use. Keep at C with snippet-only caveat; refresh numbers if the page becomes reachable.
-- **Fields the verifier corrected:** `caveats`
-- **Shortcomings recorded by:** verifier batch-10 (wave 2 book seed pass, 2026-10-24)
+- **Fields the verifier corrected:** `caveats`, `compiler_and_flags`
+- **Shortcomings recorded by:** verifier batch-10 (wave 2 book seed pass, 2026-10-24); enrichment (wave 2 book seed pass, 2026-10-24)
 - **Sources the enricher read:**
   - <https://raw.githubusercontent.com/llvm/llvm-project/main/clang/docs/StandardCPlusPlusModules.md>
   - <https://github.com/llvm/llvm-project/tree/main/clang/docs>

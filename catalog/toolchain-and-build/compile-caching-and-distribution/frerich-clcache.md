@@ -9,13 +9,14 @@
 | | |
 |---|---|
 | **Beats** | uncached MSVC compile (cl.exe without a compiler cache) |
-| **Claimed result** | Merge request text: the average uncached MSBuild RelWithDebInfo job is either barely passing or barely failing the 2 hour timeout; with the clcache fork the 2nd build (partial cache) succeeded in 100 minutes, the 3rd build (full cache) in 55 minutes, and subsequent jobs in as little as 49 minutes. Roughly 2.2x (120 / 55, derived from page data, the 120 minute figure being the job timeout, not a measured uncached time). |
-| **Workload** | OpenMW GitLab CI job (MSBuild, MSVC 2022, 64-bit RelWithDebInfo) run uncached versus with a third-party fork of clcache and a CI-restored cache across successive pipeline runs. |
+| **Claimed result** | Upstream issue #239 (one user's build, 4-core 2 GHz machine with SSD): 4:49 without clcache, 6:22 with a cold cache (slower) and 2:06 with a warm cache, about 2.3x on the warm rebuild (derived from page data). OpenMW MR !5021 (Aussiemon fork, commit 21c50c2) reports CI jobs dropping from near the 2-hour timeout to 55 and 49 minutes, but the uncached time is never measured. |
+| **Workload** | Issue #239: one MSVC project built without clcache, with an empty cache and with a warm cache on the same machine. Secondary: OpenMW GitLab CI job (MSBuild, MSVC 2022, 64-bit RelWithDebInfo) uncached versus a clcache fork with a CI-restored cache. |
 | **Metric** | build-time |
+| **Hardware** | Issue #239: 4-core 2 GHz machine with an SSD (CPU model not given). |
 | **Compiler and flags** | MSVC 2022, 64-bit, RelWithDebInfo; clcache with CLCACHE_COMPRESS, cache limit 1.5 GB (clcache -M 1610612736) |
 | **Adoption** | 324 stars; archived by owner on 2020-02-04 |
 | **Last commit** | 2019-02-19 |
-| **Links** | [repository](https://github.com/frerich/clcache) · [benchmark](https://gitlab.com/OpenMW/openmw/-/merge_requests/5021) |
+| **Links** | [repository](https://github.com/frerich/clcache) · [benchmark](https://github.com/frerich/clcache/issues/239) |
 
 ## Verdict
 
@@ -65,10 +66,11 @@ Pick clcache over sccache only for an MSVC-only Windows build that needs no remo
 ## Known shortcomings
 
 - Numbers come from an unmerged draft OpenMW merge request (!5021) that timed the Aussiemon fork, not upstream, with no hardware stated; upstream issue 251 shows a cold cache slower (7 to 23 min); archived, last commit 2019-02-19.
+- Enricher: evidence moved to upstream issue #239 (warm cache about 2.3x, cold cache slower than none); the OpenMW MR numbers never measure the uncached build, change build settings only in the cached config and use a fork. Cold-cache slowdowns, open lock-timeout issues, no /Zi or PCH caching, weak compiler hash, no Python 3.10+ support upstream.
 
 ## Caveats and trade-offs
 
-The README and CHANGELOG of frerich/clcache carry no timing numbers (only 'greatly improves performance of cache hits' for the server). The only reachable numbers are third-party CI anecdotes. The OpenMW merge request (opened 2025-11-29) used Aussiemon's fork pinned to a commit, not upstream, and states no uncached time (only that it is near the 2 hour timeout), no runner hardware, and mixes cache states across different pipeline runs, so the speedup is approximate and not a controlled comparison. The upstream issue https://github.com/frerich/clcache/issues/251 (2016, Windows Server 2012 R2, E5-2650) reports the opposite: a 5 to 8 minute build rose to 23 minutes with a cold cache and was roughly equal to no clcache when fully cached, blamed on cache lock contention and virus scanning. The same MR author found ccache's MSVC precompiled-header hits as slow as misses and called clcache the most stable option, but wished ccache could match its speed. [verifier] As of the check, MR !5021 is still a Draft and not merged into OpenMW master; its first clcache run (empty cache) also hit the timeout, and the fork patches clcache for Python &gt;=3.10 and MSVC &gt;=2019, so upstream clcache itself was not what was timed.
+The README and CHANGELOG of frerich/clcache carry no timing numbers (only 'greatly improves performance of cache hits' for the server). The only reachable numbers are third-party CI anecdotes. The OpenMW merge request (opened 2025-11-29) used Aussiemon's fork pinned to a commit, not upstream, and states no uncached time (only that it is near the 2 hour timeout), no runner hardware, and mixes cache states across different pipeline runs, so the speedup is approximate and not a controlled comparison. The upstream issue https://github.com/frerich/clcache/issues/251 (2016, Windows Server 2012 R2, E5-2650) reports the opposite: a 5 to 8 minute build rose to 23 minutes with a cold cache and was roughly equal to no clcache when fully cached, blamed on cache lock contention and virus scanning. The same MR author found ccache's MSVC precompiled-header hits as slow as misses and called clcache the most stable option, but wished ccache could match its speed. [verifier] As of the check, MR !5021 is still a Draft and not merged into OpenMW master; its first clcache run (empty cache) also hit the timeout, and the fork patches clcache for Python &gt;=3.10 and MSVC &gt;=2019, so upstream clcache itself was not what was timed. [retier] Enricher: in MR !5021 only the cached configuration sets PRECOMPILE_HEADERS_WITH_MSVC=OFF (OpenMW defaults to ON), rewrites /Zi to /Z7 and sets /p:TrackFileAccess=false, and the runs are separate pipelines. Cold builds are slower than no cache (#239; 7 to 23 minutes in #251); lock timeouts (#251, #347) remain open; /Zi and PCH compiles are not cached; the compiler hash uses only cl.exe mtime and size; upstream lacks Python 3.10+ and /external:I support.
 
 Python wrapper around cl.exe (the repo also has a pyinstaller folder) that stores compiler output in a local directory cache; the optional clcachesrv.py server is documented as greatly improving the performance of cache hits. Upstream is archived: Python 3.10+ and MSVC 2019+ patches live only in forks, which is why users run forks. Precompiled-header caching is not available upstream (the OpenMW fork author says his fork has experimental changes toward it).
 
@@ -82,8 +84,8 @@ Archived by its owner on 2020-02-04 with the last upstream commit on 2019-02-19;
 - **Verification** (2026-09-24): confirm; tier before verification C, tier now C.
 - **Tier reason:** OpenMW MR !5021 gives CI job times (uncached near the 2 hour timeout; 100, 55 and as low as 49 minutes with the clcache fork and a restored cache) but no hardware, no measured uncached time, no controlled runs and no public harness beyond the CI config; upstream README has no numbers. Third-party CI anecdote without methodology, so C.
 - **Verifier notes:** Numbers, fork, cache settings and issue #251 details all match the pages. MR is a Draft, unmerged; caveat addendum says so. Archived 2020-02-04, last commit 2019-02-19 confirmed.
-- **Fields the verifier corrected:** `caveats`
-- **Shortcomings recorded by:** verifier batch-10 (wave 2 book seed pass, 2026-10-24)
+- **Fields the verifier corrected:** `caveats`, `claimed_speedup`, `benchmark_url`, `hardware`, `workload`
+- **Shortcomings recorded by:** verifier batch-10 (wave 2 book seed pass, 2026-10-24); enrichment (wave 2 book seed pass, 2026-10-24)
 - **Pages the verifier opened:**
   - <https://gitlab.com/OpenMW/openmw/-/merge_requests/5021>
   - <https://github.com/frerich/clcache>

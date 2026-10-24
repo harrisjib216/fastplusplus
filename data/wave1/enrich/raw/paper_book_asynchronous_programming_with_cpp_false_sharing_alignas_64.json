@@ -1,0 +1,48 @@
+{
+  "id": "paper:book-asynchronous-programming-with-cpp-false-sharing-alignas-64",
+  "one_liner": "Pad each thread's result slot to its own 64-byte cache line with alignas(64) to stop false sharing between packed slots.",
+  "what_it_does": "A book example (Chapter_13/13x06-false_sharing.cpp) in which 8 pinned threads each add 100 million random draws into their own slot of a shared array. The baseline packs eight 8-byte unsigned long slots into one 64-byte-aligned line; the fix wraps the slot in a struct declared alignas(64) so each slot fills a whole cache line. It is a layout idiom: the element type changes, the loop code stays the same.",
+  "how_it_is_fast": "Cache coherence tracks whole lines, so when eight cores write different words of one 64-byte line, every store invalidates the other cores' copies and the line bounces between them (false sharing). Cache-line padding gives each slot its own line, so each core keeps its line in its own cache and stores stay local. The book's perf stat cache-miss rates relayed in the record (96.63% packed against 27.21% padded) fit this mechanism.",
+  "when_to_use": [
+    "Per-thread counters, partial sums, histograms or status words kept in a shared array and written inside a hot loop.",
+    "Per-worker or per-core state structs (statistics, local queues) stored contiguously in an array or std::vector and updated concurrently.",
+    "Indices or flags written by different threads that happen to sit next to each other, such as a ring buffer's head and tail (the same repo's SPSC queue sibling uses alignas(64) spacing for them).",
+    "Profiles that show heavy cache-miss counts on data that is not logically shared between threads."
+  ],
+  "when_not_to_use": [
+    "When each thread can accumulate in a local variable and write its slot once at the end: that removes the shared-line traffic without any padding or memory growth.",
+    "Many small per-thread objects or large arrays of them: each padded slot grows from 8 to 64 bytes, which costs cache and memory capacity for little gain if the slots are rarely written.",
+    "Read-mostly data or data written by only one thread: there is no invalidation traffic to remove.",
+    "CPUs whose destructive interference size is 128 bytes (per the record, some Arm and Apple cores): a hard-coded 64 under-pads there; std::hardware_destructive_interference_size (C++17) or 128 is safer."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the idiom; the benchmark uses pthread_setaffinity_np and cpu_set_t (Linux/glibc), and Chapter_13/CMakeLists.txt requires Google Benchmark (find_package(benchmark REQUIRED)) and links it into every example even though this file does not use it",
+    "min_toolchain": "C++11 for alignas; C++17 aligned new for heap arrays of over-aligned structs (the benchmark calls new(std::align_val_t(64))); Chapter_13 builds with -O3 -DNDEBUG -std=c++20 -march=native",
+    "platforms": "idiom: any; benchmark: Linux only, with at least 8 logical CPUs for its fixed pinning to cores 0-7",
+    "thread_safety": "each slot is written by exactly one thread with plain non-atomic stores; readers must join the writers (or switch the slots to atomics) before reading",
+    "drop_in_for_baseline": "partial — only the element type changes, but sizeof grows to 64 and arrays of it need over-aligned allocation (C++17 aligned new or std::vector)"
+  },
+  "gotchas": [
+    "As checked in, main() runs only sum_random_aligned; the sum_random_unaligned call is commented out, so reproducing the comparison needs a one-line edit (preferably running each variant in its own process).",
+    "The baseline is the worst case: eight 8-byte slots allocated with align_val_t(64) fill exactly one line, so all eight threads contend for it. Fewer threads per line or less frequent writes give a far smaller gap than the book's 27x.",
+    "The size of the effect depends on code generation: data.result += dist(gen) is a plain store through a reference, and if a compiler keeps the accumulator in a register until the loop ends, the false sharing and the gap disappear; -march=native also ties the binary to the build host.",
+    "Harness: set_affinity calls perror and exit(EXIT_FAILURE) if pinning fails (e.g. on a machine with fewer than 8 CPUs), the main thread re-pins itself to each core while spawning, thread creation sits inside the timed region, each variant runs once, and the per-thread sums are never printed or checked."
+  ],
+  "pick_this_over_siblings_when": "Same idiom as 'The Art of Writing Efficient Programs: cache-line padding of per-thread partial sums' (book: about 2x, scaling with thread count); this example's packed baseline puts all eight slots on one line, so it shows the worst-case gap and comes with fixed flags and pinning. The queue siblings (atomic_queue, moodycamel, Boost.Lockfree) are for passing data between threads; this is for per-thread state that sits side by side.",
+  "verified_claims_summary": "Per the book via the seed lead (numbers not in the repo): 8 threads pinned to cores 0-7 of an AMD Ryzen Threadripper Pro 5975WX on Ubuntu 24.04, built with GCC per the lead and the Chapter_13 flags (-O3 -DNDEBUG -std=c++20 -march=native), each summing 100 million std::mt19937 draws, took 4403 ms with packed 8-byte slots against 160 ms with alignas(64) slots, about 27.5x (derived from those figures), with perf stat cache misses of 96.63% against 27.21%. One run per variant, timed with std::chrono::high_resolution_clock around thread creation and join.",
+  "status_note": "MIT-licensed book companion code (95 stars, not archived); this file has a single commit (2024-10-18, 'Chapter-13 examples') and the 2026 commits only edit a README banner, so treat it as frozen teaching code: copy the alignas idiom and treat the harness as a demo.",
+  "sources_read": [
+    "https://github.com/PacktPublishing/Asynchronous-Programming-with-CPP",
+    "https://github.com/PacktPublishing/Asynchronous-Programming-with-CPP/tree/main/Chapter_13",
+    "https://github.com/PacktPublishing/Asynchronous-Programming-with-CPP/commits/main/Chapter_13/13x06-false_sharing.cpp",
+    "https://github.com/PacktPublishing/Asynchronous-Programming-with-CPP/issues?q=is%3Aissue",
+    "https://github.com/PacktPublishing/Asynchronous-Programming-with-CPP/issues/26",
+    "https://github.com/PacktPublishing/Asynchronous-Programming-with-CPP/issues/27",
+    "https://raw.githubusercontent.com/PacktPublishing/Asynchronous-Programming-with-CPP/main/Chapter_13/13x06-false_sharing.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/Asynchronous-Programming-with-CPP/main/Chapter_13/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/Asynchronous-Programming-with-CPP/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/Asynchronous-Programming-with-CPP/main/README.md"
+  ],
+  "confidence": 0.6
+}

@@ -2,7 +2,7 @@
 
 <sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Toolchain and build](../README.md) › [Compile caching and distribution](README.md)</sub>
 
-**Tier C** (first-party claim) · Copyable · `C` · `GPL-2.0-or-later` · 🟢 active
+**Tier C** (first-party claim) · Copyable · `C` · `GPL-2.0-or-later` · 🟡 stale
 
 > Compiler front end that farms C/C++ compile jobs out to networked servers; beats a local single-machine make on big parallel builds.
 
@@ -66,10 +66,11 @@ Pick distcc over icecream when you want the simplest scheduler-free setup with a
 ## Known shortcomings
 
 - First-party 2006-2008 numbers on old hardware with no compiler version or CFLAGS; one P4 client against 152 server CPUs, configure excluded from the timing.
+- Enricher: make -j1 local baseline on a single P4; pump rows compressed with LZO while plain rows ran uncompressed; silent fallbacks (#574); TCP mode runs arbitrary commands (CVE-2004-2687); no release since 3.4 (2021) and a maintainers-wanted issue open since 2023.
 
 ## Caveats and trade-offs
 
-First-party Google/distcc page dated 2008 (copyright line) on 2008-era hardware. The harness is in the repo (bench/benchmark.py, Build.py, compiler.py, ProjectDefs.py: exact project tarballs plus configure/build commands, compiler invoked as cc/gcc through a masquerade script farm), but no compiler version or CFLAGS are stated anywhere, so not tier A. The local baseline is one 2.8GHz Pentium 4 client against 152 server CPUs, which inflates the ratio; the page itself says a multi-processor client would show smaller gains. Only make time is counted, not configure. The page notes pump runs that silently fell back to plain mode while collecting results. The ratios above marked derived are computed from the page's wall-time column. README.md separately claims three machines are 2.6 times faster than one and README.pump says pump mode can distribute compilations up to 10X faster than plain distcc (compile step, not whole build); neither number is on the benchmark page. No comparison with ccache, icecream or a modern build system.
+First-party Google/distcc page dated 2008 (copyright line) on 2008-era hardware. The harness is in the repo (bench/benchmark.py, Build.py, compiler.py, ProjectDefs.py: exact project tarballs plus configure/build commands, compiler invoked as cc/gcc through a masquerade script farm), but no compiler version or CFLAGS are stated anywhere, so not tier A. The local baseline is one 2.8GHz Pentium 4 client against 152 server CPUs, which inflates the ratio; the page itself says a multi-processor client would show smaller gains. Only make time is counted, not configure. The page notes pump runs that silently fell back to plain mode while collecting results. The ratios above marked derived are computed from the page's wall-time column. README.md separately claims three machines are 2.6 times faster than one and README.pump says pump mode can distribute compilations up to 10X faster than plain distcc (compile step, not whole build); neither number is on the benchmark page. No comparison with ccache, icecream or a modern build system. [retier] Enricher: the local_01 baseline is make -j1 on the single Pentium 4 client (CPU 60-84%, no local -j2 row). Pump rows use ',cpp,lzo' (pump requires LZO) while the plain rows ran uncompressed, although bench/compiler.py has an unreported lzo plain mode, so the pump-over-plain ratio includes compression. Local and pump fallbacks are silent (#574); TCP mode lets any client run arbitrary commands (CVE-2004-2687); issue #325 reports a 40-core local build at 16 min against 40 min through distcc; stale \~/.distcc/lock files throttle builds.
 
 Needs the distccd daemon and a compatible compiler on every volunteer machine and a fast network (a slow network can cancel the gain). Plain mode ships preprocessed source and still preprocesses on the client; pump mode needs identical system headers on client and servers, assumes sources and headers do not change during the build, and falls back to plain distcc when it hits an error (the page says the Linux kernel needed special handling). Small projects get slower (hello-2.1.1). README.pump says pump mode will probably show no major gain with fewer than about ten CPUs. GPL licence.
 
@@ -83,8 +84,8 @@ Last tagged release is 3.4 (2021-04-11); master still receives fixes (latest com
 - **Verification** (2026-09-24): confirm; tier before verification C, tier now C.
 - **Tier reason:** First-party (Google, 2008) benchmark page with walltime table against local_01 builds; harness code is public (bench/benchmark.py, bench/ProjectDefs.py) and CPU models are stated, but compiler version and flags are not, so it falls short of A.
 - **Verifier notes:** All walltime numbers and derived ratios match doc/web/benchmark.html; README 2.6x and README.pump 10X quotes confirmed. gh CLI blocked in cloud session; metadata from github.com pages (2.3k stars, last commit 2026-07-08, GPL v2-or-later per source headers).
-- **Fields the verifier corrected:** `caveats`
-- **Shortcomings recorded by:** verifier batch-12 (wave 2 book seed pass, 2026-10-24)
+- **Fields the verifier corrected:** `caveats`, `maintenance_status`
+- **Shortcomings recorded by:** verifier batch-12 (wave 2 book seed pass, 2026-10-24); enrichment (wave 2 book seed pass, 2026-10-24)
 - **Pages the verifier opened:**
   - <https://raw.githubusercontent.com/distcc/distcc/HEAD/doc/web/benchmark.html>
   - <https://github.com/distcc/distcc>

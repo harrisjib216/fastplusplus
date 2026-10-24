@@ -1,0 +1,41 @@
+{
+  "id": "paper:bendersky-cost-of-virtual-calls-vs-crtp-dispatch",
+  "one_liner": "2013 blog benchmark: CRTP static dispatch runs a trivial-method call loop about 6x faster than virtual calls.",
+  "what_it_does": "Eli Bendersky's post times the same nested loop calling a trivial 'tick' method on an object, once through a virtual function on a base-class pointer and once through the Curiously Recurring Template Pattern, where a template base class forwards to the derived class with a static_cast. It is a reference for a technique, not a library: the code is inline in the post and no repository or license for it was found. Adopting it changes the interface, because callers must be templated on, or otherwise know, the concrete type at compile time.",
+  "how_it_is_fast": "CRTP binds the call at compile time, so there is no vtable load or indirect call, and the compiler can inline the tiny method body into the loop and optimise the loop as a whole. Search snippets of the post and of a Hacker News discussion indicate the gap is mostly inlining: one commenter (npalli, in the HN repost thread news.ycombinator.com/item?id=9123571) reports the virtual version about 6x slower than the inlined static one, and the static version about 1.5x slower than the virtual one once inlining is disabled.",
+  "when_to_use": [
+    "Hot inner loops that call very small methods (accessors, counters, per-element kernels) where the concrete type is fixed at compile time",
+    "Static interfaces and mixins in template libraries, where runtime substitution of implementations is never needed",
+    "Code paths that hold objects in per-type (homogeneous) containers rather than containers of base pointers",
+    "As a quick reference when arguing whether virtual-call overhead matters in a given loop; re-measure on your own compiler before acting on it"
+  ],
+  "when_not_to_use": [
+    "Heterogeneous collections, plug-ins or types chosen at runtime: CRTP gives no runtime polymorphism",
+    "Methods that do substantial work per call: an HN commenter (snippet only) reports practically no difference between CRTP and virtual functions in a raytracer with heavy calls",
+    "When the CRTP call cannot be inlined (across a library boundary or with noinline): the reported advantage disappears and the static version was reported slower",
+    "When code size or compile time matters: every derived type instantiates its own copy of the templated code",
+    "When the compiler can already devirtualize (final classes, whole-program or profile-guided optimisation), which commenters note may shrink the 6x gap"
+  ],
+  "integration": {
+    "form": "source-drop (language idiom; example code inline in the blog post)",
+    "dependencies": "none",
+    "min_toolchain": "any C++ compiler with class templates (C++98); the post's own compiler and flags were not seen",
+    "platforms": "any",
+    "thread_safety": "not applicable (dispatch idiom, no shared state)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The headline figures (1.25 s virtual versus 0.21 s CRTP on an Intel i7-4771) come only from web-search summaries seen by the search agent; the post, its isocpp.org mirror and HN mirrors are unreachable here (getaddrinfo ENOTFOUND), and the verifier and this enrichment found no snippet carrying those exact numbers. Independent HN snippets corroborate only the roughly 6x ratio.",
+    "One trivial method in a tight loop is the best case for CRTP: the measured gap is mostly lost inlining, not the cost of the indirect call itself, and reportedly reverses when the static call is not inlined.",
+    "2013-era compiler and CPU; the post itself warns that benchmarks, including its own, should be taken with a large grain of salt.",
+    "CRTP relies on the derived class naming itself as the template argument; passing the wrong type still compiles and the base's static_cast then targets the wrong class."
+  ],
+  "pick_this_over_siblings_when": "The Hands-On Design Patterns chapter 8 sibling reports a similar gap (9.04 ns versus 1.55 ns per 32 calls, about 5.8x) and ships in a publisher repository, so prefer it when you want runnable, licensed example code; read Bendersky's post for the widely cited original argument and its inlining analysis. For replacing dynamic_cast type tests rather than virtual calls, the chapter 1 sibling is the relevant entry.",
+  "verified_claims_summary": "Reported, not re-verified: a nested loop of trivial tick calls took about 1.25 s through a virtual call on a base pointer and about 0.21 s through CRTP on an Intel Core i7-4771, about 6x (derived), with compiler and flags unknown. An HN commenter in the post's repost thread (item 9123571) independently quotes the 6x figure and a 1.5x reversal when the static method is not inlined, both seen as search snippets only.",
+  "status_note": "Finished 2013 reference post, still widely cited; the code is inline in the post with no license seen (the author's Unlicense code-for-blog repository has no copy in its 2013 folder), so treat it as reference reading rather than copyable code.",
+  "sources_read": [
+    "https://github.com/eliben/code-for-blog/tree/main/2013",
+    "https://github.com/eliben?tab=repositories&q=blog"
+  ],
+  "confidence": 0.45
+}

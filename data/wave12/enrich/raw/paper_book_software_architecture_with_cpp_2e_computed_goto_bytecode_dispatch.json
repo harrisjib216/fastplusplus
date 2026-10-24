@@ -1,0 +1,47 @@
+{
+  "id": "paper:book-software-architecture-with-cpp-2e-computed-goto-bytecode-dispatch",
+  "one_liner": "Book sample: computed-goto (labels-as-values) dispatch for a toy 7-opcode VM, reported about 1.29x faster than a switch loop.",
+  "what_it_does": "A companion sample for the Packt book Software Architecture with C++, 2nd ed. (Chapter13/optimization/main_2.cpp, about 125 lines) that writes the same tiny interpreter twice: a while loop around one switch, and a version that jumps through a static table of label addresses. Both take a pointer to an array of op_code values and an int64 start value, apply INC, DEC, MUL2, DIV2, REM2 or NEG to one accumulator, and return it at OP_HALT. There is no library to adopt; the takeaway is the dispatch pattern, and the computed-goto function keeps the switch version's signature, so swapping one for the other is a local change.",
+  "how_it_is_fast": "Computed goto (GCC/Clang labels as values, the dispatch scheme often called threaded code) ends every handler with its own `goto *dispatch[opcode]`, so each opcode has a separate indirect jump that the branch predictor can track, where the switch funnels every opcode through one shared jump at the loop head. It also drops the switch's range check (the default case the compiler must keep because an enum class can hold any int) and the jump back to the top of the loop. In this harness the predictor advantage hardly applies: each timed call executes only a short, fixed prefix of the program that the predictor learns for both versions, so the reported gap mostly reflects the removed range check and loop structure.",
+  "when_to_use": [
+    "Writing your own bytecode interpreter in C or C++ built with GCC or Clang, where per-opcode work is a few instructions and dispatch dominates the loop.",
+    "Bytecode that is produced or validated by your own compiler or loader, so every opcode is known to index inside the dispatch table.",
+    "As a minimal, copyable template for measuring switch against computed-goto dispatch on your own CPU and real programs before committing to either.",
+    "Hot interpreters for long, varied instruction streams on Linux or macOS toolchains, the case the per-handler jump is meant to help (this sample does not measure that case)."
+  ],
+  "when_not_to_use": [
+    "MSVC builds: labels as values is a GNU extension, and the repo's CMake skips the optimization_2 target when MSVC is the compiler.",
+    "Untrusted or unvalidated bytecode: the computed-goto version indexes its 7-entry table with no bounds check, so an opcode of 7 or more jumps through an out-of-range pointer (undefined behaviour), where the switch version returns through its default case.",
+    "Code that must be portable standard C++, or where a switch already compiles to a jump table and per-opcode handlers are large enough that dispatch cost is noise.",
+    "As evidence of how much computed goto gains: the timed workload is a handful of opcodes, not a 2^24-instruction program, and the book's numbers cannot be reproduced.",
+    "When you need a production VM: the sibling runtimes (wasm3, Wasmi, WAMR fast interpreter) ship tuned dispatch, validation and tooling that this sample does not have."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the technique; the benchmark uses Catch2 3.12.0 via Conan 2 and CMake 3.28",
+    "min_toolchain": "GCC or Clang (labels as values); the target is compiled as C++23 because it uses std::to_underlying; the chapter README lists GCC 15 or Clang 20",
+    "platforms": "any target GCC or Clang supports; not MSVC",
+    "thread_safety": "not documented; from the source, both interpreters only read the bytecode array and the static dispatch table is never written, so concurrent calls on separate accumulators do not share mutable state",
+    "drop_in_for_baseline": "partial — same function signature as the switch interpreter, but it needs a GCC/Clang extension and pre-validated opcodes"
+  },
+  "gotchas": [
+    "Early-HALT harness defect: opcodes are drawn uniformly from 0 to 6 and OP_HALT is 0, so each slot is HALT with probability 1/7 and both interpreters stop at the first one; a timed call runs about 7 opcodes on average (geometric), the same prefix every iteration, not the 2^24-opcode array the setup suggests.",
+    "The generator is seeded from std::random_device, so the executed prefix (and its length, which can be a single HALT) changes from run to run; two runs of the same binary can differ by more than the switch-versus-goto gap, and the book's exact workload cannot be recreated.",
+    "The relayed timings, about 1.41 ns versus 1.82 ns per call, are only a few clock cycles, so call overhead and the switch's range check weigh as much as dispatch itself.",
+    "Removing the bounds check is part of the speedup: add a validation pass over the bytecode at load time, or the computed-goto path turns a bad opcode into a wild jump."
+  ],
+  "pick_this_over_siblings_when": "The siblings are complete runtimes (wasm3, Wasmi, WAMR fast interpreter, Silverfir-nano) that already use tuned dispatch; pick this roughly 100-line sample only when you are writing a small interpreter yourself and want the bare computed-goto pattern. The same book's musttail sample is a recursion example, not a dispatch loop, so it does not cover tail-call dispatch.",
+  "verified_claims_summary": "The book reports (relayed by the seed lead, not on any repo page) a mean of about 1.41 ns per call for the computed-goto VM against 1.82 ns for the switch VM, about 1.29x faster (derived from the relayed numbers), with compiler, flags and CPU unstated; the repo's recipe would be GCC 15, C++23, CMake Release and Catch2 3.12.0. Because the program halts after a few random opcodes, this measures a short, cached, perfectly predictable call, not sustained dispatch throughput.",
+  "status_note": "Active book companion repo (MIT, 74 stars, last commit 2026-09-27, recent commits are README edits); the sample is short and copyable but is teaching code, not a maintained library.",
+  "sources_read": [
+    "https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E",
+    "https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/commits/main",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/Chapter13/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/Chapter13/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/Chapter13/conanfile.py",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/Chapter13/optimization/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/Software-Architecture-with-Cpp-2E/HEAD/Chapter13/optimization/main_2.cpp"
+  ],
+  "confidence": 0.75
+}
