@@ -47,19 +47,23 @@ def main():
                 dropped_known += 1; continue
             e["id"] = key
             e["source_file"] = raw.stem
-            if e.get("kind") == "technique":  # book techniques: one seed per companion repo, techniques listed
+            if e.get("kind") == "technique" and key.startswith(("https://github.com/", "https://gitlab.com/")):
+                # book techniques: one seed per companion repo, techniques listed (a blog URL stays its own seed)
                 t = {k: e.get(k) for k in TECHNIQUE_KEYS}
                 if key in seeds:
                     seeds[key].setdefault("techniques", []).append(t)
                     continue
-                e = {**e, "name": key.removeprefix("https://github.com/") + " (book companion code)",
-                     "kind": "book-companion", "listed_description": "Companion code of a C++ book; see techniques",
+                e = {**e, "name": key.split("://", 1)[1].split("/", 1)[1] + " (book techniques)",
+                     "kind": "book-companion", "listed_description": "Code a C++ book benchmarks or cites; see techniques",
                      "claim_text": None, "book_benchmark": None, "techniques": [t]}
             if key in seeds:
                 prev = seeds[key]
                 prev["found_in"] = sorted(set(str(prev["found_in"]).split(" | ")) | {str(e["found_in"])})
                 prev["found_in"] = " | ".join(prev["found_in"])
                 prev["performance_claim_in_description"] = bool(prev["performance_claim_in_description"] or e["performance_claim_in_description"])
+                for k in ("claim_text", "book_benchmark"):  # a book's numbers reach a seed first found on a list
+                    if e.get(k) and not prev.get(k):
+                        prev[k] = e[k]
                 continue
             seeds[key] = e; n_new += 1
         report.append(f"{raw.name}: {len(entries)} entries, {n_new} new")

@@ -28,7 +28,8 @@ SEEDS = ROOT / "data" / "seeds"
 WAVE_DIR = {"stdlib-replacements": "wave1", "toolchain-and-build": "wave2", "parsing-and-text": "wave3",
             "serialization-and-formats": "wave4", "networking-and-servers": "wave5", "storage-and-data": "wave6",
             "crypto-and-hashing": "wave7", "numerics-and-science": "wave8", "compression-and-encoding": "wave9",
-            "media-and-graphics": "wave10", "runtime-and-systems": "wave11", "interpreters-and-vms": "wave12"}
+            "media-and-graphics": "wave10", "runtime-and-systems": "wave11", "interpreters-and-vms": "wave12",
+            "assembly-simd-kernels-and-wasm": "wave13", "other-languages-faster-than-c-cpp-asm": "wave14"}
 
 NO_EVIDENCE_RULE = """
 - BACKFILL RULE (replaces the tier-D fallback above): these projects come from a curated list,
@@ -41,6 +42,16 @@ NO_EVIDENCE_RULE = """
   there. Only projects with at least one number against a named baseline get a record.
 - The "guessed" wave, category and baseline in each line are a Haiku agent's guess from the
   list's one-line description; correct them from what the repo actually is.
+"""
+
+BOOK_RULE = """
+- BOOK TECHNIQUES: a project named "(book techniques)" is a C++ book's companion code; its lead lists
+  the techniques the book benchmarks or cites. Write one record per technique whose code the repo
+  actually carries (check the chapter folders), each with its own explicit id
+  "paper:book-<repo name>-<technique slug>" (lowercase, hyphens) and repo_url set to that repo,
+  so the records stay separate. Do not copy book text: the lead already paraphrases the book's
+  numbers; a book's own measurement is first-party unless its repo carries the benchmark code
+  with compiler, flags and CPU. A technique with no code in the repo goes to the no-evidence file.
 """
 
 
@@ -102,6 +113,7 @@ def main():
             out = (raw_dir / f"{aid}.json").resolve()
             noev = (SEEDS / "no_evidence" / f"{aid}.json").resolve()
             prompt = (seed.INTRO.format(today=args.today, projects=plines) + NO_EVIDENCE_RULE.format(no_evidence_path=noev)
+                      + (BOOK_RULE if any(s.get("techniques") for s in group) else "")
                       + "\n" + rules + seed.HARNESS.format(output_path=out))
             (prompts_dir / f"{aid}.txt").write_text(prompt)
             print(f"{aid}: {len(group)} projects -> {prompts_dir / (aid + '.txt')}")
