@@ -19,7 +19,8 @@ plausibly qualify, with enough metadata that a later agent can find it.
 
 Today's date: {today}
 Book:         {title}
-Chunk:        {chunk_path}  (part {n} of {total}; "[p. N]" lines mark PDF pages)
+Chunk:        {chunk_path}  (part {n} of {total}; "[p. N]" lines mark PDF
+              pages; EPUB chunks have none, so cite chapter and section)
 Skip list:    {known} (canonical lowercase repo URLs already catalogued or
               seeded; grep it before including an entry; the orchestrator
               dedups again downstream, so when unsure include)
@@ -82,7 +83,7 @@ OUTPUT SCHEMA
     "guessed_wave": "e.g. stdlib-replacements",
     "guessed_category": "e.g. hash-maps-sets",
     "guessed_baseline": "e.g. std::unordered_map, or null",
-    "found_in": "book: {title}, p. N",
+    "found_in": "book: {title}, p. N (PDF) or ch. N, section heading (EPUB)",
     "confidence": 0.0-1.0
   }}
 ]
