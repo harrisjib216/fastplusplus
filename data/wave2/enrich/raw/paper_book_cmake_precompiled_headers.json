@@ -1,0 +1,67 @@
+{
+  "id": "paper:book-cmake-precompiled-headers",
+  "one_liner": "CMake 3.16+ target_precompile_headers: parses a shared header set once per target instead of once per source file.",
+  "what_it_does": "A CMake command, target_precompile_headers(<target> PRIVATE|PUBLIC|INTERFACE <headers>...), that writes a generated cmake_pch.h/.hxx listing the headers, compiles it once into a .gch/.pch artifact and force-includes it into every source of the target (-include for GCC, /Yc, /Yu and /FI for MSVC, -include-pch for Clang), so sources need no #include \"pch.h\". A second form, target_precompile_headers(<target> REUSE_FROM <other>), lets targets with identical flags share one PCH artifact. It is a build-system switch, not a library: a few CMakeLists.txt lines, no source edits.",
+  "how_it_is_fast": "Precompiled headers: the compiler front end preprocesses, parses and analyses the listed headers once and serialises that state to disk; each translation unit loads the image instead of re-parsing the same STL, Qt or Boost headers. The gain scales with the share of each TU's front-end time spent in the shared headers. For Clang 11+ (not AppleClang) CMake also passes -fpch-instantiate-templates by default (PCH_INSTANTIATE_TEMPLATES, CMake 3.19), so template instantiations are done once while building the PCH.",
+  "when_to_use": [
+    "Header-heavy C++ targets where many sources include the same stable, expensive headers (STL, Qt, Boost, windows.h, a large in-house framework) and front-end parsing dominates compile time.",
+    "MSVC and clang-cl builds on Windows: the only published CMake numbers (the implementer's 2019 Qt Creator run) show 37.28% with Visual C++ 2017 and 30.66% with Clang-cl 8.0.0 against 22.09% with MinGW GCC 8.1.0.",
+    "Clang 18+ builds: LLVM's own CMake now enables target_precompile_headers by default for Clang 18 and newer (and disables it for GCC), and an LLVM RFC reported 1.5-2x faster LLVM builds (search snippet only; the thread was unreachable).",
+    "Groups of targets with identical compile flags (test executables, plugins) that can share one PCH through REUSE_FROM, so the header set is compiled once for all of them.",
+    "Replacing a hand-maintained stdafx.h/pch.h scheme or the cotire module with a generator-independent, built-in mechanism."
+  ],
+  "when_not_to_use": [
+    "GCC builds: LLVM's HandleLLVMOptions.cmake turns PCH off by default with GCC because, tested with GCC 14 and 15, it gave very little compile-time improvement while substantially increasing build-directory size.",
+    "Headers that change often: the PCH is force-included into every source of the target, so editing any precompiled header rebuilds the PCH and recompiles the whole target (and every target reusing it); headers used by only one or two sources add cost without benefit.",
+    "Builds behind sccache, or ccache with non-Clang compilers: LLVM disables PCH there by default because sccache does not support PCH and ccache can return stale objects when only a macro definition changes (ccache issue 1668, sccache issues 615 and 2562); clang-cache and C++20-modules builds are excluded too.",
+    "Very large header sets: llvm-project issue 61750 reports a PCH built from mlpack.hpp taking 190 s and 7.8 GB to build with Clang 17 and making an empty int main() take 90 s and 4.1 GB to compile (open, no diagnosis).",
+    "Installed or exported library targets: CMake's docs say to avoid PUBLIC/INTERFACE precompile headers there (or wrap them in $<BUILD_INTERFACE:...>), because consumers should choose their own PCH."
+  ],
+  "integration": {
+    "form": "build-system feature (CMake command and target properties; nothing to link)",
+    "dependencies": "CMake 3.16+ and a compiler with PCH support (GCC, Clang/AppleClang, MSVC, clang-cl)",
+    "min_toolchain": "CMake 3.16 (PCH_WARN_INVALID 3.18, PCH_INSTANTIATE_TEMPLATES 3.19 with Clang 11+, ALIAS targets 4.5, PCH_WARNINGS in the 4.6 docs on master)",
+    "platforms": "Any CMake platform with GCC (.gch), Clang/AppleClang (.pch) or MSVC/clang-cl (.pch with /Yc and /Yu); Xcode and FASTBuild generators have their own code paths; multi-arch Apple builds get one PCH per architecture",
+    "thread_safety": "not applicable (build-time feature)",
+    "drop_in_for_baseline": "partial — no source changes are needed, but every source now sees the precompiled headers force-included, which can mask missing #includes and introduce name collisions (per the LLVM RFC), and Objective-C/C++ or other-language files may need SKIP_PRECOMPILE_HEADERS"
+  },
+  "gotchas": [
+    "CMake marks the generated PCH header as a system header (#pragma GCC/clang system_header), so warnings from the precompiled headers silently disappear; the PCH_WARNINGS property (4.6 docs) restores them, and LLVM clears the undocumented CMAKE_PCH_PROLOGUE for the same reason (CMake issue 21219).",
+    "REUSE_FROM requires identical compile options, flags and definitions on both targets; if they differ the compiler may be unable to use the PCH, and with GCC only the -Winvalid-pch warning (on by default through PCH_WARN_INVALID since 3.18) reports it. LLVM disables reuse for targets with non-default RTTI/EH or with C sources.",
+    "Compiler caches need extra flags: LLVM adds -Xclang -fno-pch-timestamp for Clang and -fpch-preprocess for GCC so ccache can cache PCH builds, and enables ccache depend mode when PCH is on (llvm-project PR 225118).",
+    "PCH artifacts are per language: Objective-C (.m) and Objective-C++ (.mm) files in C/C++ targets can fail to compile with Ninja/Makefile generators until marked SKIP_PRECOMPILE_HEADERS."
+  ],
+  "pick_this_over_siblings_when": "Pick PCH when a single machine's clean or CI build is dominated by re-parsing the same headers and you want a gain without a cache server or build farm; it keeps one translation unit per source, so unlike the sibling CMake unity-build entry it adds no ODR clashes and keeps incremental rebuilds fine-grained. It complements rather than replaces sccache/ccache, distcc/icecream or FASTBuild, but check the cache-compatibility caveats before combining it with sccache or with ccache on GCC/MSVC.",
+  "verified_claims_summary": "The only CMake-specific timings are the implementer's 2019 Qt blog post (unreachable here; figures from search summaries): a CMake build of Qt Creator on one Windows 10 Ryzen machine, using the pre-release MR 3553 code, was 22.09% faster with MinGW GCC 8.1.0, 37.28% with Visual C++ 2017 and 30.66% with Clang-cl 8.0.0 than the same build without PCH. If these are time saved, as the same author's unity-build MR figures are, they equal about 1.28x, 1.59x and 1.44x (derived from page data); there is no CPU model, flags, run count or benchmark code.",
+  "status_note": "Actively developed (GitHub mirror commit on 2026-10-24, v4.4.4 released 2026-10-02, v4.5.0-rc1 on 2026-10-15) and BSD-3-Clause; nothing to vendor, since it ships in every CMake from 3.16.",
+  "sources_read": [
+    "https://github.com/Kitware/CMake",
+    "https://github.com/Kitware/CMake/tags",
+    "https://github.com/Kitware/CMake/commits/master",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/command/target_precompile_headers.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/prop_tgt/PRECOMPILE_HEADERS.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/prop_tgt/PRECOMPILE_HEADERS_REUSE_FROM.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/prop_tgt/INTERFACE_PRECOMPILE_HEADERS.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/prop_sf/SKIP_PRECOMPILE_HEADERS.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/prop_tgt/DISABLE_PRECOMPILE_HEADERS.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/prop_tgt/PCH_INSTANTIATE_TEMPLATES.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/prop_tgt/PCH_WARN_INVALID.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/prop_tgt/PCH_WARNINGS.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/variable/CMAKE_PCH_INSTANTIATE_TEMPLATES.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/variable/CMAKE_PCH_WARN_INVALID.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/release/3.16.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Source/cmLocalGenerator.cxx",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Modules/Compiler/Clang.cmake",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Modules/Compiler/GNU.cmake",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Modules/Platform/Windows-MSVC.cmake",
+    "https://raw.githubusercontent.com/llvm/llvm-project/main/llvm/cmake/modules/AddLLVM.cmake",
+    "https://raw.githubusercontent.com/llvm/llvm-project/main/llvm/cmake/modules/HandleLLVMOptions.cmake",
+    "https://raw.githubusercontent.com/llvm/llvm-project/main/llvm/docs/CMake.md",
+    "https://raw.githubusercontent.com/llvm/llvm-project/main/llvm/docs/ReleaseNotes.md",
+    "https://github.com/llvm/llvm-project/commits/main/llvm/cmake/modules/HandleLLVMOptions.cmake",
+    "https://github.com/llvm/llvm-project/issues/61750",
+    "https://www.qt.io/blog/2019/08/01/precompiled-headers-and-unity-jumbo-builds-in-upcoming-cmake (fetch failed: getaddrinfo ENOTFOUND www.qt.io; content from WebSearch summaries)",
+    "https://discourse.llvm.org/t/rfc-use-pre-compiled-headers-to-speed-up-llvm-build-by-1-5-2x/89345 (not fetched; discourse.llvm.org unresolvable; WebSearch summary only)"
+  ],
+  "confidence": 0.65
+}

@@ -1,0 +1,64 @@
+{
+  "id": "paper:book-cmake-unity-builds",
+  "one_liner": "CMake 3.16+ UNITY_BUILD: compiles batches of sources as one translation unit, cutting clean-build time against per-file builds.",
+  "what_it_does": "Configuring with -DCMAKE_UNITY_BUILD=ON (CMake's docs say it belongs on the developer's command line, not in CMakeLists.txt) makes CMake write unity_N_cxx.cxx files under the target's CMakeFiles/<target>.dir/Unity/ directory, each #including up to UNITY_BUILD_BATCH_SIZE original sources (default 8), and compile those instead of the originals. UNITY_BUILD_MODE GROUP (3.18) replaces automatic batching with explicit buckets set through the UNITY_GROUP source property. No source edits are needed unless merged files clash; C and C++ are supported since 3.16, OBJC/OBJCXX since 3.29 and CUDA since 3.31.",
+  "how_it_is_fast": "Unity (jumbo, single-compilation-unit) builds amortise front-end work: headers shared by the batched sources are preprocessed and parsed once per batch instead of once per file, common template instantiations are emitted once, and fewer object files reach the linker. The saving grows with batch size and header overlap, but bigger batches mean fewer, longer compile jobs, so build parallelism and incremental granularity drop.",
+  "when_to_use": [
+    "Clean or CI builds of header-heavy C++ on a modest core count, where per-file front-end work dominates; the implementer's 2019 SpeedCrunch numbers show the largest saving with MSVC (53.50% in the blog, 48.52% in MR 3611) and less with MinGW GCC and clang-cl.",
+    "Rebuilds that touch many files at once (branch switches, widely used header edits): the independent j-jorge/unity-build scripts measured incremental rebuilds after modifying about 10% of files at 2.53x (tweenerspp) and 2.19x (iscool-core) faster (derived from page data).",
+    "Code bases already free of file-scope name collisions (static functions, anonymous-namespace names, macros without #undef, file-scope using-directives), or willing to use UNITY_BUILD_UNIQUE_ID and SKIP_UNITY_BUILD_INCLUSION to fix the few that clash.",
+    "As an opt-in developer or CI switch per machine, which is how CMake's documentation says it should be enabled."
+  ],
+  "when_not_to_use": [
+    "Edit-compile loops that touch one or two files: any change recompiles its whole batch; in j-jorge/unity-build's Release no-ccache plot, iscool::core rebuilt slower with unity than without for most runs with fewer than about 20 modified files (read visually), and weak-function took 3.97 s with unity against 3.51 s without.",
+    "Many-core machines or distributed builds (distcc, icecream): fewer, larger translation units leave cores idle; an LLVM RFC reported about 30% wall-clock gain at about 16 cores that decays at higher core counts (search snippet only).",
+    "Code that relies on per-file isolation: file-local names, unbalanced #defines and file-scope using-directives from different files collide in one TU and cause ODR or ambiguity errors that the normal build never shows.",
+    "Memory-limited build machines with large batch sizes: CMake's docs warn that too-large batches can exhaust compiler memory or fail, and strongly discourage batch size 0 (all sources in one file).",
+    "Workflows built on compile_commands.json (clang-tidy, clangd): CMake's docs say CMAKE_UNITY_BUILD does not work well with CMAKE_EXPORT_COMPILE_COMMANDS; C++20 module sources are excluded from batching automatically."
+  ],
+  "integration": {
+    "form": "build-system feature (CMake target property and cache variable; nothing to link)",
+    "dependencies": "CMake 3.16+",
+    "min_toolchain": "CMake 3.16 (UNITY_BUILD_MODE and UNITY_GROUP 3.18, UNITY_BUILD_UNIQUE_ID 3.20, OBJC/OBJCXX 3.29, CUDA 3.31, UNITY_BUILD_RELOCATABLE 4.0, file-set exclusions 4.4)",
+    "platforms": "Any CMake generator and compiler; the FASTBuild generator does its own unity batching instead of CMake's generated unity files",
+    "thread_safety": "not applicable (build-time feature)",
+    "drop_in_for_baseline": "partial — enabling it needs no source edits, but code with file-local name clashes, unbalanced macros or file-scope using-directives fails to build until fixed or excluded with SKIP_UNITY_BUILD_INCLUSION"
+  },
+  "gotchas": [
+    "BATCH mode slices the target's source list in order into contiguous chunks of UNITY_BUILD_BATCH_SIZE (cmLocalGenerator::AddUnityFilesModeAuto), so adding or removing one source early in the list reshuffles every later batch and recompiles them; GROUP mode with UNITY_GROUP gives stable buckets.",
+    "Sources with their own COMPILE_OPTIONS, COMPILE_DEFINITIONS, COMPILE_FLAGS or INCLUDE_DIRECTORIES source properties (and HEADER_FILE_ONLY files) are silently compiled on their own, so a target can end up with little batching.",
+    "Anonymous namespaces no longer isolate names across merged files; set UNITY_BUILD_UNIQUE_ID (3.20) and wrap file-local code in namespace { namespace MY_UNITY_ID { ... } }, or inject cleanup such as NOMINMAX handling through UNITY_BUILD_CODE_BEFORE_INCLUDE and UNITY_BUILD_CODE_AFTER_INCLUDE.",
+    "Generated unity files #include sources by absolute path, so their content differs with the checkout location; UNITY_BUILD_RELOCATABLE (4.0) switches to relative paths where possible but does not guarantee identical files across environments."
+  ],
+  "pick_this_over_siblings_when": "Choose CMake unity builds when you already use CMake and want a free single-machine cut in clean-build time without a cache server or build farm; FASTBuild has its own Unity/Blob mode, and sccache/ccache/distcc/icecream target repeated or distributed builds and can be combined with it, with each batch becoming the unit that is cached or shipped. Against the sibling precompiled-headers entry, unity builds also share template instantiation and link work but give up per-file isolation and fine-grained incremental rebuilds; the two can be enabled together.",
+  "verified_claims_summary": "The record's numbers are the implementer's 2019 measurements on one Windows 10 Ryzen machine (pages unreachable; search summaries only, and this pass's searches did not re-find the blog's SpeedCrunch figures): SpeedCrunch Release with -DCMAKE_UNITY_BUILD=ON was 29.33% (MinGW GCC 8.1.0), 53.50% (Visual C++ 2017) and 23.61% (Clang-cl 8.0.0) faster per the blog, while MR 3611 gives medians of three runs at batch size 5 of 25.215 s to 17.495 s with MinGW 8.1 (30.61% time saved, about 1.44x) and 23.526 s to 12.097 s with Visual C++ 2017 (stated 48.52%, the times give 48.58%, about 1.94x; derived from page data), so the percentages are time saved, not speed ratios. Independently, j-jorge/unity-build's public scripts (CMake make -j nproc, batch size 65536, Debug by default, ccache if installed, one run per configuration, compiler version not stated) report on an Intel Core i5-3210M incremental rebuilds of tweenerspp at 18.12 s to 7.17 s, iscool-core at 154.03 s to 70.37 s, and weak-function at 3.51 s to 3.97 s (slower).",
+  "status_note": "Actively developed (GitHub mirror commit on 2026-10-24, v4.4.4 released 2026-10-02, v4.5.0-rc1 on 2026-10-15) and BSD-3-Clause; nothing to vendor, since it ships in every CMake from 3.16.",
+  "sources_read": [
+    "https://github.com/Kitware/CMake",
+    "https://github.com/Kitware/CMake/tags",
+    "https://github.com/Kitware/CMake/commits/master",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/prop_tgt/UNITY_BUILD.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/prop_tgt/UNITY_BUILD_BATCH_SIZE.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/prop_tgt/UNITY_BUILD_MODE.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/prop_tgt/UNITY_BUILD_UNIQUE_ID.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/prop_tgt/UNITY_BUILD_CODE_BEFORE_INCLUDE.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/prop_tgt/UNITY_BUILD_CODE_AFTER_INCLUDE.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/prop_tgt/UNITY_BUILD_RELOCATABLE.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/prop_sf/SKIP_UNITY_BUILD_INCLUSION.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/prop_sf/UNITY_GROUP.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/variable/CMAKE_UNITY_BUILD.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/variable/CMAKE_UNITY_BUILD_BATCH_SIZE.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/variable/CMAKE_UNITY_BUILD_UNIQUE_ID.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Help/release/3.16.rst",
+    "https://raw.githubusercontent.com/Kitware/CMake/HEAD/Source/cmLocalGenerator.cxx",
+    "https://raw.githubusercontent.com/j-jorge/unity-build/HEAD/README.md",
+    "https://raw.githubusercontent.com/j-jorge/unity-build/HEAD/bin/benchmark.sh",
+    "https://raw.githubusercontent.com/j-jorge/unity-build/HEAD/bin/am-i-special.sh",
+    "https://raw.githubusercontent.com/j-jorge/unity-build/HEAD/lib/benchmark-utils.sh",
+    "https://raw.githubusercontent.com/j-jorge/unity-build/HEAD/results/release/noccache/plot.png",
+    "https://www.qt.io/blog/2019/08/01/precompiled-headers-and-unity-jumbo-builds-in-upcoming-cmake (fetch failed: getaddrinfo ENOTFOUND www.qt.io; WebSearch summaries only)",
+    "https://gitlab.kitware.com/cmake/cmake/merge_requests/3611 (fetch failed: getaddrinfo ENOTFOUND gitlab.kitware.com; WebSearch summaries only)",
+    "https://discourse.llvm.org/t/rfc-enabling-unity-build/90306 (fetch failed: getaddrinfo ENOTFOUND discourse.llvm.org; WebSearch summary only)"
+  ],
+  "confidence": 0.65
+}
