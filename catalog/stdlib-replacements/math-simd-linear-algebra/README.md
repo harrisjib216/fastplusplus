@@ -3,7 +3,7 @@
 <sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [C++ standard library replacements](../README.md)</sub>
 
 **What these beat:** std::valarray, std::transform, std::reduce, &lt;cmath&gt;  
-**27 entries:** 5 tier A · 3 tier B · 16 tier C · 3 tier D · 27 copyable, 0 study only
+**32 entries:** 5 tier A · 3 tier B · 21 tier C · 3 tier D · 32 copyable, 0 study only
 
 | # | Project | What it is | Tier | Language | License | Status |
 |--:|---|---|:-:|---|---|---|
@@ -24,15 +24,20 @@
 | 15 | [**libfixmath**](petteriaimonen-libfixmath.md) | Q16.16 fixed-point math library in C for FPU-less targets; on 8-bit AVR, add/sub beat soft-float about 2x, mul/div lose. | **C** | C | MIT | 🟢 active |
 | 16 | [**fmath (herumi)**](herumi-fmath.md) | SIMD array-mode log/exp for float buffers, 9-19x faster than std::logf/std::expf via AVX2/AVX-512. | **C** | C++ | BSD-3-Clause | 🟢 active |
 | 17 | [**Axiom (C++ tensor library)**](frikallo-axiom.md) | Lazy-evaluated C++20 NumPy/PyTorch-style tensor library for CPU and Metal GPU; beats Eigen3 on some unary math ops, loses on others. | **C** | C++ | MIT | 🟢 active |
-| 18 | [**LibRapid**](librapid-librapid.md) | Templated C++20/23 array/tensor library with SIMD, OpenMP, CUDA and OpenCL backends; beats naive std::vector loops on elementwise math. | **C** | C++ | MIT | 🟡 stale |
-| 19 | [**FABE13-HX**](farukalpay-fabe.md) | SIMD sin/cos/sincos array kernel for C beating libm; rational Ψ-Hyperbasis approximation, no bit-exact IEEE guarantee. | **C** | C | MIT | 🟡 stale |
-| 20 | [**Klein**](jeremyong-klein.md) | Header-only SSE library for 3D projective geometric algebra; its llvm-mca listings show about half GLM's estimated cycles for quaternion and dual-quaternion work. | **C** | C++ | MIT | 🔴 abandoned |
-| 21 | [**FastNoiseSIMD**](auburn-fastnoisesimd.md) | SIMD 3D coherent-noise generator (Perlin, simplex, value, cellular, cubic) filling float grids 4-45x faster than libnoise. | **C** | C++ | MIT | 🔴 abandoned |
-| 22 | [**Extreme C: cache-friendly row-major matrix summation…**](paper-book-extreme-c-row-major-matrix-traversal.md) | Book example: summing a row-major C int matrix in memory order instead of column by column, for cache locality. | **C** | C | MIT | 🔴 abandoned |
-| 23 | [**FastDivide (komrad36)**](komrad36-fastdivide.md) | Branch-free 64-bit unsigned divide and modulo via a Newton-Raphson reciprocal; claims about 30% faster than hardware div on Intel. | **C** | C++ | MIT | 🔴 abandoned |
-| 24 | [**FastDivide128 (komrad36)**](komrad36-fastdivide128.md) | Unsigned 128-bit Div/Mod/DivMod for x86-64 with BMI2; author says about 2x faster than compiler-rt's __udivmodti4. | **C** | C++ | MIT | 🔴 abandoned |
-| 25 | [**xsimd**](xtensor-stack-xsimd.md) | Header-only C++ SIMD abstraction: portable batch&lt;T,Arch&gt; type replaces scalar loops across x86/ARM/RISC-V/WASM. | **D** | C++ | BSD-3-Clause | 🟢 active |
-| 26 | [**Yeppp!**](wdv4758h-yeppp.md) | Abandoned 2013-2015 SIMD array math library (log, exp, sin, dot, sum); hand-tuned assembly only for pre-2015 x86-64 cores. | **D** | C | BSD-3-Clause | 🔴 abandoned |
-| 27 | [**fastapprox**](pmineiro-fastapprox.md) | Header-only C/C++ single-precision approximations of exp, log, pow, sigmoid, trig, erf, lgamma and Lambert W, with SSE2 variants; no measured speedup over libm. | **D** | C | BSD-3-Clause | 🔴 abandoned |
+| 18 | [**Cache-blocked double-precision matrix multiply with tile…**](paper-book-the-cpp-programmers-mindset-cache-blocked-gemm.md) | Teaching example: 32x32 cache-blocked scalar dgemm with a tile accumulator, about 1.9x faster than a naive triple loop. | **C** | C++ | MIT | 🟢 active |
+| 19 | [**Clamp loop with conditional store instead of std::min (The…**](paper-book-the-cpp-programmers-mindset-clamp-conditional-store.md) | Book micro-idiom: an if-guarded store clamp loop beats a std::min (cmov) clamp loop by about 1.2x, vectorisation off. | **C** | C++ | MIT | 🟢 active |
+| 20 | [**LibRapid**](librapid-librapid.md) | Templated C++20/23 array/tensor library with SIMD, OpenMP, CUDA and OpenCL backends; beats naive std::vector loops on elementwise math. | **C** | C++ | MIT | 🟡 stale |
+| 21 | [**GPU Programming with C++ and CUDA: CUDA vector addition…**](paper-book-gpu-programming-with-cpp-and-cuda-vector-add-kernel.md) | Textbook one-thread-per-element CUDA float vector add: 44x kernel-only over a scalar CPU loop, 1.02x once copies count. | **C** | C++ | MIT | 🟡 stale |
+| 22 | [**GPU Programming with C++ and CUDA: shared-memory tiled…**](paper-book-gpu-programming-with-cpp-and-cuda-tiled-matmul.md) | Textbook CUDA FP32 matrix multiply with 16x16 shared-memory tiles; about 1.42x faster than the book's own naive kernel. | **C** | C++ | MIT | 🟡 stale |
+| 23 | [**GPU Programming with C++ and CUDA: two-stream chunked copy…**](paper-book-gpu-programming-with-cpp-and-cuda-stream-overlap.md) | Book CUDA pattern: row chunks copied from pinned memory on two streams so transfers overlap the GEMV kernel. | **C** | C++ | MIT | 🟡 stale |
+| 24 | [**FABE13-HX**](farukalpay-fabe.md) | SIMD sin/cos/sincos array kernel for C beating libm; rational Ψ-Hyperbasis approximation, no bit-exact IEEE guarantee. | **C** | C | MIT | 🟡 stale |
+| 25 | [**Klein**](jeremyong-klein.md) | Header-only SSE library for 3D projective geometric algebra; its llvm-mca listings show about half GLM's estimated cycles for quaternion and dual-quaternion work. | **C** | C++ | MIT | 🔴 abandoned |
+| 26 | [**FastNoiseSIMD**](auburn-fastnoisesimd.md) | SIMD 3D coherent-noise generator (Perlin, simplex, value, cellular, cubic) filling float grids 4-45x faster than libnoise. | **C** | C++ | MIT | 🔴 abandoned |
+| 27 | [**Extreme C: cache-friendly row-major matrix summation…**](paper-book-extreme-c-row-major-matrix-traversal.md) | Book example: summing a row-major C int matrix in memory order instead of column by column, for cache locality. | **C** | C | MIT | 🔴 abandoned |
+| 28 | [**FastDivide (komrad36)**](komrad36-fastdivide.md) | Branch-free 64-bit unsigned divide and modulo via a Newton-Raphson reciprocal; claims about 30% faster than hardware div on Intel. | **C** | C++ | MIT | 🔴 abandoned |
+| 29 | [**FastDivide128 (komrad36)**](komrad36-fastdivide128.md) | Unsigned 128-bit Div/Mod/DivMod for x86-64 with BMI2; author says about 2x faster than compiler-rt's __udivmodti4. | **C** | C++ | MIT | 🔴 abandoned |
+| 30 | [**xsimd**](xtensor-stack-xsimd.md) | Header-only C++ SIMD abstraction: portable batch&lt;T,Arch&gt; type replaces scalar loops across x86/ARM/RISC-V/WASM. | **D** | C++ | BSD-3-Clause | 🟢 active |
+| 31 | [**Yeppp!**](wdv4758h-yeppp.md) | Abandoned 2013-2015 SIMD array math library (log, exp, sin, dot, sum); hand-tuned assembly only for pre-2015 x86-64 cores. | **D** | C | BSD-3-Clause | 🔴 abandoned |
+| 32 | [**fastapprox**](pmineiro-fastapprox.md) | Header-only C/C++ single-precision approximations of exp, log, pow, sigmoid, trig, erf, lgamma and Lambert W, with SSE2 variants; no measured speedup over libm. | **D** | C | BSD-3-Clause | 🔴 abandoned |
 
 <sub>Tiers: **A** reproducible public benchmark (code, compiler, flags and CPU stated) · **B** independent or peer-reviewed measurement · **C** first-party claim · **D** directional, no numbers. Status: 🟢 active · 🔵 finished · 🟡 slow or stale · 🔴 abandoned · ⚪ unknown. *Study only* means no usable open-source license: read the idea, don't copy the code.</sub>

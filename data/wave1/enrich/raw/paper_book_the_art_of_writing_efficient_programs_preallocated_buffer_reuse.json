@@ -1,0 +1,45 @@
+{
+  "id": "paper:book-the-art-of-writing-efficient-programs-preallocated-buffer-reuse",
+  "one_liner": "Book sample: allocate a scratch buffer once at its maximum size instead of new[]/delete[] on every loop iteration.",
+  "what_it_does": "A companion example (Chapter09/04_buffer.C) for the Packt book The Art of Writing Efficient Programs. Three Google Benchmark functions fill a string of random length (1 to 1024 bytes) with memset: BM_make_str_new calls new char[N] and delete[] every iteration, BM_make_str_max allocates one 1 KB buffer before the loop and reuses it, and BM_make_str_buf uses a small grow-only Buffer class (a std::unique_ptr<char[]> plus a resize that reallocates only when N exceeds the current size). There is no library to adopt: the takeaway is to move the allocation out of the hot loop, sized to a known maximum or grown on demand and kept.",
+  "how_it_is_fast": "Every new[]/delete[] pair goes through operator new and the C allocator's malloc/free path (size-class lookup, free-list pop and push, chunk bookkeeping); reusing one buffer removes those calls from the loop and leaves only the memset. With glibc, requests of up to 1032 bytes on 64-bit are served from the per-thread tcache, the allocator's cheapest path, so the gap this harness shows is the fast-path cost of a malloc/free pair against nothing. The grow-only variant amortizes the same way: it reallocates (copying the old contents) only when a request exceeds the largest size seen so far, so after warm-up it behaves like the preallocated buffer.",
+  "when_to_use": [
+    "A hot loop that needs a temporary buffer on every iteration (formatting, serialization, decompression or I/O staging) whose size has a known or cheaply bounded maximum.",
+    "Scratch space that can live across many calls as an object member or a per-thread buffer, so one allocation serves the whole run.",
+    "Sizes that vary per call but settle toward a stable maximum: the grow-only Buffer pattern (BM_make_str_buf) keeps the high-water allocation and stops reallocating after warm-up.",
+    "Profiles that show malloc/free or operator new/delete high inside one loop, where restructuring that loop is easier than swapping the program's allocator."
+  ],
+  "when_not_to_use": [
+    "The maximum size is unbounded or rarely reached: the buffer (or the grow-only high-water mark, which never shrinks) is held for the owner's lifetime.",
+    "One buffer shared across threads or re-entrant calls: the pattern is only safe with one buffer per thread or per caller.",
+    "The data must outlive the iteration (returned to a caller, queued, handed to another thread): reuse would overwrite live data.",
+    "Expecting the book's roughly 2.5x in real code: it was measured at sizes up to 1 KB where a malloc/free pair costs about as much as the memset; with more work per iteration, larger buffers or a different allocator the share changes, and the repo has no data for those cases."
+  ],
+  "integration": {
+    "form": "source-drop (a code pattern; the grow-only Buffer class is about 10 lines)",
+    "dependencies": "none for the pattern; the benchmark needs Google Benchmark",
+    "min_toolchain": "C++11 for std::unique_ptr<char[]>; the repo's generic build line (Chapter02/ReadMe.md) is GCC or Clang with -g -O3 --std=c++17",
+    "platforms": "any for the pattern; the benchmark file includes unistd.h and calls sysconf(_SC_NPROCESSORS_CONF), so it builds on Linux and macOS only",
+    "thread_safety": "Not thread-safe when one buffer is shared; the benchmark gives each thread its own buffer because each thread runs the benchmark function, which allocates locally",
+    "drop_in_for_baseline": "partial — the same call sites work on the reused buffer, but you must move the allocation out of the loop, own the buffer's lifetime and know or bound the size"
+  },
+  "gotchas": [
+    "Harness UB: the random-size table vr is built with reserve() and then written with v[i] = rand(), so its size() stays 0 and every vr[ir++ % nr] read in the timed loops is an out-of-bounds operator[] that only works because the moved buffer still holds the values; a build with _GLIBCXX_ASSERTIONS or MSVC debug iterators aborts.",
+    "Only one size bound (Arg 1<<10) is benchmarked and every thread replays the same random sequence; at that size glibc takes each new[] from the per-thread tcache without locking, so the result covers only the allocator's fast path. The book's larger multi-thread penalty cannot be checked: the repo has no results and does not name the allocator or glibc version.",
+    "The `if (r < 0) cout << buf` line never runs (rand() is non-negative); it is there so the compiler must keep the buffer and the memset. If it ever ran it would print an unterminated buffer. Keep some escape such as benchmark::DoNotOptimize when you copy this harness, or the timed work can be optimized away.",
+    "Buffer::resize memcpy's the old contents on every growth even though callers overwrite them, and starts at 1 byte, so its first iterations reallocate; it is move-only (unique_ptr member)."
+  ],
+  "pick_this_over_siblings_when": "The siblings are drop-in allocators (mimalloc, snmalloc, jemalloc, TCMalloc, rpmalloc) and arenas (arena-allocator, fastcpp::arena); hoisting the buffer removes the allocator calls from the loop entirely with no dependency, so try it first when one hot loop allocates a bounded scratch buffer. Pick a drop-in allocator such as mimalloc when allocations are spread across the program and cannot be restructured, or an arena when many objects share one lifetime.",
+  "verified_claims_summary": "The book, relayed by the seed lead (the repo holds no numbers), reports the per-iteration new char[N]/delete[] loop running at about 40% of the speed of the allocate-once loop (preallocation about 2.5x faster, derived) for random N up to 1 KB filled with memset, with a larger penalty at 8 threads in its charts. Compiler, standard library, allocator, flags and CPU of that run are not stated; the repo's generic build line is GCC or Clang -g -O3 --std=c++17, and the code was read, not built, here.",
+  "status_note": "Stale Packt companion repo (62 commits, last on 2024-05-13, 1 open issue) under MIT; nothing to vendor beyond the hoisting pattern or the 10-line Buffer class.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/Chapter09/04_buffer.C",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/Chapter02/ReadMe.md",
+    "https://github.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs",
+    "https://github.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/tree/master/Chapter09",
+    "https://github.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/bminor/glibc/master/malloc/malloc.c"
+  ],
+  "confidence": 0.6
+}

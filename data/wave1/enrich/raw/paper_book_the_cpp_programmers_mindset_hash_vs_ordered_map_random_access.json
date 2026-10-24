@@ -1,0 +1,50 @@
+{
+  "id": "paper:book-the-cpp-programmers-mindset-hash-vs-ordered-map-random-access",
+  "one_liner": "Book benchmark: hash maps find random int64 keys 6-9x faster than std::map and other ordered maps at 256-1,024 keys.",
+  "what_it_does": "A Chapter-05 sample from the Packt companion repository for The C++ Programmer's Mindset that fills eight map types with keys 0..n-1 (n = 256 and 1,024) and times operator[] on uniformly random existing keys with Google Benchmark: three ordered maps (std::map, absl::btree_map, boost::container::flat_map) and five hash maps (std::unordered_map, absl::flat_hash_map, absl::node_hash_map, boost::unordered_map, boost::unordered_flat_map). There is no library to adopt; the takeaway is to choose a hash map over std::map for point lookups when key order is not used. All eight share the map-style operator[]/find/insert interface, but iteration order and reference stability differ.",
+  "how_it_is_fast": "A hash map turns a lookup into one hash computation plus a probe of roughly one bucket or slot (O(1) on average), while std::map descends a red-black tree about log2(n) levels deep (8 at 256 keys, 10 at 1,024), each step a dependent pointer load followed by a compare whose direction is random for random keys, so branch mispredictions and pointer chasing grow with depth. The B-tree (absl::btree_map) and sorted-vector (boost::container::flat_map) layouts cut pointer chasing but still binary-search with unpredictable branches, which is why they land within about 0.9-1.45x of std::map in the relayed figures (derived). std::hash<int64_t> is the identity in libstdc++ and libc++ (per the record), so with dense keys std::unordered_map pays almost nothing for hashing or collisions.",
+  "when_to_use": [
+    "Point lookups (find, at, operator[]) by key where nothing needs sorted iteration, lower_bound/upper_bound or range scans: switching std::map to std::unordered_map is a near drop-in change inside the standard library.",
+    "Small, cache-resident maps of hundreds to about a thousand entries with random access: in the relayed figures std::unordered_map (3.56/3.81 ns) was as fast as the Abseil and Boost hash maps (3.66-4.29 ns), so no third-party dependency is needed at this size.",
+    "Integer keys that are dense or well spread, where the identity std::hash is adequate.",
+    "Read-mostly lookup tables with random query keys, where the tree's mispredicted branches dominate std::map's cost."
+  ],
+  "when_not_to_use": [
+    "You need sorted iteration, range queries, lower_bound/upper_bound or a deterministic iteration order: stay with std::map, absl::btree_map or boost::container::flat_map.",
+    "Large (out-of-cache) maps or insert- and erase-heavy workloads: only 256 and 1,024 keys are measured here; at larger sizes the flat open-addressing maps in the sibling entries beat std::unordered_map itself (2.43x and 2.70x faster finds for absl::flat_hash_map and boost::unordered_flat_map in the sibling suite).",
+    "Patterned or attacker-chosen integer keys with std::unordered_map's identity hash: keys that are multiples of the bucket count all land in one bucket; use a hash that mixes bits (absl::Hash, or a custom hasher).",
+    "Code that keeps iterators across inserts or needs bounded worst-case latency: an insert that triggers a rehash invalidates all iterators of an unordered map and costs O(n) once, whereas std::map never invalidates on insert and stays O(log n).",
+    "Keys without a good hash or equality but with a natural ordering (composite or floating-point keys with custom comparison), where writing a correct hash is the harder problem."
+  ],
+  "integration": {
+    "form": "header-only (std::unordered_map is standard library; the benchmark's Abseil maps link compiled Abseil targets such as absl::hash, and the Boost maps come from Boost.Container and Boost.Unordered)",
+    "dependencies": "none for std::unordered_map; the benchmark needs Abseil >= 20240722.0 and boost-container, boost-container-hash and boost-unordered >= 1.86.0 (Chapter-05/vcpkg.json), plus Google Benchmark and GTest, which CMakeLists.txt requires but the vcpkg manifest does not list",
+    "min_toolchain": "C++20 (CMakeLists.txt), CMake 3.30+; the make_map<Map> helper takes template <typename, typename> class Map and passes std::map (four template parameters), which needs relaxed template-template matching (P0522): default in GCC's C++17 and later modes and in Clang 19+ (per the Clang 19.1.0 release notes, seen as a search snippet), so older Clang rejects it without -frelaxed-template-template-args",
+    "platforms": "any (portable C++); the relayed numbers come from an AMD Ryzen 7900X",
+    "thread_safety": "Standard containers allow concurrent const access (find, at, iteration) with no writer; operator[], as the benchmark uses it, is not among the functions the standard treats as const for data races in associative and unordered containers, so concurrent lookups should use find or at, and any writer needs a lock.",
+    "drop_in_for_baseline": "partial: std::unordered_map accepts the same find/at/operator[]/insert/erase calls as std::map, but needs std::hash and operator== instead of operator<, drops ordered iteration and lower_bound/upper_bound, and invalidates iterators on rehash; the flat hash maps also move elements, so references are not stable."
+  },
+  "gotchas": [
+    "operator[] inserts a default-constructed value when the key is missing; the benchmark only queries keys it inserted, so it never pays for that, but lookup-only code should use find or at.",
+    "The timed loop includes the std::mt19937_64 draw and uniform_int_distribution, and successive lookups are independent, so the CPU overlaps them: the 3.6-4.3 ns hash-map figures carry the RNG cost and reflect throughput rather than the latency of one dependent lookup, and the constant RNG cost compresses the 6.5x/9.2x ratios. There is no RNG-only baseline in this benchmark, and the generator is seeded from std::random_device, so key sequences differ between runs.",
+    "Best case for std::unordered_map: dense keys 0..n-1 inserted in ascending order and an identity hash mean no collisions, and std::map's nodes are allocated in key order; at 256 and 1,024 entries everything fits in cache, so the flat versus node-based layouts cannot separate.",
+    "Chapter-05/CMakeLists.txt sets no build type or optimisation flags, and these template-heavy containers are far slower in an unoptimised build, so pass -DCMAKE_BUILD_TYPE=Release; the code also relies on transitive includes for <map>, <unordered_map> and <deque>, which may break on another standard library."
+  ],
+  "pick_this_over_siblings_when": "The sibling entries are hash-map libraries that beat std::unordered_map; this entry is the step before them: replace std::map with std::unordered_map when point lookups dominate and order is unused. At a few hundred to a thousand keys it showed no gain from absl::flat_hash_map or boost::unordered_flat_map, so reach for those (or ankerl::unordered_dense) once maps outgrow the cache or inserts dominate.",
+  "verified_claims_summary": "The repository holds benchmark source only; the book's own run, relayed by the seed lead on an AMD Ryzen 7900X with compiler, flags and standard library unstated, put std::map at 23.3/34.9 ns per random operator[] lookup at 256/1,024 int64 keys against 3.56/3.81 ns for std::unordered_map (about 6.5x and 9.2x, derived). All five hash maps fell between 3.56 and 4.29 ns and the three ordered maps between 19.5 and 34.9 ns, every figure including the random-number draw.",
+  "status_note": "Packt companion repository, MIT-licensed, 20 stars and 8 forks; last commit 2026-01-22 (a README; code last changed in November 2025); the technique needs nothing beyond the standard library.",
+  "sources_read": [
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/tree/main/Chapter-05",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/commits/main",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/issues",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-05/bench_map_random_access.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-05/bench_containers.h",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-05/benchmark_hash.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-05/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-05/vcpkg.json",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/LICENSE"
+  ],
+  "confidence": 0.65
+}

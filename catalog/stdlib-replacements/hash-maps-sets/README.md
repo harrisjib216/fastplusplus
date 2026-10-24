@@ -3,7 +3,7 @@
 <sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [C++ standard library replacements](../README.md)</sub>
 
 **What these beat:** std::unordered_map, std::unordered_set  
-**27 entries:** 18 tier A · 1 tier B · 8 tier C · 0 tier D · 26 copyable, 1 study only
+**28 entries:** 18 tier A · 1 tier B · 9 tier C · 0 tier D · 27 copyable, 1 study only
 
 | # | Project | What it is | Tier | Language | License | Status |
 |--:|---|---|:-:|---|---|---|
@@ -30,9 +30,10 @@
 | 21 | [**CCAN htable (ccan/htable)**](rustyrussell-ccan.md) | Compact C open-addressing hash table of object pointers with hash bits folded into spare pointer bits; beats JudyL on random lookups. | **C** | C | LGPL-2.1-or-later | 🟢 active |
 | 22 | [**Ultimate++ (U++ Core: VectorMap, String, Stream, heap)**](ultimatepp-ultimatepp.md) | U++ framework's VectorMap/Index hash containers plus String and heap; 1.8-2.4x over std::unordered_map in a first-party word-index test. | **C** | C++ | BSD-2-Clause | 🟢 active |
 | 23 | [**Direct-indexed std::array maps in the matching-engine order…**](paper-book-building-low-latency-applications-with-cpp-array-indexed-or-2516eccb.md) | Matching-engine order book using preallocated direct-indexed std::array maps instead of std::unordered_map; about 7% fewer cycles in the book's run. | **C** | C++ | MIT | 🟢 active |
-| 24 | [**fastcpp::flat_hash_map (developer source)**](private-developer-source-hash-maps-sets.md) | Header-only SwissTable-style hash map: 1.8-5.5x faster than std::unordered_map on 1M uint64 keys, but slower than phmap on lookups. | **C** | C++ | MIT | 🟢 active |
-| 25 | [**SIGMOD 2025 Contest Solution - Hash Join Pipeline (Robin…**](ariss44-sigmod-2025-contest-solution.md) | Coursework hash-join pipeline: four custom open-addressing tables plus a columnar 'Unchained' design that beat std::unordered_map on an IMDB join benchmark. | **C** | C++ | MIT | 🟢 active |
-| 26 | [**rigtorp/HashMap**](rigtorp-hashmap.md) | Header-only open-addressing hash map with backshift deletion, up to \~5x faster than std::unordered_map on delete-heavy workloads. | **C** | C++ | MIT | 🟡 stale |
-| 27 | [**CYBHash**](chenyibo1029-cybhash.md) | Header-only bit-packing + BMI2 pext lookup for fixed-format Chinese futures/stock/option ticker symbols, vs std::unordered_map. | **C** | C++ | no license (study only) | 🟡 stale |
+| 24 | [**Hash maps versus ordered maps, random-access lookup (The…**](paper-book-the-cpp-programmers-mindset-hash-vs-ordered-map-random-access.md) | Book benchmark: hash maps find random int64 keys 6-9x faster than std::map and other ordered maps at 256-1,024 keys. | **C** | C++ | MIT | 🟢 active |
+| 25 | [**fastcpp::flat_hash_map (developer source)**](private-developer-source-hash-maps-sets.md) | Header-only SwissTable-style hash map: 1.8-5.5x faster than std::unordered_map on 1M uint64 keys, but slower than phmap on lookups. | **C** | C++ | MIT | 🟢 active |
+| 26 | [**SIGMOD 2025 Contest Solution - Hash Join Pipeline (Robin…**](ariss44-sigmod-2025-contest-solution.md) | Coursework hash-join pipeline: four custom open-addressing tables plus a columnar 'Unchained' design that beat std::unordered_map on an IMDB join benchmark. | **C** | C++ | MIT | 🟢 active |
+| 27 | [**rigtorp/HashMap**](rigtorp-hashmap.md) | Header-only open-addressing hash map with backshift deletion, up to \~5x faster than std::unordered_map on delete-heavy workloads. | **C** | C++ | MIT | 🟡 stale |
+| 28 | [**CYBHash**](chenyibo1029-cybhash.md) | Header-only bit-packing + BMI2 pext lookup for fixed-format Chinese futures/stock/option ticker symbols, vs std::unordered_map. | **C** | C++ | no license (study only) | 🟡 stale |
 
 <sub>Tiers: **A** reproducible public benchmark (code, compiler, flags and CPU stated) · **B** independent or peer-reviewed measurement · **C** first-party claim · **D** directional, no numbers. Status: 🟢 active · 🔵 finished · 🟡 slow or stale · 🔴 abandoned · ⚪ unknown. *Study only* means no usable open-source license: read the idea, don't copy the code.</sub>

@@ -1,0 +1,48 @@
+{
+  "id": "paper:book-hands-on-design-patterns-with-cpp-second-edition-template-scopeguard",
+  "one_liner": "Book example: a scope guard templated on its cleanup lambda, removing std::function type erasure and its per-guard overhead.",
+  "what_it_does": "ScopeGuard<Callable> runs a cleanup callable when the scope ends unless commit() was called; it is created with MakeGuard([&]{ ... }) and held in an auto variable. The baseline in the same file is a non-template ScopeGuard that stores the cleanup in a std::function<void()>. Other Chapter 11 files build ON_SCOPE_EXIT, ON_SCOPE_SUCCESS and ON_SCOPE_FAILURE macros on the same template design, using std::uncaught_exceptions in C++17.",
+  "how_it_is_fast": "The callable's type is a template parameter and the lambda is stored by value, so the destructor calls it directly and the compiler inlines it: no std::function construction, no manager/invoker function pointers and no indirect call. In a reduced copy compiled to assembly by the enricher (GCC 13.3 and Clang 18, -O2 and -O3), the template-guard loop compiled to the same code as the hand-written explicit delete, while the std::function guard kept an indirect call through its invoker.",
+  "when_to_use": [
+    "Rollback or cleanup (delete, close, undo) in functions with several return paths or exceptions, where the cleanup is a short lambda over locals.",
+    "Hot paths that create a guard per call or per iteration, where std::function setup and an indirect call (about 1.8 ns per guard in the book's run, derived from the relayed numbers) show up.",
+    "Local guards that can be declared with auto, which is the normal way scope guards are used.",
+    "C++17 code that also wants success-only or failure-only cleanup: the chapter's ON_SCOPE_SUCCESS and ON_SCOPE_FAILURE macros use the same template approach."
+  ],
+  "when_not_to_use": [
+    "Guards that must share one type: stored as a class member, in a container or returned through a non-template interface; that needs type erasure (std::function or the buffer-based sibling).",
+    "When a maintained guard is already available: Boost.ScopeExit, folly::ScopeGuard and std::experimental::scope_exit use the same template design.",
+    "Cleanup code that can throw: the destructor is implicitly noexcept, so a throwing cleanup calls std::terminate.",
+    "Expecting the book's 2.9x delete-case gain in real code: the clean comparison is about 1.8 ns per guard, negligible next to I/O or allocation in the guarded scope."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the guard itself (it needs <utility> for std::exchange, which the file only gets through benchmark/benchmark.h; with <functional> alone GCC 13 libstdc++ rejects std::exchange). The benchmark needs Google Benchmark; there are no build files, and unmerged third-party PR #11 adds a Chapter11 CMakeLists.txt (C++20, benchmark v1.7.1, no build type or flags).",
+    "min_toolchain": "C++14 (std::exchange); enricher compiled a reduced copy with GCC 13.3 and Clang 18 at -std=c++17. The ON_SCOPE_SUCCESS/FAILURE variants need C++17 (std::uncaught_exceptions).",
+    "platforms": "any",
+    "thread_safety": "not documented; a guard is a local object used by one thread, and the captured state's safety is up to the caller",
+    "drop_in_for_baseline": "partial — same construct/commit/run-at-exit behaviour, but the guard's type depends on the lambda, so it is declared with auto via MakeGuard and cannot replace the std::function guard where a single named type is needed"
+  },
+  "gotchas": [
+    "Benchmark defect in the delete case: in a reduced copy compiled to assembly (GCC 13.3, Clang 18, -O2/-O3), both compilers removed the new int(42)/delete pair entirely from the explicit and template rows (only the rand() call remains), while the std::function and buffer-guard rows keep operator new and the indirect delete. The 13.4 ns against 4.56 ns (2.9x) row therefore compares a real allocation against none; use the nodelete row.",
+    "MakeGuard with a named (lvalue) lambda does not compile: Callable deduces to a reference, the two constructors collapse to one signature (GCC 13.3: 'cannot be overloaded'; Clang 18: 'multiple overloads of ScopeGuard instantiate to the same signature'). Pass the lambda inline or std::move it.",
+    "The plain guard fires on every exit, success included, until commit() is called (checked on a reduced copy: commit() disarms it); use the chapter's ON_SCOPE_FAILURE variant for failure-only rollback.",
+    "Do not copy the file's ScopeGuardTypeErasedFast class alongside it: it redeclares mutable bool commit_, shadowing the base flag, so commit() never disarms it and a moved-from guard still fires (reduced copy: cleanup ran once after commit(), twice after a move)."
+  ],
+  "pick_this_over_siblings_when": "Against the catalogued inline-buffer type-erased guard from the same chapter, this one is as fast as hand-written cleanup, has no size or trivially-copyable limits on the lambda, and does not have that class's commit() bug; take the buffer guard only when one non-template guard type is required (after fixing it). The other catalogued utilities are unrelated.",
+  "verified_claims_summary": "The book reports (relayed by the seed lead; the repo holds only the Google Benchmark source) template guard 4.50 ns against 6.29 ns for the std::function guard with explicit code at 4.48 ns when no delete happens, and 4.56 ns against 13.4 ns (explicit 4.54 ns) when an int is allocated and deleted each iteration; compiler, flags and CPU are not stated, and every row except noop includes a rand() call, which is most of the 4.5 ns. Because only the std::function row pays a real new/delete in the delete case, subtracting its own nodelete-to-delete step (7.1 ns) leaves about 1.7 ns of guard overhead, matching the nodelete gap of about 1.8 ns, roughly 1.4x on this rand()-dominated loop (derived from the relayed numbers).",
+  "status_note": "Stale Packt companion repo (last commit 2024-08-29; CMake PR #11 for Chapter11 unmerged since 2023-01-23), MIT; the guard is about 30 lines, so copy it with an explicit #include <utility>, or use a maintained library guard.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/main/Chapter11/11_scopeguard_te_benchmark.C",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/main/Chapter11/07b_scopeguard_lambda_cpp17.C",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/main/Chapter11/08_scopeguard_on_exit.C",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/main/Chapter11/10a_scopeguard_on_fail_cpp17.C",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/main/README.md",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/tree/main/Chapter11",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/issues?q=is%3Aissue",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/pulls",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/pull/11/files"
+  ],
+  "confidence": 0.75
+}

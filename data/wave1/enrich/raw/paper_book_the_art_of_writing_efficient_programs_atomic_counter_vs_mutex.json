@@ -1,0 +1,55 @@
+{
+  "id": "paper:book-the-art-of-writing-efficient-programs-atomic-counter-vs-mutex",
+  "one_liner": "std::atomic fetch_add on a shared counter in place of a std::mutex-guarded ++x; a book idiom, not a library.",
+  "what_it_does": "Chapter06 of the book's companion code times one shared unsigned long counter bumped by 1 to numcpu threads under Google Benchmark: 01a_atomic_count.C calls fetch_add(1, std::memory_order_relaxed) on a std::atomic<unsigned long>, 01b_mutex_count.C wraps ++x in std::lock_guard<std::mutex>, and 01_sharing_incr_mbm.C runs both plus a CAS loop, a test-and-test-and-set spinlock and a pointer lock in one binary. The takeaway is an idiom rather than an API: when a mutex protects nothing but one integer, make the integer atomic and drop the lock.",
+  "how_it_is_fast": "An atomic increment is one locked read-modify-write on the counter's cache line, while even an uncontended mutex needs an atomic acquire of the lock word, the increment, and an atomic release, plus the calls into the threading library. Under contention the mutex adds lock handoffs and possible blocking on top of the cache-line transfers both variants pay, so the gap grows with thread count. Relaxed ordering is enough for a pure counter; on x86 relaxed and sequentially consistent fetch_add both compile to the same locked add.",
+  "when_to_use": [
+    "Statistics, hit or byte counters bumped from many threads and read occasionally, where nothing else has to change together with the count.",
+    "ID, ticket or sequence generators where the old value returned by a single fetch_add is the whole critical section.",
+    "Existing code that takes a std::mutex only around ++counter: the book figures relayed in the record put one thread at about 23 ns per locked increment against about 7 ns atomic, with the gap widening as threads are added.",
+    "As a reference point before trying other schemes: the same Chapter06 folder times a CAS loop (01e), a spinlock (01c) and a pointer lock (01d) on the identical counter, so one build compares all five."
+  ],
+  "when_not_to_use": [
+    "Updates that touch more than one variable or keep an invariant (counter plus container, check-then-act): one atomic word does not protect them, so keep the lock or use a concurrent data structure.",
+    "Very hot counters updated by every thread: the atomic still serialises on one cache line, so it does not scale; per-thread counters on separate cache lines that are folded into the total rarely (the sibling Chapter05 padding entry) avoid that single hot line.",
+    "Read-modify-write logic that is not a plain add (saturating, conditional, min/max): that needs a compare_exchange loop like 01e_cas_count.C, which can retry repeatedly under contention.",
+    "Running the harness as-is on a current toolchain: the files target the pre-1.6 Google Benchmark API and the repo ships no build files (see gotchas)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the idiom (<atomic>); the benchmark files need Google Benchmark and POSIX headers (unistd.h for sysconf; the spinlock and pointer-lock variants also call nanosleep)",
+    "min_toolchain": "C++11 for std::atomic and memory orders; the benchmark files need Google Benchmark 1.5.x or older, because they read state.thread_index as a data member that v1.6.0 replaced with thread_index()",
+    "platforms": "any platform with lock-free 64-bit atomics for the idiom; the benchmark files are POSIX-only (unistd.h, sysconf) although the README lists Visual Studio and Windows",
+    "thread_safety": "The atomic counter is safe for concurrent increments and reads; memory_order_relaxed orders nothing else, so the count must not be used to publish other writes.",
+    "drop_in_for_baseline": "partial — replaces a mutex-guarded single-integer increment exactly; does not replace a mutex that guards several fields or an invariant"
+  },
+  "gotchas": [
+    "Chapter06/01_sharing_incr_mbm.C repeats ++x 64 times per BM_atomic iteration (REPEAT is REPEAT64) but reports SetItemsProcessed(32*iterations), so its atomic items/s is half the true rate and its time per item double; 01a_atomic_count.C (one fetch_add per iteration) is the clean file. Chapter05/03_mutex_incr.C has the opposite mismatch (32 locked increments per iteration reported as 32*32 items).",
+    "01a, 01b, 01c, 01e and 01_sharing_incr_mbm.C read state.thread_index as a data member; Google Benchmark v1.6.0 (PR #1208, merged 2021-08-23) made that member private behind a thread_index() accessor, so these files fail to compile against current releases until edited. Only 01d_ptrlock_count.C already calls thread_index(). There is no Makefile or CMake file, so compiler and flags are not recorded.",
+    "The thread sweep runs from 1 to sysconf(_SC_NPROCESSORS_CONF), which counts configured logical CPUs including SMT siblings, and threads are not pinned; the high-thread points therefore depend on thread placement, and the mutex cost depends on the standard library (libstdc++, libc++, MSVC).",
+    "01a uses fetch_add(memory_order_relaxed) while the mbm file's BM_atomic uses a sequentially consistent ++x; both are the same locked add on x86, but they can differ on weakly ordered CPUs, so do not mix numbers from the two files there."
+  ],
+  "pick_this_over_siblings_when": "Same idiom as the sibling 'std::atomic counter (fetch_add, relaxed) against a std::mutex-guarded counter' entry from Asynchronous Programming with C++ (book Table 5.1 at 1, 2 and 4 threads); this one is a Google Benchmark harness that sweeps up to every logical CPU and also times a CAS loop, a spinlock and a pointer lock on the same counter. The queue siblings (atomic_queue, moodycamel, Boost.Lockfree, xenium) are for passing data between threads; use this idiom when the only shared state is one integer.",
+  "verified_claims_summary": "Per the book figures relayed in the record, one thread incrementing a shared counter costs about 23 ns under std::lock_guard<std::mutex> against about 7 ns as an atomic increment (about 3.3x, derived from those figures), and the gap widens with more threads. The repository has the benchmark code but no results, compiler, flags, standard library or CPU model, and it does not say which file produced the 7 ns figure, so that figure may carry the mbm file's 2x items-per-iteration error.",
+  "status_note": "MIT-licensed Packt companion repository (405 stars, 91 forks, not archived) whose Chapter06 folder last changed in a 2022-11-30 upload and whose last commit is 2024-05-13; treat it as frozen teaching code, copy the one-line idiom, and port the harness to thread_index() before running it.",
+  "sources_read": [
+    "https://github.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs",
+    "https://github.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/tree/master/Chapter06",
+    "https://github.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/commits/master/Chapter06",
+    "https://github.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/Chapter06/01_sharing_incr_mbm.C",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/Chapter06/01a_atomic_count.C",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/Chapter06/01b_mutex_count.C",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/Chapter06/01c_spinlock_count.C",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/Chapter06/01d_ptrlock_count.C",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/Chapter06/01e_cas_count.C",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/Chapter05/03_mutex_incr.C",
+    "https://github.com/google/benchmark/releases/tag/v1.6.0",
+    "https://github.com/google/benchmark/pull/1208",
+    "https://raw.githubusercontent.com/google/benchmark/v1.5.6/include/benchmark/benchmark.h",
+    "https://raw.githubusercontent.com/google/benchmark/v1.6.0/include/benchmark/benchmark.h",
+    "https://raw.githubusercontent.com/google/benchmark/v1.7.0/include/benchmark/benchmark.h"
+  ],
+  "confidence": 0.55
+}

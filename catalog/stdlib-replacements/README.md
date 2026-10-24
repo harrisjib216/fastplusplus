@@ -4,36 +4,36 @@
 
 Containers, algorithms and utilities that beat the C++ standard library's own: hash maps, sorting, number parsing, allocators, regex and more.
 
-**312 entries in 26 categories:** 118 tier A · 25 tier B · 154 tier C · 15 tier D
+**335 entries in 26 categories:** 118 tier A · 25 tier B · 177 tier C · 15 tier D
 
 | Category | Entries | A | B | C | D | What they beat |
 |---|--:|--:|--:|--:|--:|---|
-| [Allocators](allocators/README.md) | 18 | 4 | 4 | 9 | 1 | std::allocator, operator new/delete, std::pmr |
-| [Async tasks and thread pools](async-tasks-threadpools/README.md) | 8 | 5 | 1 | 1 | 1 | std::async, std::thread, std::future |
+| [Allocators](allocators/README.md) | 19 | 4 | 4 | 10 | 1 | std::allocator, operator new/delete, std::pmr |
+| [Async tasks and thread pools](async-tasks-threadpools/README.md) | 10 | 5 | 1 | 3 | 1 | std::async, std::thread, std::future |
 | [Bitsets and succinct bit vectors](bitsets-and-succinct/README.md) | 7 | 3 | 0 | 4 | 0 | std::bitset, std::vector&lt;bool&gt; |
-| [Concurrent queues and locks](concurrency-queues-locks/README.md) | 12 | 6 | 0 | 6 | 0 | std::mutex, std::atomic, std::queue+mutex, std::condition_variable |
+| [Concurrent queues and locks](concurrency-queues-locks/README.md) | 15 | 6 | 0 | 9 | 0 | std::mutex, std::atomic, std::queue+mutex, std::condition_variable |
 | [Graph algorithms](graph-algorithms/README.md) | 2 | 0 | 1 | 1 | 0 | NetworkX 2.4 (pure Python); SNAP 5.0.0 as a second row; Boost Graph Library (Boost.Graph… |
-| [Hash maps and sets](hash-maps-sets/README.md) | 27 | 18 | 1 | 8 | 0 | std::unordered_map, std::unordered_set |
+| [Hash maps and sets](hash-maps-sets/README.md) | 28 | 18 | 1 | 9 | 0 | std::unordered_map, std::unordered_set |
 | [I/O and filesystem](io-and-filesystem/README.md) | 4 | 1 | 0 | 3 | 0 | iostreams, fstream, std::filesystem, fread/fwrite |
 | [JSON serialization](serialization-json/README.md) | 17 | 7 | 0 | 9 | 1 | iostreams + std::string, std::format (record actual baseline) |
 | [k-mer dictionaries](k-mer-dictionaries/README.md) | 3 | 1 | 2 | 0 | 0 | SSHash; Pufferfish (and dBG-FM, BLight k-mer dictionaries); Pufferfish |
-| [Math, SIMD and linear algebra](math-simd-linear-algebra/README.md) | 27 | 5 | 3 | 16 | 3 | std::valarray, std::transform, std::reduce, &lt;cmath&gt; |
+| [Math, SIMD and linear algebra](math-simd-linear-algebra/README.md) | 32 | 5 | 3 | 21 | 3 | std::valarray, std::transform, std::reduce, &lt;cmath&gt; |
 | [Minimal perfect hash functions](minimal-perfect-hash-functions/README.md) | 20 | 14 | 2 | 4 | 0 | BBHash; CMPH; RecSplit |
 | [Number parsing and formatting](number-parsing-formatting/README.md) | 22 | 9 | 2 | 11 | 0 | std::to_chars, std::from_chars, std::stod, std::format, iostreams |
 | [Ordered maps and trees](ordered-maps-trees/README.md) | 10 | 4 | 0 | 5 | 1 | std::map, std::set, std::multimap |
 | [Perfect hashing and static tables](perfect-hash-static-tables/README.md) | 21 | 9 | 0 | 12 | 0 | std::unordered_map; gperf; phf (rust-phf) static compile-time hash maps |
-| [Polymorphic dispatch](polymorphic-dispatch/README.md) | 1 | 0 | 0 | 1 | 0 | virtual function call through a base-class pointer… |
+| [Polymorphic dispatch](polymorphic-dispatch/README.md) | 3 | 0 | 0 | 3 | 0 | virtual member function call through a base-class pointer; dynamic_cast&lt;Derived\*&gt; on a… |
 | [Priority queues and heaps](priority-queues-heaps/README.md) | 5 | 4 | 0 | 1 | 0 | std::priority_queue, std::make_heap |
 | [Random numbers](random/README.md) | 9 | 4 | 2 | 3 | 0 | std::mt19937, std::uniform_\*_distribution, std::shuffle |
 | [Ranges and views](ranges-and-views/README.md) | 2 | 0 | 0 | 2 | 0 | the issue's 'handrolled' implementation, marked '# base' in…; std::ranges / std::views… |
 | [Regex](regex/README.md) | 9 | 3 | 3 | 3 | 0 | std::regex |
 | [Searching](searching/README.md) | 7 | 2 | 0 | 5 | 0 | std::lower_bound, std::binary_search, std::find, std::search |
-| [Sequence containers](sequence-containers/README.md) | 13 | 3 | 0 | 8 | 2 | std::vector, std::deque, std::list, std::array |
+| [Sequence containers](sequence-containers/README.md) | 16 | 3 | 0 | 11 | 2 | std::vector, std::deque, std::list, std::array |
 | [Small-buffer containers and strings](small-buffer-and-strings/README.md) | 16 | 1 | 0 | 12 | 3 | std::string, std::string_view, SSO |
-| [Smart pointers and reference counting](smart-pointers-and-refcount/README.md) | 11 | 3 | 3 | 4 | 1 | std::shared_ptr, std::unique_ptr, std::function |
-| [Sorting](sorting/README.md) | 28 | 7 | 0 | 20 | 1 | std::sort, std::stable_sort, std::partial_sort, std::nth_element |
+| [Smart pointers and reference counting](smart-pointers-and-refcount/README.md) | 14 | 3 | 3 | 7 | 1 | std::shared_ptr, std::unique_ptr, std::function |
+| [Sorting](sorting/README.md) | 29 | 7 | 0 | 21 | 1 | std::sort, std::stable_sort, std::partial_sort, std::nth_element |
 | [String search and hashing](string-search-and-hashing/README.md) | 10 | 5 | 1 | 4 | 0 | std::string::find, std::hash, std::search |
-| [Utilities](utilities/README.md) | 3 | 0 | 0 | 2 | 1 | std::copy_if (and a hand-written for loop); ncurses (wide-char build); glibc memcpy /… |
+| [Utilities](utilities/README.md) | 5 | 0 | 0 | 4 | 1 | std::copy_if (and a hand-written for loop); ncurses (wide-char build); ScopeGuard holding… |
 
 ## Most-adopted tier A picks
 

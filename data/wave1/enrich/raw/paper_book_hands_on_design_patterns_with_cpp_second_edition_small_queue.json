@@ -1,0 +1,49 @@
+{
+  "id": "paper:book-hands-on-design-patterns-with-cpp-second-edition-small-queue",
+  "one_liner": "A 20-line fixed-capacity ring-buffer int queue stored inside the object, benchmarked against std::queue<int> (std::deque); buggy as published.",
+  "what_it_does": "small_queue is a book example from Chapter 10 (local-buffer optimizations): a FIFO of ints with push(), front(), pop(), size() and empty(), backed by a 16-int array inside the object. push() returns false instead of growing when the buffer is full. It is not a template and not a drop-in for std::queue: no back(), emplace(), element type or capacity parameter, and a failing push must be handled by the caller.",
+  "how_it_is_fast": "The storage is an in-object array, so the queue never touches the heap; std::queue<int> defaults to std::deque<int>, which allocates fixed-size nodes and keeps a node map (with libstdc++, 512-byte nodes of 128 ints per the GCC 13 header, so a push-7/drain-7 cycle allocates and frees a node roughly every 18 rounds). Capacity is a power of two, so wrap-around is a bitmask (& 15) on two free-running size_t counters instead of a modulo or a segmented iterator, and every operation is a few inlinable instructions.",
+  "when_to_use": [
+    "The maximum queue depth is small and known at compile time (a handful to a few dozen trivially copyable elements), e.g. a lookahead or pending-event buffer that is filled and drained in a hot loop.",
+    "Profiles show std::deque node allocation or its segmented indexing in a queue that never holds many elements.",
+    "Single-threaded code where a queue object is created per call or per item and heap traffic matters.",
+    "As a pattern to copy, template on element type and capacity, and fix (see gotchas) rather than as a dependency."
+  ],
+  "when_not_to_use": [
+    "As published: front() returns the wrong element (open issue #22) and the full check lets a 17th element overwrite a live slot, so the file is not a correct FIFO.",
+    "Unbounded or data-dependent depth: push() simply returns false at capacity and nothing grows.",
+    "Element types other than int, or non-trivial types: the class is hard-wired to int and has no placement construction or destruction logic.",
+    "Concurrent producers and consumers: the indices are plain size_t with no atomics; use a single-producer/single-consumer ring buffer instead.",
+    "Large capacities embedded in objects that are copied or moved often: the whole buffer is copied with the object."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the class; the file's benchmark needs Google Benchmark (no build files in the repo; unmerged third-party PR #8 adds a Chapter10 CMakeLists.txt that fetches benchmark v1.7.1)",
+    "min_toolchain": "C++11 (static constexpr member, default member initializers, static_assert); PR #8 builds the chapter as C++20. The repo README lists only 'GCC, Clang or Visual Studio'.",
+    "platforms": "any",
+    "thread_safety": "not documented; non-atomic indices, single-threaded use only",
+    "drop_in_for_baseline": "partial — same push/front/pop/empty names, but push returns bool and fails at 16 elements, no back()/emplace(), int only, and the published push/front pair is off by one"
+  },
+  "gotchas": [
+    "Off-by-one: push() writes buf_[(++front_) & 15] while front() reads buf_[tail_ & 15], so front() returns the element pushed one step earlier and the first read is an uninitialised slot. A reduced copy run by the enricher (GCC 13.3) pushed 100..106 and read back 0, 100..105. Issue #22 (opened 2024-04-27, no reply) proposes front_++; it is unfixed on main.",
+    "The full check (front_ - tail_ > 16) admits a 17th element into the 16-slot buffer, overwriting the oldest live entry (the reduced copy accepted 17 of 20 pushes); it should be >=. The benchmark never holds more than 7 elements, so neither bug shows in its timing.",
+    "The benchmark calls SetItemsProcessed(32 * iterations) although each iteration pushes and pops 224 ints (32 rounds of 7), so the reported items/s are 7x low on both sides; the ratio is unaffected.",
+    "No results, compiler, flags or CPU are in the repo; the unmerged CMake PR sets no build type or optimization flags, so a default build of it would not reproduce an optimized run."
+  ],
+  "pick_this_over_siblings_when": "For a real fixed-capacity in-object queue, ETL's etl::queue<T, SIZE> (from the catalogued ETL library) is templated, maintained and checks full() on push; plf::stack is the catalogued pick when the access pattern is LIFO rather than FIFO against a deque-backed adaptor. Take small_queue only as a short teaching example to copy, fix and template.",
+  "verified_claims_summary": "The book reports (relayed by the seed lead; no numbers in the repo) 472 ns against 100 ns per benchmark iteration, about 4.7x, for 32 rounds of push 7 ints then drain, std::queue<int> on its default std::deque<int> against small_queue; standard library, compiler, flags and CPU are not stated. The timing was taken on the off-by-one version; by reading the code, the fix (post-increment, >= in the full check) adds no loads, stores or branches to the hot path, so the ratio plausibly carries over, but nobody has published a rerun.",
+  "status_note": "Stale Packt companion repo (last commit 2024-08-29; issue #22 and 18 CMake PRs open without response), MIT-licensed and about 20 lines, so copy it and apply the two fixes rather than depend on it.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/main/Chapter10/08_small_queue.C",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/main/README.md",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/tree/main/Chapter10",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/issues?q=is%3Aissue",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/issues/22",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/pulls",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/pull/8/files",
+    "https://raw.githubusercontent.com/ETLCPP/etl/master/include/etl/queue.h",
+    "https://raw.githubusercontent.com/ETLCPP/etl/master/include/etl/circular_buffer.h"
+  ],
+  "confidence": 0.7
+}

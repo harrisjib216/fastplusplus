@@ -1,0 +1,51 @@
+{
+  "id": "paper:book-gpu-programming-with-cpp-and-cuda-prime-test-kernel",
+  "one_liner": "Book teaching kernel: one CUDA thread per odd number runs trial-division primality, timed against a single-threaded CPU loop.",
+  "what_it_does": "ch4/1_primes/primes.cu from the Packt book GPU Programming with C++ and CUDA launches checkPrimeKernel with one thread per odd number from 100,001 to 190,001 (45,001 candidates, 176 blocks of 256 threads), then runs the same trial-division test (checkPrimeCpu) serially on the host and prints both times and their ratio. It is a demonstration program, not a library: the kernel keeps its verdict in a local bool and writes nothing to memory, so no result ever reaches the host, and the host loop discards its results too. Reusing it means adding an output array (for example one byte per candidate), a device-to-host copy and a check that both sides agree.",
+  "how_it_is_fast": "Plain data parallelism: every candidate's test is independent, so the 45,001 trial divisions run as about 1,400 warps spread over the GPU's SMs instead of one after another on one core. Nothing else is tuned: both sides use 64-bit long long arithmetic and test odd divisors up to sqrt(n). Warp divergence wastes most of the GPU's lanes on this workload: a warp runs as long as its slowest lane, a prime in this range needs up to 217 loop trips while most composites exit after a few, so only about 23% of lane slots do useful work (1.94 million remainder operations in 8.49 million lane slots, computed by replaying the loop over this range).",
+  "when_to_use": [
+    "As a teaching template for mapping an embarrassingly parallel, compute-bound per-element test onto CUDA threads: one thread per candidate, grid sized by ceiling division, out-of-range threads returning early.",
+    "Per-index predicates whose inputs can be generated on the device from the thread index, so no host-to-device copy is needed (this example moves no data at all).",
+    "Candidate ranges large enough to amortise kernel launch cost: in the book's figures relayed by the seed lead, the ratio was only 1.23x on the smallest range and grew to 67.91x on the largest."
+  ],
+  "when_not_to_use": [
+    "Enumerating all primes in a range for real: a Sieve of Eratosthenes (segmented for large ranges) avoids dividing every odd number by every odd divisor up to its square root; trial division is a teaching workload here.",
+    "Testing one large number: trial division costs O(sqrt(n)) per number and one thread per number gives no parallelism for a single candidate.",
+    "As evidence of a GPU speedup: the kernel result is never stored, so the device optimiser may delete the loop and the timed region may hold only launch cost; the figures come from one run of the first launch in the process, with no warm-up and no CPU/GPU cross-check.",
+    "Machines without an NVIDIA GPU and the CUDA toolkit: the program is CUDA-only, has no CPU fallback and checks no CUDA errors."
+  ],
+  "integration": {
+    "form": "source-drop (one .cu teaching program, not a library)",
+    "dependencies": "CUDA runtime (cuda_runtime.h); the repo's devcontainer (.devcontainer/DockerfileUbuntu) installs CUDA Toolkit 12.0 and g++ 9 on Ubuntu 20.04",
+    "min_toolchain": "C++14 or later (the source uses digit separators such as 100'001LL); CMake 3.10+ per CMakeLists.txt; the repo README lists CUDA Toolkit 12, g++ 9.4 and CMake 3.16",
+    "platforms": "NVIDIA GPUs only (CUDA); documented environment is x86-64 Ubuntu Linux 20.04 or later with the NVIDIA driver",
+    "thread_safety": "not applicable (single-threaded host program; the kernel writes no memory)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The kernel has no observable effect: isPrime is a local that is never written out (the printf is commented out), and device code is optimised by default, so the trial-division loop may be removed. Check the PTX (nvcc -ptx primes.cu, then look for the 64-bit remainder inside checkPrimeKernel) before trusting the GPU time. The CPU time, by contrast, fits real work: the range needs about 1.94 million 64-bit remainder operations (computed), about 8 ns each at the book's 15.6056 ms (derived), so an unoptimised host build is not needed to explain it.",
+    "Both sides use long long. NVIDIA developer-forum answers (seen as search snippets; the forum was not reachable) describe 64-bit integer division and modulo on NVIDIA GPUs as emulated with tens of 32-bit instructions, so for candidates below 2^31 a 32-bit loop would be cheaper on the GPU, and usually on the CPU too.",
+    "Timing covers a single launch, the first in the process, between two CUDA events, with no warm-up and no cudaGetLastError: a failed launch (no GPU, unsupported architecture) would still print a time and a speedup. CMakeLists.txt sets no build type, no flags and no CMAKE_CUDA_ARCHITECTURES, so nvcc's default device target and the host compiler's default (unoptimised) host build apply.",
+    "start must be odd (the source comment says so): with an even start every candidate is even and returns at once. tid * 2 and totalNumbers are 32-bit int, so ranges of more than about a billion candidates overflow."
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued GPU Programming with C++ and CUDA entries this is the only compute-bound one with no host-device transfers, so it illustrates the best case for offload, while the vector-addition and stream-overlap entries have to pay for or hide host-device copies; for code that must return results, start from those entries or the ch7 tiled matrix multiply instead, since this kernel produces no output.",
+  "verified_claims_summary": "The book, relayed by the seed lead (no repo page shows numbers), reports one run on an Intel Core i7-10750H with a GeForce RTX 2060: 0.2298 ms for the kernel (CUDA events) against 15.6056 ms for the single-threaded host loop (std::chrono) on the largest of three ranges, apparently the repo's 45,001 odd numbers from 100,001 to 190,001, a 67.91x ratio, with 1.23x and 9.66x on two smaller ranges. Compiler flags were not stated and the repo's CMakeLists.txt sets none; neither side stores its results and nothing checks that they agree, so the GPU figure may be launch overhead only.",
+  "status_note": "MIT-licensed Packt companion repo (117 stars, 40 forks) that is effectively frozen since publication: last code change 2025-08-20, last commit a README banner on 2025-12-15, and PR #1 (open since 2025-10-07) and issue #3 (another chapter, open since 2026-02-04) have no maintainer reply, so 'stale' fits better than 'active'; the file is tiny and copyable but needs result storage and error checks first.",
+  "sources_read": [
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA",
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/tree/main/ch4",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/ch4/1_primes/primes.cu",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/ch4/1_primes/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/ch4/readme.md",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/README.md",
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/tree/main/.devcontainer",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/.devcontainer/DockerfileUbuntu",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/.devcontainer/devcontainer.json",
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/commits/main",
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/issues?q=is%3Aissue",
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/issues/3",
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/pulls",
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/pull/1/files"
+  ],
+  "confidence": 0.4
+}

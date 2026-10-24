@@ -3,7 +3,7 @@
 <sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [C++ standard library replacements](../README.md)</sub>
 
 **What these beat:** std::sort, std::stable_sort, std::partial_sort, std::nth_element  
-**28 entries:** 7 tier A · 0 tier B · 20 tier C · 1 tier D · 28 copyable, 0 study only
+**29 entries:** 7 tier A · 0 tier B · 21 tier C · 1 tier D · 29 copyable, 0 study only
 
 | # | Project | What it is | Tier | Language | License | Status |
 |--:|---|---|:-:|---|---|---|
@@ -27,13 +27,14 @@
 | 18 | [**fluxsort**](scandum-fluxsort.md) | Stable branchless quicksort/mergesort hybrid with a qsort-style C interface, claimed \~3x faster than std::stable_sort on random ints. | **C** | C | Unlicense | 🟡 stale |
 | 19 | [**blitsort**](scandum-blitsort.md) | In-place, stable, adaptive C sort beating std::stable_sort via rotations instead of an O(n) swap buffer. | **C** | C | Unlicense | 🟡 stale |
 | 20 | [**swenson/sort (sort.h)**](swenson-sort.md) | Single C89 header that macro-generates type-specialised quick, heap, tim, merge and shell sorts that beat libc qsort. | **C** | C | MIT | 🟡 stale |
-| 21 | [**crumsort**](scandum-crumsort.md) | Branchless in-place unstable C quicksort/quadsort hybrid, \~1.4-1.5x faster than pdqsort on random 32/64-bit ints. | **C** | C | Unlicense | 🟡 stale |
-| 22 | [**Timsort (gfx::timsort, cpp-TimSort)**](gfx-cpp-timsort.md) | Header-only C++20 TimSort and TimSort-merge; beats std::sort/std::stable_sort only on presorted, reversed or run-structured input. | **C** | C++ | MIT | 🟡 stale |
-| 23 | [**gridsort**](scandum-gridsort.md) | Stable C sort using a cache-friendly bucketed grid; qsort-compatible interface; 1.4x-2.6x faster than std::stable_sort on 1M-int arrays. | **C** | C | Unlicense | 🟡 stale |
-| 24 | [**ska_sort**](skarupke-ska-sort.md) | Header-only radix/American-flag sort beating std::sort by \~2x on ints, floats, structs and strings via key extraction. | **C** | C++ | BSL-1.0 | 🔴 abandoned |
-| 25 | [**poor-circle/radix_sort**](poor-circle-radix-sort.md) | Header-only C++20 LSD byte-radix sort for ints/floats/pointers/pairs/structs; drop-in call syntax beats std::sort. | **C** | C++ | GPL-3.0 | 🔴 abandoned |
-| 26 | [**vxsort-cpp**](damageboy-vxsort-cpp.md) | AVX2/AVX-512 vectorized quicksort for primitive arrays; beats a ported .NET GC introsort, not std::sort. | **C** | C++ | MIT | 🔴 abandoned |
-| 27 | [**Ultra-Sort (SIMD sorting DSL for AVX2 and AVX-512)**](patwinchir-ultra-sort.md) | 2018 course-project AVX-512/AVX2 bitonic merge sort for power-of-two numeric arrays; 7.7x std::sort on 1M 32-bit ints in its own report. | **C** | C++ | MIT | 🔴 abandoned |
-| 28 | [**dietlibc (qsort and bsearch)**](ensc-dietlibc.md) | dietlibc's in-place 3-way quicksort and binary search; a 2001 changelog claimed 2.3x and 6.1x fewer cycles than glibc. | **D** | C | GPL-2.0-or-later | 🔴 abandoned |
+| 21 | [**The Art of Writing Efficient Programs: signed int loop…**](paper-book-the-art-of-writing-efficient-programs-signed-int-loop-index.md) | Book idiom: signed int index in a hand-written string-compare loop beats unsigned-index versions inside a std::sort benchmark. | **C** | C++ | MIT | 🟡 stale |
+| 22 | [**crumsort**](scandum-crumsort.md) | Branchless in-place unstable C quicksort/quadsort hybrid, \~1.4-1.5x faster than pdqsort on random 32/64-bit ints. | **C** | C | Unlicense | 🟡 stale |
+| 23 | [**Timsort (gfx::timsort, cpp-TimSort)**](gfx-cpp-timsort.md) | Header-only C++20 TimSort and TimSort-merge; beats std::sort/std::stable_sort only on presorted, reversed or run-structured input. | **C** | C++ | MIT | 🟡 stale |
+| 24 | [**gridsort**](scandum-gridsort.md) | Stable C sort using a cache-friendly bucketed grid; qsort-compatible interface; 1.4x-2.6x faster than std::stable_sort on 1M-int arrays. | **C** | C | Unlicense | 🟡 stale |
+| 25 | [**ska_sort**](skarupke-ska-sort.md) | Header-only radix/American-flag sort beating std::sort by \~2x on ints, floats, structs and strings via key extraction. | **C** | C++ | BSL-1.0 | 🔴 abandoned |
+| 26 | [**poor-circle/radix_sort**](poor-circle-radix-sort.md) | Header-only C++20 LSD byte-radix sort for ints/floats/pointers/pairs/structs; drop-in call syntax beats std::sort. | **C** | C++ | GPL-3.0 | 🔴 abandoned |
+| 27 | [**vxsort-cpp**](damageboy-vxsort-cpp.md) | AVX2/AVX-512 vectorized quicksort for primitive arrays; beats a ported .NET GC introsort, not std::sort. | **C** | C++ | MIT | 🔴 abandoned |
+| 28 | [**Ultra-Sort (SIMD sorting DSL for AVX2 and AVX-512)**](patwinchir-ultra-sort.md) | 2018 course-project AVX-512/AVX2 bitonic merge sort for power-of-two numeric arrays; 7.7x std::sort on 1M 32-bit ints in its own report. | **C** | C++ | MIT | 🔴 abandoned |
+| 29 | [**dietlibc (qsort and bsearch)**](ensc-dietlibc.md) | dietlibc's in-place 3-way quicksort and binary search; a 2001 changelog claimed 2.3x and 6.1x fewer cycles than glibc. | **D** | C | GPL-2.0-or-later | 🔴 abandoned |
 
 <sub>Tiers: **A** reproducible public benchmark (code, compiler, flags and CPU stated) · **B** independent or peer-reviewed measurement · **C** first-party claim · **D** directional, no numbers. Status: 🟢 active · 🔵 finished · 🟡 slow or stale · 🔴 abandoned · ⚪ unknown. *Study only* means no usable open-source license: read the idea, don't copy the code.</sub>

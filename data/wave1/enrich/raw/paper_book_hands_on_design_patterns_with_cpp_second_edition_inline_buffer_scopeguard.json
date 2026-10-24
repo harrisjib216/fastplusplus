@@ -1,0 +1,44 @@
+{
+  "id": "paper:book-hands-on-design-patterns-with-cpp-second-edition-inline-buffer-scopeguard",
+  "one_liner": "Book example: type-erased scope guard with a 16-byte inline buffer, under 1 ns faster than a std::function guard.",
+  "what_it_does": "Chapter11/11_scopeguard_te_benchmark.C defines ScopeGuardTypeErasedFast::ScopeGuard<S = 16>, a non-template-per-callable scope guard that copies the cleanup lambda into an alignas(8) char buffer and stores a function pointer that invokes it in the destructor. It is benchmarked against a guard holding a std::function<void()>, a per-callable template guard and a hand-written delete. The interface is the same as the std::function guard (construct from a lambda, commit() to cancel), but only for small, trivially copyable, trivially destructible rvalue callables, and as written its commit() and move do not work (see gotchas).",
+  "how_it_is_fast": "Small-buffer type erasure with a single function-pointer thunk: the constructor placement-news the callable into the inline buffer and stores invoke<Callable>, a static function that casts the buffer back and calls it. Compared with std::function there is no manager function to call on destruction, no empty check that can throw bad_function_call, and no heap fallback path, so destruction is one test of the commit flag plus one indirect call. Because the benchmarked [&] lambdas already fit std::function's small-object storage, the gap measured is only that extra indirection, not an allocation.",
+  "when_to_use": [
+    "You need one guard type that does not depend on the lambda type (a class member, an array of guards, a non-template function signature) and the cleanup lambdas capture by reference or capture a few pointers (at most 16 bytes by default).",
+    "Cleanup paths so hot that 0.7 to 0.8 ns per guard matters, for example a guard created on every iteration of a tight loop.",
+    "As a template for writing your own small-buffer type-erased callable when std::function's manager and empty-check overhead shows up in a profile, after fixing the commit flag."
+  ],
+  "when_not_to_use": [
+    "When the guard type need not be erased: the template guard in the same file (sibling entry) is faster again (4.50 and 4.56 ns relayed, matching explicit delete) and has working commit() and move.",
+    "Copying the code as is: commit() does not cancel the cleanup and a moved-from guard still fires, so the cleanup can run twice (see gotchas).",
+    "Callables larger than S bytes, capturing non-trivially-copyable or non-trivially-destructible objects (std::string, std::shared_ptr, std::vector by value), or passed as lvalues: these fail to compile, with no heap fallback.",
+    "When the saving matters less than code you can trust: the gain is 6 to 15 percent (under 1 ns per guard) from one unstated compiler, standard library and CPU."
+  ],
+  "integration": {
+    "form": "source-drop (class inside a single Google Benchmark .C file)",
+    "dependencies": "none for the guard (standard library only); the benchmark needs Google Benchmark (version not stated); the file includes only <functional> and benchmark.h and relies on transitive includes for std::exchange, the type traits, placement new and rand(); no build files in Chapter11 or at the repo root",
+    "min_toolchain": "C++17 (std::is_trivially_destructible_v and is_trivially_copyable_v, static_assert without a message); README lists GCC, Clang or Visual Studio",
+    "platforms": "any",
+    "thread_safety": "not documented; a guard is a scope-local object with no shared state",
+    "drop_in_for_baseline": "partial — same construct-from-lambda and commit() interface as the std::function guard, but only for rvalue callables that are trivially copyable, trivially destructible and at most S bytes, and commit() and move are broken as written"
+  },
+  "gotchas": [
+    "ScopeGuardTypeErasedFast::ScopeGuard declares its own 'mutable bool commit_ = false' that hides CommitFlag::commit_. commit() sets the base flag but the destructor tests the derived one, so commit() never cancels the cleanup. The defaulted move constructor marks only the base flag of the source as committed and copies the derived flag as false, so the moved-from guard and the new guard both run the cleanup (double delete). Delete the derived member before using it; the benchmark never calls commit() or moves a guard, so its timings do not reveal the bug.",
+    "The buffer is alignas(8) and the static_asserts check size, trivial copyability and trivial destructibility but not alignment, so a 16-byte callable that captures an over-aligned value (alignas(16) data, SIMD types) is constructed misaligned, which is undefined behaviour.",
+    "The guard is constructed with invoke<Callable> where Callable is the forwarding-reference parameter, so passing a named lambda (an lvalue) makes Callable a reference type and fails the trivially-copyable static_assert; pass std::move(lambda) or a temporary.",
+    "Harness: every nodelete and delete row includes a rand() call (and new plus delete in the delete rows) inside the timed loop, so the guard's cost is a 0.7 to 0.8 ns difference on top of 4.5 to 13 ns of fixed work, with no repetitions or error bars in the repo."
+  ],
+  "pick_this_over_siblings_when": "Against the template ScopeGuard from the same chapter, pick this only when the guard's type must not depend on the lambda; otherwise the template guard is faster and correct. The other catalogued utilities (micron.cpp memory routines, netbsd-curses, FunctionalPlus keep_if) solve unrelated problems.",
+  "verified_claims_summary": "Reported by the book and relayed by the seed lead, not present in the repo: with a rand() call and a pointer that stays null, the buffer guard took 5.48 ns against 6.29 ns for the std::function guard (about 1.15x); with new and delete every iteration, 12.7 ns against 13.4 ns (about 1.06x); explicit delete measured 4.48 and 4.54 ns. Compiler, flags, standard library, Google Benchmark version and CPU are not stated; the repo holds only the benchmark source, which matches that description.",
+  "status_note": "Stale publisher companion repo (last commit 2024-08-29, a README errata update; no code changes since mid-2023), MIT-licensed and small enough to copy, but the guard is teaching code with a broken commit()/move that must be fixed first; no issue in the tracker reports it.",
+  "sources_read": [
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/tree/main/Chapter11",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/commits/main",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/Chapter11/11_scopeguard_te_benchmark.C",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/LICENSE"
+  ],
+  "confidence": 0.5
+}

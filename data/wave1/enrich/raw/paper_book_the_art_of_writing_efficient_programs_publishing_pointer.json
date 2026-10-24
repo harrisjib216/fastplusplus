@@ -1,0 +1,54 @@
+{
+  "id": "paper:book-the-art-of-writing-efficient-programs-publishing-pointer",
+  "one_liner": "Book sample: single-writer publishing pointer over std::atomic<T*> versus atomic_load/atomic_store on a std::shared_ptr; never frees replaced objects.",
+  "what_it_does": "Chapter06/03_owning_ptr_mbm.C in the companion repo of the Packt book The Art of Writing Efficient Programs defines ts_unique_ptr<T>, a non-copyable wrapper over std::atomic<T*>: publish(p) is a release store, get() and operator* are acquire loads, and the destructor deletes whatever was published last. The sibling files keep the same interface over a std::shared_ptr<T> accessed with std::atomic_load_explicit/std::atomic_store_explicit (03b) and over a volatile raw pointer (03a), and all three time BM_ptr_deref (copy the pointee into a volatile local) and BM_ptr_assign (republish one fixed pointer) on 1 to numcpu threads. It is a teaching sample, not a library: get() returns a raw const T* and operator= does not free what it replaces.",
+  "how_it_is_fast": "Reading is one acquire load and publishing one release store of a plain pointer; on x86-64 both map to ordinary MOV instructions, so a dereference costs what a raw pointer costs. The baseline's free-function atomic access to a shared_ptr is lock-based in the mainstream libraries: libstdc++ locks one of 16 mutexes chosen by hashing the shared_ptr's address and libc++ one of 32, and each load also copies the shared_ptr (an atomic increment and later decrement of the control block's count). The speedup is the removal of that lock and the two reference-count read-modify-writes, along with the cache-line traffic they cause when several threads read the same pointer.",
+  "when_to_use": [
+    "One writer and many readers where published objects are immutable and either never freed while the program runs (configuration or lookup tables set up once) or retired by a separate scheme such as epochs, RCU or hazard pointers.",
+    "Read-mostly hot paths where each reader needs the pointer only for a short access and a lock or reference-count update per read shows up in profiles.",
+    "Replacing std::atomic_load on a std::shared_ptr that exists only to publish a snapshot, when leaking or deferring the old snapshots is acceptable.",
+    "Studying the cost of memory ordering and shared ownership: the three Chapter06 files are a ready side-by-side harness."
+  ],
+  "when_not_to_use": [
+    "Replaced objects must be freed: operator= does not delete the old object (the delete is commented out), and deleting it at publish time would free it under readers still holding the raw pointer from get().",
+    "Readers need ownership or lifetime extension: get() hands out a raw pointer and nothing keeps the object alive.",
+    "Several writers need read-modify-write updates: only store and load exist, with no exchange or compare_exchange.",
+    "Expecting the 60x everywhere: the ratio is against mutex-pool atomic shared_ptr access; C++20 std::atomic<std::shared_ptr> in current libstdc++ uses a lock bit in the control-block pointer instead of the global mutex pool, so the gap differs, and the repo does not measure it."
+  ],
+  "integration": {
+    "form": "source-drop (a class template of about 15 lines inside the benchmark file)",
+    "dependencies": "none (<atomic>); the benchmarks need Google Benchmark",
+    "min_toolchain": "C++11 (std::atomic); the repo's generic build line (Chapter02/ReadMe.md) is GCC or Clang with -g -O3 --std=c++17 -lpthread -latomic",
+    "platforms": "any target with lock-free std::atomic<T*>; the benchmark files include unistd.h and call sysconf, so they build on Linux and macOS only",
+    "thread_safety": "Concurrent get() calls and one publisher are race-free on the pointer itself; object lifetime and reclamation are left to the caller",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "No reclamation, by necessity in this harness: BM_ptr_assign republishes the same pointer q, so the commented-out delete-on-assign would free q and then publish it; the destructor deletes only the last published object, so the initial A(42) leaks.",
+    "The baseline protects nothing it pays for: 03b's get() returns .get() of a temporary shared_ptr that dies at the end of the expression, so each dereference takes the pool mutex and does an increment and decrement yet leaves the reader with an unprotected raw pointer; with one global p every thread contends on the same mutex, and each 03b assign also copies q by value (one more count update on a shared control block).",
+    "Counting and symmetry: REPEAT runs 64 operations per iteration but SetItemsProcessed counts 32, so items/s figures are 2x low in all three files (ratios unaffected); 03a uses a volatile pointer and calls ClobberMemory every iteration while 03 does not; deref and assign run as separate benchmarks, so no mixed reader/writer contention is measured.",
+    "The baseline API is legacy: libstdc++ marks the std::atomic_load/atomic_store overloads for shared_ptr deprecated in C++20 and points to std::atomic<std::shared_ptr<T>>; the repo builds with --std=c++17."
+  ],
+  "pick_this_over_siblings_when": "Against CDRC (concurrent_deferred_rc), which gives atomic shared and weak pointers with safe deferred reclamation, pick ts_unique_ptr only when published objects are immortal or retired by your own scheme and you want the cheapest possible read. The same chapter's intr_shared_ptr (04_intr_shared_ptr_mbm.C, an intrusive count guarded by a per-pointer spin lock that swaps in a sentinel) is the middle ground when objects must be freed.",
+  "verified_claims_summary": "The book, relayed by the seed lead (the repo holds no numbers), reports single-threaded dereference through ts_unique_ptr matching a raw pointer and about 60x faster than dereferencing a std::shared_ptr read through std::atomic_load_explicit, with thread-scaling charts in the book only. Compiler, standard library and CPU (only x86 is stated) are not named; the repo's generic build line is GCC or Clang -g -O3 --std=c++17, and the code was read, not built, here.",
+  "status_note": "Stale Packt companion repo (62 commits, last on 2024-05-13) under MIT; the class is small enough to copy but needs a reclamation scheme before production use.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/Chapter06/03_owning_ptr_mbm.C",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/Chapter06/03a_raw_ptr_mbm.C",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/Chapter06/03b_shared_ptr_mbm.C",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/Chapter06/04_intr_shared_ptr_mbm.C",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/Chapter06/04a_shared_ptr_mbm.C",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/Chapter06/04b_atomic_shared_ptr_mbm.C",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/master/Chapter02/ReadMe.md",
+    "https://github.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs",
+    "https://github.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/tree/master/Chapter06",
+    "https://github.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/master/libstdc++-v3/src/c++11/shared_ptr.cc",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/master/libstdc++-v3/src/c++11/mutex_pool.h",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/master/libstdc++-v3/include/bits/shared_ptr_atomic.h",
+    "https://raw.githubusercontent.com/llvm/llvm-project/main/libcxx/src/memory.cpp",
+    "https://www.cl.cam.ac.uk/~pes20/cpp/cpp0xmappings.html (search snippet only: x86 acquire load and release store map to MOV)"
+  ],
+  "confidence": 0.6
+}

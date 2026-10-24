@@ -1,0 +1,47 @@
+{
+  "id": "paper:book-the-art-of-writing-efficient-programs-vector-instead-of-list",
+  "one_liner": "Book benchmark: traverse a contiguous std::vector instead of a node-based std::list; about 8x faster sequential reads.",
+  "what_it_does": "Chapter04/03_list_vector.C from the companion repo of Fedor Pikus's The Art of Writing Efficient Programs is a self-contained Google Benchmark program, not a library. It fills a std::vector<unsigned long> and a std::list<unsigned long> with 1,048,576 elements, then times a full iterator walk that reads (BM_read_*) or overwrites (BM_write_*) every element. The takeaway is to switch sequence containers: std::vector offers the same begin/end/push_back/insert/erase interface and gives up only the list-specific guarantees.",
+  "how_it_is_fast": "Contiguous storage: the vector packs 8 values per 64-byte cache line at addresses the core can compute in advance, so the hardware prefetcher streams them and many loads are in flight at once. Each std::list step is a dependent load (pointer chasing): the next node's address is unknown until the current node arrives, and each 8-byte value travels in a 24-byte node (two links plus the value), so the list moves about 3x the bytes with little memory-level parallelism. Both loops are 32x unrolled with benchmark::DoNotOptimize on every element, which keeps both sides scalar, so the gap comes from the memory access pattern rather than SIMD.",
+  "when_to_use": [
+    "Hot loops that walk the whole sequence front to back (sums, filters, rendering, simulation steps) over small trivially-copyable elements such as integers, floats or small PODs.",
+    "Containers of thousands to millions of elements whose footprint exceeds L1/L2, where per-node pointer chasing turns into cache or DRAM latency on every step.",
+    "Append-mostly or rebuild-then-read workloads where elements are added at the back and rarely inserted or erased in the middle.",
+    "Code that only uses std::list for push_back and iteration out of habit, with no reliance on iterator or reference stability."
+  ],
+  "when_not_to_use": [
+    "Code that keeps iterators, pointers or references to elements across insertions: a vector invalidates them on reallocation and on insert or erase before them, a list never does.",
+    "Frequent insert or erase in the middle of large sequences of large or expensive-to-move elements, where shifting the tail costs O(n) per operation.",
+    "Algorithms built on list-only operations: splice, merge, O(1) node transfer between lists, or list::sort that relinks nodes without moving the elements.",
+    "Very large elements (hundreds of bytes and up) traversed sparsely: each node then fills whole cache lines anyway, so the gap measured here for 8-byte values does not carry over."
+  ],
+  "integration": {
+    "form": "source-drop (an idiom; the repo file is a standalone Google Benchmark program)",
+    "dependencies": "none for the idiom; the benchmark needs Google Benchmark (libbenchmark, -lpthread) and includes <emmintrin.h> and <immintrin.h>",
+    "min_toolchain": "C++98 for std::vector; the repo's generic build line (Chapter02/ReadMe.md) uses --std=c++17 -O3 with GCC or Clang",
+    "platforms": "any for the idiom; the benchmark file as written is x86-only because it includes the SSE/AVX intrinsics headers unconditionally",
+    "thread_safety": "standard library rules: concurrent const access is safe, any concurrent modification needs external synchronisation (same as std::list)",
+    "drop_in_for_baseline": "partial — same sequence interface for iteration, push_back, insert and erase, but no push_front/pop_front, splice, merge, remove or member sort, and different iterator invalidation rules"
+  },
+  "gotchas": [
+    "The list in this benchmark is the friendliest case: 1M nodes allocated back to back in a fresh process, so they most likely sit in address order where the prefetcher can follow them; a list built by interleaved inserts and erases in a long-running program is scattered and slower, so the measured gap understates the usual one.",
+    "The timed loop tests it != end only once per 32 unrolled accesses, so the harness is only valid for element counts that are multiples of 32 (1<<20 and the commented-out 1<<6..1<<16 range are); other sizes walk past the end.",
+    "SetBytesProcessed counts sizeof(unsigned long) per element for both containers, so the list's reported bytes per second understate the memory it actually moves (24-byte nodes in what glibc malloc serves as 32-byte chunks).",
+    "Chapter04 has no build comment or ReadMe (Chapter04/ReadMe.md returns 404); the only build instructions are the repo-wide ones in Chapter02/ReadMe.md, and no results file is committed."
+  ],
+  "pick_this_over_siblings_when": "Pick the plain vector when you only append and iterate and can tolerate invalidation; pick plf::list if you need real list semantics (stable iterators, splice, O(1) middle insert) with faster insertion than std::list, or plf::colony/plf::hive if you need stable pointers plus fast iteration and erasure but not ordering.",
+  "verified_claims_summary": "The book's own run, relayed by the seed lead and not printed in the repo, reports just over 5 ns per element for std::list against about 0.6 ns per element for std::vector when reading 1,048,576 unsigned long values (about 8x, derived from those figures), on an unnamed x86 CPU with 32 KB L1, 256 KB L2 and 8 MB L3; compiler, version and standard library are not stated beyond the repo's generic -O3 --std=c++17 build line. The repo holds the matching Google Benchmark source but no results.",
+  "status_note": "Stale Packt companion repo (last commit 2024-05-13, 405 stars, one open question issue about Chapter07), MIT-licensed; the idiom needs no code, and the benchmark file is small enough to copy for a local re-run on x86.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/HEAD/Chapter04/03_list_vector.C",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/HEAD/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/HEAD/Chapter02/ReadMe.md",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/HEAD/Chapter04/ReadMe.md",
+    "https://raw.githubusercontent.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/HEAD/LICENSE",
+    "https://github.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs",
+    "https://github.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/tree/master/Chapter04",
+    "https://github.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/issues",
+    "https://github.com/PacktPublishing/The-Art-of-Writing-Efficient-Programs/issues?q=is%3Aissue+is%3Aclosed"
+  ],
+  "confidence": 0.65
+}

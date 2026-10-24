@@ -1,0 +1,50 @@
+{
+  "id": "paper:book-gpu-programming-with-cpp-and-cuda-vector-add-kernel",
+  "one_liner": "Textbook one-thread-per-element CUDA float vector add: 44x kernel-only over a scalar CPU loop, 1.02x once copies count.",
+  "what_it_does": "Chapter 4 companion code for the book GPU Programming with C++ and CUDA: vectorAddKernel computes C[i] = A[i] + B[i] with one thread per element and an i < N bounds check, launched on 1024-thread blocks for N = 100,000,000 floats. main() copies A and B to the device with cudaMemcpy, launches the kernel, copies C back, times each phase with CUDA events, then times a single-threaded CPU loop with std::chrono and prints kernel-only and total speedups. It is not a drop-in for a host loop or std::transform: you manage device buffers, copies and the launch configuration yourself.",
+  "how_it_is_fast": "Plain data parallelism on a memory-bound operation: each thread does two coalesced 4-byte loads and one store, so the kernel runs near device memory bandwidth, about 242 GB/s for the 1.2 GB moved in the book's roughly 4.96 ms kernel (derived from the relayed 218.270 ms CPU time and 44.04x), against about 5.5 GB/s for the single-threaded CPU loop. There is no further technique (no grid-stride loop, no vector loads, no pinned memory or streams). The advantage exists only for data already resident on the GPU: copying 1.2 GB over PCIe from pageable host memory took about 207 ms (derived), roughly what the CPU loop takes for the whole job.",
+  "when_to_use": [
+    "Vectors that already live in device memory as one step of a longer GPU pipeline, so no host-device copy is paid for this operation.",
+    "Learning the basic CUDA flow (cudaMalloc, cudaMemcpy, launch configuration, CUDA event timing) on an NVIDIA GPU.",
+    "A quick bandwidth sanity check: a minimal coalesced kernel to see what fraction of device memory bandwidth simple element-wise code reaches."
+  ],
+  "when_not_to_use": [
+    "Host-resident data processed once: with the two host-to-device copies and the device-to-host copy counted, the book's run is 212.297 ms on the GPU against 218.270 ms on the CPU, 1.02x, which is no real gain.",
+    "As evidence that a GPU beats std::transform: the CPU side is one scalar thread built with no flags, and no vectorised or multithreaded CPU version (std::transform with std::execution::par_unseq, OpenMP, a SIMD library) is measured.",
+    "Element counts above INT_MAX: the kernel, the CPU loop and N all use int indices.",
+    "Production code: there is no CUDA error checking and no result check.",
+    "Machines without an NVIDIA GPU and the CUDA toolkit."
+  ],
+  "integration": {
+    "form": "source-drop (one .cu file; a three-line __global__ kernel plus host scaffolding)",
+    "dependencies": "CUDA Toolkit runtime (cuda_runtime.h); no libraries",
+    "min_toolchain": "nvcc in C++14 mode or later for the 100'000'000 digit separators; README lists CUDA Toolkit 12, g++ 9.4 and CMake 3.16, and the dev container uses Ubuntu 20.04 with CUDA 12.0 and g++ 9; ch4/2_vector_add/CMakeLists.txt sets no flags, architecture or build type",
+    "platforms": "NVIDIA GPUs (no -arch in the CMake file, so nvcc's default target applies, JIT-compiled from PTX on newer GPUs); README lists Ubuntu Linux 20 or later",
+    "thread_safety": "not applicable (a kernel; the host program is single-threaded)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "No result check and no CUDA error checks: the CPU loop writes into the same h_C that just received the GPU result, so the GPU output is never compared, and a failed allocation or launch would go unnoticed while the program still prints a kernel time and a speedup.",
+    "The host buffers come from malloc (pageable), so cudaMemcpy stages every transfer; the about 5.8 GB/s copy rate derived from the book's figures is lower than pinned memory (cudaMallocHost) would give, which makes the end-to-end comparison look worse for the GPU than it needs to.",
+    "The CPU baseline is probably unoptimised: the CMake file passes no -O flag, and NVIDIA-forum reports seen in search results say nvcc applies no host optimisation unless asked (not confirmed in nvcc documentation here); about 5.5 GB/s (derived) is low for a memory-bound loop. Build with -DCMAKE_BUILD_TYPE=Release or -Xcompiler -O3 before comparing.",
+    "One run with no warm-up (the timed kernel is the process's first launch), and only N = 100,000,000 is in the repo; the book's 10-thousand-to-100-million sweep has to be recreated by editing N."
+  ],
+  "pick_this_over_siblings_when": "The catalogued CPU siblings xsimd, Vc and NumKong (SimSIMD) speed up element-wise and reduction loops with SIMD and need no copies, so for host-resident vectors they are the better choice given this entry's 1.02x end-to-end result; pick this CUDA kernel only when the vectors already live on an NVIDIA GPU.",
+  "verified_claims_summary": "Per the book (relayed via the seed lead; the repo prints but does not record results, flags or hardware), on an Intel Core i7-10750H with an NVIDIA GeForce RTX 2060 and CUDA 12, adding two 100-million-float vectors ran 44.04x faster as a kernel than a single-threaded CPU loop built with no stated flags, but only 1.02x faster (212.297 ms against 218.270 ms) once the three host-device copies from pageable memory were counted; one run per size, results never checked.",
+  "status_note": "MIT-licensed companion code for a 2025 Packt book: ch4 was last updated on 2025-07-20, the last code commit is 2025-08-20 and the 2025-12-15 commit only changed the README banner; a teaching sample to copy, not a maintained library.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/main/ch4/2_vector_add/vector_add.cu",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/main/ch4/2_vector_add/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/main/ch4/readme.md",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/main/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/main/LICENSE",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/main/.devcontainer/devcontainer.json",
+    "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/main/.devcontainer/DockerfileUbuntu",
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA",
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/commits/main",
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/issues",
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/pulls",
+    "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/pull/1/files"
+  ],
+  "confidence": 0.6
+}

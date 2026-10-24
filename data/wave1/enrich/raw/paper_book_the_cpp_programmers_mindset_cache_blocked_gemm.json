@@ -1,0 +1,55 @@
+{
+  "id": "paper:book-the-cpp-programmers-mindset-cache-blocked-gemm",
+  "one_liner": "Teaching example: 32x32 cache-blocked scalar dgemm with a tile accumulator, about 1.9x faster than a naive triple loop.",
+  "what_it_does": "Chapter-04 of the Packt companion repo for The C++ Programmer's Mindset holds two scalar double-precision GEMM kernels, ct::dgemm_basic and ct::dgemm_blocked(A, B, C, alpha, beta, block_size), computing C = beta*C + alpha*A*B on ct::MatrixView non-owning views (pointer, rows, cols, order), with ct::Matrix as a 64-byte-aligned owning matrix. bench_gemm.cpp times both on 1000x1000 matrices with Google Benchmark and, when CMake finds a BLAS, cblas_dgemm as a reference. It is a teaching example, not a BLAS: no transpose flags, no leading dimensions and only row-major data.",
+  "how_it_is_fast": "Loop tiling (cache blocking): C is computed in 32x32 tiles, and for each k block the 32x32 slices of A and B (8 KB each) plus an 8 KB tile accumulator fit in L1 together, so each loaded line of B is reused across the whole tile instead of B being streamed column-wise from L2 or memory for every element of C. Inside a tile the source still walks i-j-k with B read down columns, but it accumulates into the tile array rather than a scalar, which makes the inner loops a perfect nest that a compiler may interchange and vectorise (GCC enables -floop-interchange at -O3, and its documented example is this matmul nest). The relayed 289 ms is about 0.29 ns per multiply-add (derived), below one floating-point add latency at desktop clock speeds, so the book's blocked build very likely did not run the source's serial k-loop as written; part of the 1.9x is probably compiler restructuring rather than tiling alone (inference, not checked by compiling).",
+  "when_to_use": [
+    "Learning or teaching cache blocking on a short, readable kernel before moving to BLIS/OpenBLAS-style packed micro-kernels.",
+    "A dependency-free fallback dgemm in a small project that cannot link any BLAS, for square row-major double matrices from a few hundred to a few thousand elements per side.",
+    "A simple reference or starting point for your own tiled kernel, applying the same tile-and-accumulate pattern to other loop nests whose working set exceeds L1."
+  ],
+  "when_not_to_use": [
+    "Any production matrix multiply: the relayed OpenBLAS figure (24.1 ms against 289 ms) is about 12x faster again; use OpenBLAS, MKL, BLIS or Eigen.",
+    "Non-square inputs: both kernels bound the k loop by B.cols() instead of A.cols(), and dgemm_basic also bounds j by A.cols(), so results are only correct when A.cols() == B.cols(); check_dimensions validates shapes but the loops do not follow them.",
+    "Column-major or transposed operands: only row-major is handled, and the asserts that would catch other orders are compiled out in any NDEBUG build.",
+    "Multicore or SIMD throughput needs: the code is single-threaded scalar C++ with no packing, so power-of-two sizes such as 1024, where the 32 B rows in a tile sit 8 KB apart and share a few L1 sets, may lose much of the blocking gain (not measured)."
+  ],
+  "integration": {
+    "form": "source-drop (gemm.cpp with matrix_view.h and matrix.h; the chapter's CMake builds them as static library 'gemm')",
+    "dependencies": "none for the kernels (C++ standard library); bench_gemm needs Google Benchmark and optionally a CBLAS found by CMake FindBLAS; the chapter CMakeLists.txt also requires GTest, OpenMP and Threads at configure time",
+    "min_toolchain": "C++20 (matrix_view.h includes <ranges> and <span>; matrix.h uses aligned operator new), CMake 3.30+",
+    "platforms": "any for the portable scalar kernels; the platform used for the book's numbers is not documented",
+    "thread_safety": "not documented; the kernels keep no shared state (the tile buffer is a local Matrix), so concurrent calls writing distinct output matrices look safe by inspection",
+    "drop_in_for_baseline": "partial — same ct::MatrixView signature as dgemm_basic plus a block_size argument; not a drop-in for cblas_dgemm (no transpose flags, leading dimensions or column-major order)"
+  },
+  "gotchas": [
+    "As committed (HEAD, and unchanged since commit 0be92ac of May 2025), bench_gemm.cpp and test_gemm.cpp use ct::Matrix but include only gemm.h, which pulls in matrix_view.h and not matrix.h, so neither compiles without adding #include \"matrix.h\"; gemm.cpp's dgemm_blocked also asserts on lowercase a, b, c that do not exist, so it compiles only with NDEBUG. The book's run therefore used code or a build that the repo does not record.",
+    "The benchmark never writes matrix a (ct::Matrix only default-initialises its doubles), so every product is zero; on Linux, untouched fresh allocations read as the kernel's shared zero page, so A may occupy almost no physical cache footprint, and whether a is fresh or recycled heap memory can differ between benchmark runs. Fill every input before timing.",
+    "The only correctness test compares blocked against basic on square 250x250 all-ones matrices with block 64, which cannot expose the k-bound bug for non-square shapes and makes summation order irrelevant.",
+    "The ratio is likely compiler-dependent: GCC turns on -floop-interchange at -O3, while Clang left loop interchange off by default until an August 2026 LLVM change (per search snippets), and the repo pins neither compiler nor build type."
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling is a CPU GEMM: the category holds SIMD and math-function libraries (xsimd, Vc, SLEEF) and sibling examples from the same book (SAXPY multiversioning, OpenMP nearest neighbour). Read this one to learn CPU cache tiling; the GPU Programming with C++ and CUDA shared-memory tiled matrix multiply is the GPU analogue, and for real workloads a BLAS beats both.",
+  "verified_claims_summary": "The book's own run, relayed by the seed lead and not recorded in the repo, reports 547 ms for the naive i-j-k loop, 289 ms for the 32x32 blocked kernel and 24.1 ms for OpenBLAS cblas_dgemm per 1000x1000 double multiply: about 1.9x for blocking and about 12x more for OpenBLAS (derived), or 0.55 ns and 0.29 ns per multiply-add for the two scalar kernels (derived). Compiler, build type, flags, OpenBLAS thread count and CPU are not stated.",
+  "status_note": "Active Packt companion repo for the 2025 book (last commit 2026-01-22, 20 stars, Chapter-04 last touched by a 2025-11-08 reformat), MIT-licensed; the kernels are about 100 lines and easy to copy, but fix the missing matrix.h include, the lowercase asserts and the k-loop bound before reuse.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/bench_gemm.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/gemm.h",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/gemm.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/matrix.h",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/matrix_view.h",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/test_gemm.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/0be92ac/Chapter-04/bench_gemm.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/0be92ac/Chapter-04/gemm.h",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/0be92ac/Chapter-04/gemm.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/0be92ac/Chapter-04/test_gemm.cpp",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/commits/main/Chapter-04",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/issues?q=is%3Aissue",
+    "https://gcc.gnu.org/ml/gcc-patches/2017-12/msg00360.html (search snippet only)",
+    "https://lists.llvm.org/pipermail/flang-commits/2026-August/084328.html (search snippet only)"
+  ],
+  "confidence": 0.6
+}

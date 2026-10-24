@@ -1,0 +1,46 @@
+{
+  "id": "paper:book-hands-on-design-patterns-with-cpp-second-edition-local-buffer-smartptr",
+  "one_liner": "Teaching sketch of a single-owner pointer that type-erases its deleter inline; the book times it against std::shared_ptr with a custom deleter.",
+  "what_it_does": "smartptr_te_static<T> and smartptr_te_vtable<T> (Chapter06/07_smartptr.h) own a T* and a deleter whose type is not part of the pointer's type, like std::shared_ptr's deleter, but with unique ownership and no control block. You construct them from (T*, Deleter) and the destructor calls the deleter. The only accessor is operator->: there is no operator*, get(), reset(), release(), bool conversion or move support.",
+  "how_it_is_fast": "The deleter object goes into an 8-byte aligned buffer inside the pointer, so the only allocation is the pointee itself; std::shared_ptr(p, d) allocates a separate control block for the deleter and reference counts. smartptr_te_static stores one function pointer to a static invoke_destroy<Deleter> instantiation, so destruction makes one indirect call. smartptr_te_vtable points to a constexpr static table holding destroy and destructor entries, which costs one more load and call but supports deleters that are not trivially destructible. This is hand-rolled type erasure with small-buffer storage in place of a heap-allocated virtual deleter.",
+  "when_to_use": [
+    "You need a single-owner pointer whose deleter type must not appear in the pointer type (for example, uniform handles from different allocators or pools), and std::shared_ptr's control-block allocation shows up in profiles",
+    "The deleter is stateless or holds at most 8 bytes (one pointer to a pool or arena)",
+    "Very frequent create/destroy of small objects, where a second allocation per object dominates",
+    "As a reference implementation to adapt into a production unique-ownership pointer with a type-erased deleter"
+  ],
+  "when_not_to_use": [
+    "You need shared ownership, weak_ptr, or thread-safe reference counting: these pointers have none of it, so they do not replace std::shared_ptr",
+    "The deleter type can be part of the pointer type: std::unique_ptr<T, D> has no type-erasure cost and the book's own unique_ptr row is at least as fast",
+    "Deleters larger than 8 bytes or over-aligned beyond 8: static_assert rejects larger ones, there is no heap fallback, and alignment is never checked",
+    "Anything that copies or moves the pointer: no copy or move operations are declared, so the implicitly generated copy would delete the pointee twice"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the classes (the benchmark needs Google Benchmark)",
+    "min_toolchain": "C++17 language features (static_assert without a message, _v type traits, a constexpr static variable-template member); the book builds with --std=c++20",
+    "platforms": "any; the buffer is a fixed alignas(8) char[8]",
+    "thread_safety": "not documented; there is no shared state, so it behaves like any single-owner object",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "No copy or move constructor is declared and the destructor is user-defined, so a copy compiles and then double-deletes; factories work only because C++17 guarantees copy elision for the prvalue return.",
+    "The sibling local-buffer variants in the same header (smartptr_te_lb and smartptr_te_lb0) check sizeof(Deleter) against their 16-byte buffer but place destroy<Deleter>, which adds a vtable pointer, so a 9-16-byte deleter overflows the buffer. The benchmark's empty deleter fits, so the bug never shows there.",
+    "The headline comparison is against std::shared_ptr, which also allocates a control block and reference counts. Most of the gap is that extra allocation and bookkeeping rather than a faster type-erasure mechanism: against the raw-pointer floor the book's variants add only about 0.9 to 1.7 ns (derived from the relayed numbers).",
+    "The fairest stdlib baseline for a type-erased single-owner pointer, std::unique_ptr<T, std::function<void(T*)>>, is not benchmarked."
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling offers this exact shape: observable_unique_ptr adds weak observers to unique ownership, and the publishing pointer from The Art of Writing Efficient Programs targets concurrent access. Use these classes as a pattern to copy and harden when you need unique ownership with a type-erased inline deleter.",
+  "verified_claims_summary": "The book (relayed through the seed lead; no numbers in the repository) reports a construct-plus-destroy cost of about 9.58 ns for smartptr_te_static and 10.4 ns for smartptr_te_vtable, against 22.9 ns for std::shared_ptr<int> with a custom deleter, 17.5 ns for make_shared, 8.82 ns for std::unique_ptr and 8.72 ns for a raw pointer. These are Google Benchmark rows built with -g -O3 --std=c++20 and whole-program optimisation off; the compiler version, standard library and CPU are not stated. The harness is sound for what it times: every row allocates new int(0) in a separate translation unit (07_smartptr_ext.C) and destroys it in the benchmark file, so allocation cannot be elided and the type-erased destroy calls stay indirect.",
+  "status_note": "Stale (last commit 2024-08-29) MIT-licensed book companion code; copyable, but it lacks copy and move semantics and most of a smart-pointer API, so treat it as a pattern rather than a component.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/Chapter06/07_smartptr.C",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/Chapter06/07_smartptr.h",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/Chapter06/07_smartptr_ext.C",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/README.md",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/tree/main/Chapter06",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/tree/main/Chapter10",
+    "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/issues",
+    "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/Chapter10/09_smartptr.C"
+  ],
+  "confidence": 0.6
+}
