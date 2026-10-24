@@ -26,7 +26,7 @@ Every entry names the default it beats, quotes the published numbers, and record
 ## Also here
 
 - [Rejected claims](rejected.md): 41 candidates whose evidence did not hold up, with the reason for each.
-- [Seeds without evidence](seeds-no-evidence.md): 620 projects from curated lists that never published a comparison against a baseline.
+- [Seeds without evidence](seeds-no-evidence.md): 693 projects from curated lists that never published a comparison against a baseline.
 - [catalog.jsonl](catalog.jsonl) and [catalog.csv](catalog.csv): every entry in machine-readable form ([schema](../docs/schema.md)).
 
 <sub>Tiers: **A** reproducible public benchmark (code, compiler, flags and CPU stated) · **B** independent or peer-reviewed measurement · **C** first-party claim · **D** directional, no numbers. Status: 🟢 active · 🔵 finished · 🟡 slow or stale · 🔴 abandoned · ⚪ unknown. *Study only* means no usable open-source license: read the idea, don't copy the code.</sub>
