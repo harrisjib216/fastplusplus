@@ -1,0 +1,54 @@
+{
+  "id": "paper:book-bare-metal-embedded-c-programming-direct-register-access-gpio",
+  "one_liner": "Drive STM32 GPIO pins with single stores to the BSRR register instead of calling HAL_GPIO_WritePin.",
+  "what_it_does": "A coding technique, not a library: the book's companion code writes peripheral registers through CMSIS-style structs (GPIOA->MODER, GPIOA->BSRR, RCC->AHB1ENR) on an STM32F411 NUCLEO board, with its own startup file, linker script and CMSIS headers, and builds GPIO, timer, UART, SPI, I2C, ADC and DMA drivers that way. Setting or clearing a pin becomes one 32-bit store (GPIOx->BSRR = 1u<<n to set, 1u<<(n+16) to clear) in place of the HAL call. There is no drop-in API: the caller enables clocks, configures MODER/OSPEEDR and owns every register bit.",
+  "how_it_is_fast": "BSRR is a write-only set/reset register, so one store changes the pin atomically with no read-modify-write and no function call. In the measured loop the HAL cost is call overhead, not work: the F0 HAL_GPIO_WritePin body is just a branch and one store to BSRR or BRR (assert_param compiles to nothing with USE_FULL_ASSERT off), but it lives in a separate driver file and the Keil project has LTO off, so each write pays a call and return. The 40.8 ns BSRR pulse is about 2 cycles at 48 MHz, which the benchmark author reads as the Cortex-M0 store timing limit.",
+  "when_to_use": [
+    "Bit-banged protocols, chip-select or strobe lines and scope/debug markers where the gap between two pin edges must be a few CPU cycles.",
+    "Interrupt handlers and tight control loops on STM32 parts that already use CMSIS device headers, where a HAL call per pin edge is measurable.",
+    "Setting or clearing pins from both main code and ISRs: a plain BSRR store is atomic, unlike ODR |= or ODR ^= read-modify-write sequences.",
+    "Learning or auditing exactly what the hardware does, or very small firmware images where HAL is not linked at all."
+  ],
+  "when_not_to_use": [
+    "Code that must move across STM32 families or vendors: register names, bit positions and clock-enable registers differ (the book targets STM32F411, the benchmark STM32F072).",
+    "When LL (LL_GPIO_SetOutputPin is a static inline BSRR write) or HAL built with -O2 and LTO already meets the timing; the gap is mostly call overhead that inlining removes.",
+    "Peripheral setup and error handling: direct writes skip HAL's clock enabling, parameter checks, state machines and timeouts, so mistakes fail silently.",
+    "Workloads where a pin write is a tiny fraction of the time (pins toggled every few milliseconds); the saving is a few hundred nanoseconds per call."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "CMSIS device header for the target MCU (the book repo ships chip_headers/CMSIS; the benchmark uses STM32CubeMX-generated CMSIS and HAL for setup)",
+    "min_toolchain": "Any C99 Arm compiler; book code built with the GNU Arm Embedded Toolchain in STM32CubeIDE, benchmark with Keil uVision5 and Arm Compiler 6",
+    "platforms": "STM32 MCUs with a BSRR GPIO register (book: STM32F411 Cortex-M4; benchmark: STM32F072 Cortex-M0); register layout is per family",
+    "thread_safety": "A single BSRR store is atomic with respect to interrupts; ODR read-modify-write forms used elsewhere in the book are not",
+    "drop_in_for_baseline": "partial — replaces HAL_GPIO_WritePin calls one for one, but pin masks, clock enabling and pin configuration must be written by hand"
+  },
+  "gotchas": [
+    "The book's own GPIO driver (Chapter7-GpioInput/Src/gpio.c) writes GPIOA->BSRR |= LED_BS5, which adds a needless read of a write-only register; use a plain store as in the benchmark. Chapters 3 and 6 toggle with ODR ^=, which is not interrupt-safe.",
+    "The benchmark's HAL figures are call overhead across a translation-unit boundary with LTO off; its README attributes the -O0 gap to parameter validation and says HAL is inlined at -O2, but asserts are compiled out and HAL_GPIO_WritePin is a separate function in a non-LTO build.",
+    "Variants are switched by commenting code in main.c (the committed file has the HAL block active) and the Keil project stores a single optimization setting, so each table row was a separate hand-edited build; no build logs or disassembly are committed.",
+    "The book examples use empty for loops as delays (for(int i=0;i<100000;i++){}), which an optimizing compiler may delete; use SysTick or a timer instead."
+  ],
+  "pick_this_over_siblings_when": "Pick raw BSRR writes over the STM32 Low Layer (LL) entry only when you want no ST driver code at all; LL_GPIO_SetOutputPin compiles to the same single BSRR store when inlined, so LL gives the same edge timing with named calls and CubeMX support. The other filesystems-and-io siblings (liburing, SPDK, mmap replacements) solve host file and block I/O and do not apply to microcontroller pins.",
+  "verified_claims_summary": "A third-party student project (dotsolvit/stm32f0-gpio-speed-comparison) toggled PC8 on an STM32F072 Discovery board at 48 MHz, built with Keil and Arm Compiler 6, and measured the high-pulse width with an OWON SDS210S oscilloscope: two HAL_GPIO_WritePin calls gave 396 ns at -O2/-O3 versus 40.8 ns for two GPIOC->BSRR stores (9.7x), 418 versus 61.6 ns at -O1 and 896 versus 61.6 ns at -O0. The book and its repository contain no timing; the measurement is of the technique on a different chip, not of the book's code.",
+  "status_note": "The book repository (MIT, 317 stars, last commit 2025-12-15, 4 open issues about errata and tooling) is teaching code for STM32F411, small enough to copy; the benchmark repository has no license file and 0 stars, so cite its numbers but do not copy its code.",
+  "sources_read": [
+    "https://github.com/PacktPublishing/Bare-Metal-Embedded-C-Programming",
+    "https://github.com/PacktPublishing/Bare-Metal-Embedded-C-Programming/issues",
+    "https://github.com/PacktPublishing/Bare-Metal-Embedded-C-Programming/tree/main/Chapter6/6_StructureAccess",
+    "https://github.com/PacktPublishing/Bare-Metal-Embedded-C-Programming/tree/main/Chapter3/2_RegisterManipulation",
+    "https://raw.githubusercontent.com/PacktPublishing/Bare-Metal-Embedded-C-Programming/HEAD/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/Bare-Metal-Embedded-C-Programming/HEAD/Chapter7-GpioInput/Src/gpio.c",
+    "https://raw.githubusercontent.com/PacktPublishing/Bare-Metal-Embedded-C-Programming/HEAD/Chapter7-GpioInput/Src/main.c",
+    "https://raw.githubusercontent.com/PacktPublishing/Bare-Metal-Embedded-C-Programming/HEAD/Chapter6/6_StructureAccess/Src/main.c",
+    "https://raw.githubusercontent.com/PacktPublishing/Bare-Metal-Embedded-C-Programming/HEAD/Chapter3/2_RegisterManipulation/Src/main.c",
+    "https://github.com/dotsolvit/stm32f0-gpio-speed-comparison",
+    "https://raw.githubusercontent.com/dotsolvit/stm32f0-gpio-speed-comparison/HEAD/README.md",
+    "https://raw.githubusercontent.com/dotsolvit/stm32f0-gpio-speed-comparison/HEAD/Core/Src/main.c",
+    "https://raw.githubusercontent.com/dotsolvit/stm32f0-gpio-speed-comparison/HEAD/Core/Inc/stm32f0xx_hal_conf.h",
+    "https://raw.githubusercontent.com/dotsolvit/stm32f0-gpio-speed-comparison/HEAD/Drivers/STM32F0xx_HAL_Driver/Src/stm32f0xx_hal_gpio.c",
+    "https://raw.githubusercontent.com/dotsolvit/stm32f0-gpio-speed-comparison/HEAD/MDK-ARM/stm32f0-gpio-speed-comparison.uvprojx",
+    "https://raw.githubusercontent.com/dotsolvit/stm32f0-gpio-speed-comparison/HEAD/stm32f0-gpio-speed-comparison.ioc"
+  ],
+  "confidence": 0.6
+}
