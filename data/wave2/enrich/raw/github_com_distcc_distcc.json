@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/distcc/distcc",
+  "one_liner": "Compiler front end that farms C/C++ compile jobs out to networked servers; beats a local single-machine make on big parallel builds.",
+  "what_it_does": "distcc wraps gcc or clang: set CC='distcc gcc' (or put a masquerade directory of compiler-named symlinks first on PATH), list servers in DISTCC_HOSTS and run make -jN. Each compile is sent over TCP (port 3632) or SSH to a distccd daemon, which runs its own copy of the compiler and returns the object file; linking stays local. In plain mode the client preprocesses and ships the .i text; in pump mode (3.0+, run as 'pump make -jN') a local include server ships the source plus its non-system headers so preprocessing also runs remotely. Failed remote jobs are retried locally unless DISTCC_FALLBACK=0.",
+  "how_it_is_fast": "It is plain job-level parallelism across machines: make -j issues many independent compiles, the client does only cheap work (preprocess, compress, send) and the expensive compiler passes run on remote CPUs. Pump mode attacks the client-side preprocessing bottleneck with an include server that statically analyses #include directives (computing a superset of possible include targets, memoised across the build) and LZO-compresses each file once, which the man page says cuts compile-preparation time by up to an order of magnitude. Nothing is cached: every compile runs every time.",
+  "when_to_use": [
+    "Large C/C++ builds with flat, highly parallel Makefiles (Linux kernel, Samba) where a modest workstation can drive many idle Linux/BSD servers on a trusted LAN.",
+    "Fleets where every machine has the same gcc or clang release (and, for pump mode, identical system headers, e.g. one distro image).",
+    "Pump mode on clusters of dozens to hundreds of server CPUs; README.pump says below about ten CPUs local preprocessing keeps up and pump shows no major gain.",
+    "Plain mode stacked under ccache (CC='ccache distcc gcc') so cache hits skip the network and misses are distributed.",
+    "Cross-compiling: the client rewrites gcc to a fully qualified target name and adds -target for clang, so servers can run a matching cross compiler."
+  ],
+  "when_not_to_use": [
+    "Small projects or Makefiles that recurse into subdirectories sequentially: hello-2.1.1 got slower (0.7s local, 0.9s plain, 1.1s pump) and the benchmark page says sequential sub-makes benefit little.",
+    "Untrusted networks: in TCP mode anyone who can reach the port can run arbitrary commands as the distccd user and traffic is neither encrypted nor signed (CVE-2004-2687 covered unrestricted 2.x daemons); use SSH, which the docs call much slower, or the optional GSS-API auth.",
+    "A strong many-core client with only a few remotes: open issue #325 reports a 40-core box building a kernel in about 16 minutes locally but about 40 minutes with distcc across two such boxes; host lists are static and there is no load-aware scheduler.",
+    "MSVC or native Windows builds: only gcc-compatible compilers are wrapped, and Windows needs Cygwin (open issue #339 says the daemon will not run there).",
+    "Pump mode together with ccache (the FAQ says ccache prevents pump mode), or builds that rewrite headers mid-build, which pump mode assumes do not change."
+  ],
+  "integration": {
+    "form": "standalone tool built from source (autotools) or distro packages: distcc client wrapper, distccd daemon, pump script with a Python include server",
+    "dependencies": "GNU Make, a C compiler and libpopt (no longer bundled as of the unreleased 3.z notes); Python >= 3.1 with headers for pump mode, tests and the benchmark harness; optional GTK for the monitor and Avahi for zeroconf",
+    "min_toolchain": "Any gcc or clang on client and servers, ideally the exact same release everywhere; pump mode needs distcc/distccd 3.0 or later on both ends",
+    "platforms": "Unix-like systems (Linux, BSDs, macOS, Solaris per the FAQ); Windows only through Cygwin; servers must emit the client's object format (same arch or a cross compiler)",
+    "thread_safety": "Not a library; safe under make -jN. distccd forks per job and each host entry has a slot limit (host/N); the client coordinates slots with lock files in ~/.distcc/lock",
+    "drop_in_for_baseline": "partial — the compiler command line, flags and outputs are unchanged and it hooks in via CC= or a masquerade PATH, but every server needs distccd plus a matching compiler, DISTCC_HOSTS must be configured, and the build must run with a high make -j"
+  },
+  "gotchas": [
+    "Silent fallbacks: remote failures recompile locally, and pump mode drops to plain mode when the include server hits an error; the benchmark authors found pump runs that had fallen back without notice, and open issue #574 says DISTCC_FALLBACK=0 does not stop preprocessor fallbacks.",
+    "distccd must be told which clients to accept (--allow, or --allow-private for private ranges; the man page says it exits with no --allow), and since 3.3 it runs only compilers masqueraded in /usr/lib/distcc, so versioned names such as x86_64-linux-gnu-gcc can be refused (issue #301); --enable-tcp-insecure lifts that at the cost of allowing arbitrary binaries.",
+    "Stale lock files in ~/.distcc/lock can make remote hosts look busy and throttle the build (comments on issue #325, where removing the locking restored full utilisation).",
+    "Harness caveats in the published benchmark: the local_01 baseline is make -j1 on the single Pentium 4 client (cpu% 60-84%, no local -j2 row), and pump rows use the ',cpp,lzo' host options (pump requires LZO) while plain rows ran uncompressed even though bench/compiler.py has an 'lzo' plain mode, so the pump-over-plain ratio mixes in compression."
+  ],
+  "pick_this_over_siblings_when": "Pick distcc over icecream when you want the simplest scheduler-free setup with a static host list and optional SSH transport, and over NativeLink when the build is plain make/CMake rather than Bazel-style remote execution; pick icecream when machines come and go or carry different compilers (its scheduler and shipped compiler environments), HOMCC for low-bandwidth links where its README shows it beating distcc, and ccache or sccache when repeat builds rather than cold builds dominate.",
+  "verified_claims_summary": "Google's 2008 page timed make only (configure excluded), five runs averaged, for six open-source packages on a 2.8GHz Pentium 4 client: local make -j1 against make -j40 on 38 servers with 152 CPUs (2GHz AMD dual-core 270 machines). Linux 2.6.25 fell from 818s to 203s plain (about 4.0x) and 135s in pump mode (about 6.1x), Samba 3.0.20 from 314s to 31s with pump (about 10x), hello-2.1.1 got slower, and no compiler version or flags are given.",
+  "status_note": "Last tagged release is 3.4 (2021-04-11); master still receives fixes (latest commit 2026-07-08, unreleased 3.z notes), but the original author's pinned 2023 'New maintainers needed' issue is still open with no release since, so treat it as community-maintained GPL v2 software that most distros package.",
+  "sources_read": [
+    "https://github.com/distcc/distcc",
+    "https://raw.githubusercontent.com/distcc/distcc/HEAD/README.md",
+    "https://raw.githubusercontent.com/distcc/distcc/HEAD/README.pump",
+    "https://raw.githubusercontent.com/distcc/distcc/HEAD/INSTALL",
+    "https://raw.githubusercontent.com/distcc/distcc/HEAD/NEWS",
+    "https://raw.githubusercontent.com/distcc/distcc/HEAD/doc/web/benchmark.html",
+    "https://raw.githubusercontent.com/distcc/distcc/HEAD/doc/web/security.html",
+    "https://raw.githubusercontent.com/distcc/distcc/HEAD/doc/web/faq.html",
+    "https://raw.githubusercontent.com/distcc/distcc/HEAD/man/distcc.1",
+    "https://raw.githubusercontent.com/distcc/distcc/HEAD/man/distccd.1",
+    "https://raw.githubusercontent.com/distcc/distcc/HEAD/bench/benchmark.py",
+    "https://raw.githubusercontent.com/distcc/distcc/HEAD/bench/Build.py",
+    "https://raw.githubusercontent.com/distcc/distcc/HEAD/bench/compiler.py",
+    "https://raw.githubusercontent.com/distcc/distcc/HEAD/bench/ProjectDefs.py",
+    "https://raw.githubusercontent.com/distcc/distcc/HEAD/bench/Summary.py",
+    "https://raw.githubusercontent.com/distcc/distcc/HEAD/bench/Project.py",
+    "https://github.com/distcc/distcc/commits/master",
+    "https://github.com/distcc/distcc/issues?q=is%3Aissue+is%3Aopen+pump",
+    "https://github.com/distcc/distcc/issues/488",
+    "https://github.com/distcc/distcc/issues/325",
+    "https://nvd.nist.gov/vuln/detail/cve-2004-2687 (search result snippet only)"
+  ],
+  "confidence": 0.8
+}
