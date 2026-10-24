@@ -755,7 +755,7 @@
     "stars_or_usage": "87 stars (companion repository)",
     "has_code": true,
     "tradeoffs": "Fixed pools: N blocks per size class (rounded up to powers of two) allocated up front with malloc, allocation falls back to ::operator new when a pool is exhausted or the size does not fit. Freed memory is never reused (deallocate only checks whether the pointer lies in a pool). Deallocation does a linear scan over the size classes. A mutex guards allocate; the lock in deallocate is commented out. new[] and delete[] are left as an exercise.",
-    "caveats": "First-party book measurement: one run, online gcc 15 at -O2 (per the lead), CPU not stated; the gain is small (about 10%). Benchmark program is chapter10/chunk_sized_allocator.cpp: it prints the two timings but the repo holds no results, compiler line or CPU. The pool's three malloc'd blocks (100,000 slots each of 32, 64 and 128 bytes, about 22 MB) are allocated in the constructor outside the timed region, but their pages are first touched inside the timed chunked run. The std::vector of 300,000 (pointer, std::function) pairs is allocated in each lambda's init-capture before the clock starts and freed after it stops; filling it and the std::function type erasure are timed on both sides. The standard version runs first in the same process. The chunked allocate locks a std::mutex per call while deallocate does nothing; the book itself warns that locking strongly affects the gain and locking in deallocate would likely erase it. No memory reuse (freed slots are never handed out again; when a class fills up, requests fall through to ::operator new), so not like for like with a real allocator.",
+    "caveats": "First-party book measurement: one run, online gcc 15 at -O2 (per the lead), CPU not stated; the gain is small (about 10%). Benchmark program is chapter10/chunk_sized_allocator.cpp: it prints the two timings but the repo holds no results, compiler line or CPU. The pool's three malloc'd blocks (100,000 slots each of 32, 64 and 128 bytes, about 22 MB) are allocated in the constructor outside the timed region, but their pages are first touched inside the timed chunked run. The std::vector of 300,000 (pointer, std::function) pairs is allocated in each lambda's init-capture before the clock starts and freed after it stops; filling it and the std::function type erasure are timed on both sides. The standard version runs first in the same process. The chunked allocate locks a std::mutex per call while deallocate does nothing; the book itself warns that locking strongly affects the gain and locking in deallocate would likely erase it. No memory reuse (freed slots are never handed out again; when a class fills up, requests fall through to ::operator new), so not like for like with a real allocator. [retier] Enricher: the size-class test is strict (n < sizes[i]), so exact 32/64/128-byte requests skip their class (128-byte objects fall to ::operator new); freed slots are never reused, so after N lifetime allocations per class each call pays the class scan, the mutex and ::operator new and runs slower than the baseline; ::operator delete(p, alloc) skips destructors; std::function and std::pair moves are timed on both sides, diluting the 10%; the file relies on <cstdlib> arriving through other headers. The chapter10 files are unchanged since 2024-08-14 (later commits touch other chapters).",
     "found_via": [
       "seed-record pass from https://github.com/packtpublishing/c-plus-plus-memory-management (chapter10/chunk_sized_allocator.cpp)"
     ],
@@ -1646,7 +1646,7 @@
     "stars_or_usage": "87 stars (companion repository)",
     "has_code": true,
     "tradeoffs": "Bump allocation only: freed memory is never reused, delete is a no-op, so memory is reclaimed only when the arena is destroyed. Capacity N*sizeof(T) is malloc'd up front, with no bounds check on exhaustion. A mutex is taken on every allocation. Serves one class (operator new/delete overloads for Orc); operator new[] and delete[] assert false. A SizeBasedArena-safer variant adds static_assert(std::is_final_v<T>) so derived classes cannot be allocated from a too-small slot.",
-    "caveats": "First-party book measurement: one run on an unnamed online gcc 15 machine (per the lead), CPU not stated; flags and numbers come from the book, not the repo. The repo carries the benchmark programs in chapter10 (carnage-stdlib-version.cpp, carnage-homemade-version-meyers-singleton.cpp, carnage-homemade-version-global-singleton.cpp, carnage-homemade-version-SizeBasedArena.cpp, carnage-homemade-version-SizeBasedArena-safer.cpp) with no printed results or build lines; the record's figures cover only the stdlib, Meyers-singleton and global-singleton variants. Not like for like: the arena never reuses memory, delete does nothing, and the test is allocate-all then free-all, the best case for a bump allocator. The 0 us delete in the global-singleton version means the compiler removed the whole loop (empty deallocate, no static-local guard); the Meyers version's 638 us is mostly the per-call static-local guard check. In the Meyers-singleton version the arena's one-time malloc of 1,000,000 Orc slots (16 MB) runs inside the first timed operator new call, and the arena's pages are first touched in the timed loop on both homemade variants. The std::vector<Orc*> is reserved before timing on all variants. The arena locks a std::mutex per allocation while glibc malloc takes its single-thread fast path. Generic typed-arena speedup over malloc is well known; the evidence is a teaching example.",
+    "caveats": "First-party book measurement: one run on an unnamed online gcc 15 machine (per the lead), CPU not stated; flags and numbers come from the book, not the repo. The repo carries the benchmark programs in chapter10 (carnage-stdlib-version.cpp, carnage-homemade-version-meyers-singleton.cpp, carnage-homemade-version-global-singleton.cpp, carnage-homemade-version-SizeBasedArena.cpp, carnage-homemade-version-SizeBasedArena-safer.cpp) with no printed results or build lines; the record's figures cover only the stdlib, Meyers-singleton and global-singleton variants. Not like for like: the arena never reuses memory, delete does nothing, and the test is allocate-all then free-all, the best case for a bump allocator. The 0 us delete in the global-singleton version means the compiler removed the whole loop (empty deallocate, no static-local guard); the Meyers version's 638 us is mostly the per-call static-local guard check. In the Meyers-singleton version the arena's one-time malloc of 1,000,000 Orc slots (16 MB) runs inside the first timed operator new call, and the arena's pages are first touched in the timed loop on both homemade variants. The std::vector<Orc*> is reserved before timing on all variants. The arena locks a std::mutex per allocation while glibc malloc takes its single-thread fast path. Generic typed-arena speedup over malloc is well known; the evidence is a teaching example. [retier] Enricher: no exhaustion check, so past N lifetime allocations the arena hands out memory beyond its buffer (heap overflow); operator new ignores the requested size, so a derived class overruns its slot (only the -safer variant blocks it); the assert(false) operator new[] applies only to the Tribe variants and has no return (undefined behaviour under NDEBUG), while SizeBasedArena's new[] computes n / sizeof(T) and assumes no array cookie; the delete comparison sets glibc free() against an empty function the optimiser can drop. The chapter10 files are unchanged since 2024-08-14 (later commits touch other chapters).",
     "found_via": [
       "seed-record pass from https://github.com/packtpublishing/c-plus-plus-memory-management (chapter10 folder listing and source files opened via raw.githubusercontent.com)"
     ],
@@ -2161,7 +2161,7 @@
     "stars_or_usage": "3.9k stars, 509 forks",
     "has_code": true,
     "tradeoffs": "Experimental library by its own description; no standard-coroutine-header support in upstream (uses std::experimental style on older compilers), Windows-oriented networking, cmake/cake build. Peak RSS on the fork-join benchmarks is about 134 MB (skynet, nqueens, fib) against 9-14 MB for tbb, taskflow, libfork and TooManyCooks, because the thread-pool runtime allocates a coroutine frame per task.",
-    "caveats": "Neither the repo README nor any first-party page carries timings: the README makes only qualitative design claims (the static_thread_pool schedule() will not allocate memory in the common case; async_mutex is lock-free). The numbers come from the third-party tzcnt/runtime-benchmarks suite, which measures the maintained fork https://github.com/andreasbuhr/cppcoro (its README lists only build-system, CI and header/namespace-selection changes versus upstream; no performance changes are listed), not lewissbaker/cppcoro itself. The baselines it beats (concurrencpp v.0.1.7, HPX v1.11.0, libcoro) are other coroutine runtimes, not the std::future/std::async baseline from the brief, and no std::async row exists. cppcoro loses to TBB, Taskflow, libfork, TooManyCooks and citor on the fork-join benchmarks (it roughly ties TBB on skynet: 144907 us vs 142887 us) and uses about 10x the memory of TBB or Taskflow (134 MB vs 11-14 MB); in the io_socket_st TCP ping-pong row it is the slowest of four (524717 us vs libcoro 483074 us, Boost.Cobalt 393036 us, TooManyCooks 339340 us). The author of the suite also authors TooManyCooks (a competing runtime). Allocators differ per library: the suite's cppcoro CMake prefers mimalloc, then jemalloc, and otherwise uses glibc malloc on Linux (tcmalloc disabled because it was slower for cppcoro), while the other runtimes take tcmalloc first; the README says the summary machine had tcmalloc_minimal, so which allocator cppcoro actually used is not stated. Each table cell is one process run (warmup plus timed loop) with no repetitions or variance reported. The upstream repo is dormant since 2022-09-02, and the book lead calls it unmaintained.",
+    "caveats": "Neither the repo README nor any first-party page carries timings: the README makes only qualitative design claims (the static_thread_pool schedule() will not allocate memory in the common case; async_mutex is lock-free). The numbers come from the third-party tzcnt/runtime-benchmarks suite, which measures the maintained fork https://github.com/andreasbuhr/cppcoro (its README lists only build-system, CI and header/namespace-selection changes versus upstream; no performance changes are listed), not lewissbaker/cppcoro itself. The baselines it beats (concurrencpp v.0.1.7, HPX v1.11.0, libcoro) are other coroutine runtimes, not the std::future/std::async baseline from the brief, and no std::async row exists. cppcoro loses to TBB, Taskflow, libfork, TooManyCooks and citor on the fork-join benchmarks (it roughly ties TBB on skynet: 144907 us vs 142887 us) and uses about 10x the memory of TBB or Taskflow (134 MB vs 11-14 MB); in the io_socket_st TCP ping-pong row it is the slowest of four (524717 us vs libcoro 483074 us, Boost.Cobalt 393036 us, TooManyCooks 339340 us). The author of the suite also authors TooManyCooks (a competing runtime). Allocators differ per library: the suite's cppcoro CMake prefers mimalloc, then jemalloc, and otherwise uses glibc malloc on Linux (tcmalloc disabled because it was slower for cppcoro), while the other runtimes take tcmalloc first; the README says the summary machine had tcmalloc_minimal, so which allocator cppcoro actually used is not stated. Each table cell is one process run (warmup plus timed loop) with no repetitions or variance reported. The upstream repo is dormant since 2022-09-02, and the book lead calls it unmaintained. [retier] Enricher: the measured code is the andreasbuhr/cppcoro fork (active through 2026-06-12), which differs from upstream: its static_thread_pool counts sleepers once (notify_intent_to_sleep uses exchange) and it adds a Linux epoll io_service and sockets, so upstream cannot run io_socket_st on Linux. Symmetric transfer is enabled only on Clang 7+ (GCC and MSVC fall back to an atomic handshake, issue #216); the local-queue cap check (m_mask == max_local_queue_size) is unreachable, so the 1 MB cap never applies. Open issues #209 (tsan race in sync_wait) and #221 (cancellation deadlock).",
     "found_via": [
       "seed record pass: https://github.com/lewissbaker/cppcoro README (no benchmarks), then WebSearch 'cppcoro benchmark compared std::async std::future coroutine task performance results' led to https://github.com/tzcnt/runtime-benchmarks (README, build_and_bench_all.py, cpp/cppcoro/CMakeLists.txt)"
     ],
@@ -2209,7 +2209,7 @@
     "metric": "throughput",
     "workload": "io_socket_st: TCP ping-pong of 100,000 requests over 20 connections between a single-threaded client and a single-threaded server, each on its own event loop (libcoro io_scheduler with process_tasks_inline against cppcoro io_service from the andreasbuhr fork); channel: async MPMC queue moving 10,000,000 elements with thread_count/2 producers and consumers, libcoro coro::queue on a coro::thread_pool of 64 threads (mt config) against Boost.Cobalt channel on a single thread (st_asio config; the source notes cobalt does not support multiple threads).",
     "claimed_speedup": "Third-party table (us, lower is better): io_socket_st libcoro 483074 vs cppcoro 524717, about 1.09x faster (derived from page data), though Boost.Cobalt (393036) and TooManyCooks (339340) are faster. channel: libcoro_mt 409967 vs cobalt_st_asio 910778, about 2.2x faster (derived from page data), TooManyCooks 390771 / 391661.",
-    "evidence_tier": "A",
+    "evidence_tier": "C",
     "benchmark_url": "https://github.com/tzcnt/runtime-benchmarks",
     "baseline_stdlib": [],
     "compiler_and_flags": "Clang 21.1.7 Release, -O3 -march=native, C++23 for libcoro; libcoro pinned to commit 44d12235a218a93cf6ce462f67c06a1287901c54 with LIBCORO_FEATURE_NETWORKING ON and TLS OFF; linked against tcmalloc_minimal.",
@@ -2223,7 +2223,7 @@
     "stars_or_usage": "968 stars, 102 forks",
     "has_code": true,
     "tradeoffs": "C++20 library (task, generator, event, latch, mutex, ring buffer, thread_pool, io_scheduler, TCP/TLS/DNS networking) that uses a mutex-and-condition-variable thread pool and per-task heap frames; ships Android test harness. Fork-join workloads hit very high peak RSS in the suite: skynet 14.66 GB, nqueens 5.03 GB, fib(39) 15.81 GB against 11-14 MB for TooManyCooks and TBB.",
-    "caveats": "Weak result. The only wins are one 9% single-threaded socket row against cppcoro (itself the slowest of the four in that table) and one cross-configuration channel row (libcoro on a 64-thread pool vs Boost.Cobalt on a single thread, so not equal footing; TooManyCooks single-threaded Asio is 1.00x, 2.3x faster than cobalt, while no single-threaded libcoro channel row exists). Each table cell is one process run with no repetitions or variance reported, so the 9% socket margin is not shown to exceed run-to-run noise. On the fork-join benchmarks libcoro is the slowest runtime tested: mean ratio 2513.96x (skynet 119686148 us, nqueens 33347402 us, fib(39) 238019884 us, matmul 374412 us) against cppcoro 3.67x, with peak RSS of 14.66 GB on skynet. The brief baselines (hand-written coroutine task types, std::async/std::future) are not measured anywhere. libcoro's own README gives only server example runs without a baseline: ab TCP echo 110753.80 requests/s and wrk HTTP 200 OK 325778.99 requests/s with 2.96 ms mean latency, both on an Intel Core i7-9750H, so those are not comparisons. Repo test/bench.cpp times coroutine sync_wait, thread_pool and scheduler counters against a plain direct-call loop but publishes no results. The suite author also authors TooManyCooks (a competing runtime); allocator selection differs per library (libcoro tcmalloc first; the suite's cppcoro build skips tcmalloc on Linux and uses mimalloc, jemalloc or glibc malloc). The cppcoro rows measure the andreasbuhr/cppcoro fork.",
+    "caveats": "Weak result. The only wins are one 9% single-threaded socket row against cppcoro (itself the slowest of the four in that table) and one cross-configuration channel row (libcoro on a 64-thread pool vs Boost.Cobalt on a single thread, so not equal footing; TooManyCooks single-threaded Asio is 1.00x, 2.3x faster than cobalt, while no single-threaded libcoro channel row exists). Each table cell is one process run with no repetitions or variance reported, so the 9% socket margin is not shown to exceed run-to-run noise. On the fork-join benchmarks libcoro is the slowest runtime tested: mean ratio 2513.96x (skynet 119686148 us, nqueens 33347402 us, fib(39) 238019884 us, matmul 374412 us) against cppcoro 3.67x, with peak RSS of 14.66 GB on skynet. The brief baselines (hand-written coroutine task types, std::async/std::future) are not measured anywhere. libcoro's own README gives only server example runs without a baseline: ab TCP echo 110753.80 requests/s and wrk HTTP 200 OK 325778.99 requests/s with 2.96 ms mean latency, both on an Intel Core i7-9750H, so those are not comparisons. Repo test/bench.cpp times coroutine sync_wait, thread_pool and scheduler counters against a plain direct-call loop but publishes no results. The suite author also authors TooManyCooks (a competing runtime); allocator selection differs per library (libcoro tcmalloc first; the suite's cppcoro build skips tcmalloc on Linux and uses mimalloc, jemalloc or glibc malloc). The cppcoro rows measure the andreasbuhr/cppcoro fork. [retier] Enricher: in io_socket_st, cppcoro's timed region includes io_service stop() plus two thread joins while libcoro's ends before scheduler teardown, and libcoro gets tcmalloc against cppcoro's non-tcmalloc allocator; with one run and a 9% margin (41643 us) the win is unproven. The suite pins 44d12235 (PR #433), before the io_scheduler-to-scheduler rename (#435), the Read/Write API (#436) and the scheduler lock removal (#444). thread_pool is a single mutex-guarded FIFO deque at the pin and at HEAD although the README says work stealing; FIFO gives breadth-first fork-join and the 14.66 GB RSS (issues #404 and #446 open, Chase-Lev PR #450 unmerged).",
     "found_via": [
       "seed record pass: https://github.com/jbaldwin/libcoro README (server example numbers, no baseline) and test/bench.cpp, then WebSearch 'github runtime benchmarks libcoro cppcoro concurrencpp tbb fib nqueens skynet results' led to https://github.com/tzcnt/runtime-benchmarks (README, cpp/libcoro/CMakeLists.txt, io_socket_st.cpp, channel.cpp)"
     ],
@@ -2252,7 +2252,15 @@
         "https://github.com/jbaldwin/libcoro/commits/main"
       ],
       "page_compares_against_baseline": true,
-      "numbers_found_on_page": true
+      "numbers_found_on_page": true,
+      "retier": {
+        "from": "A",
+        "to": "C",
+        "reason": "A to C: the only like-for-like win (io_socket_st, 9%, one run) comes from an asymmetric harness: cppcoro's timer includes io_service stop() and two thread joins while libcoro's stops before scheduler teardown, and libcoro links tcmalloc while cppcoro does not; the channel row is cross-config. Asymmetric-baseline downgrade precedent.",
+        "urls_opened": [
+          "enricher record data/wave11/enrich/raw/github_com_jbaldwin_libcoro.json"
+        ]
+      }
     },
     "corrected_fields": {
       "workload": "io_socket_st: TCP ping-pong between a single-threaded client and single-threaded server, each on its own event loop, libcoro io_scheduler with process_tasks_inline against cppcoro io_service; channel: async MPMC queue, libcoro queue on thread_pool (mt config) against Boost.Cobalt channel on single-threaded Asio (st_asio config).",
@@ -7704,6 +7712,62 @@
     }
   },
   {
+    "name": "uberlog",
+    "repo_url": "https://github.com/IMQS/uberlog",
+    "language": "C++",
+    "domain": "runtime-and-systems",
+    "category": "logging-tracing",
+    "baseline": "synchronous write-per-message file logging (a 'naive logging system' that issues one OS write call per message)",
+    "baseline_in_list": true,
+    "metric": "latency",
+    "workload": "README Benchmarks: time taken inside the calling program to format a roughly 200-byte message and push it into the shared-memory ring buffer (200 ns Windows, 280 ns Linux), against a hypothetical naive logger costing about 1500 ns for a 100-byte write() plus an assumed 1000 ns of formatting.",
+    "claimed_speedup": "README: 200 ns (Windows) and 280 ns (Linux) per formatted message, 350 MB/s and 465 MB/s throughput, versus about 2500 ns per message for a naive write-per-message logger, 'a 10x speedup over a naive system'; at 100000 messages per second the naive logger spends 25% of time logging against 2% for uberlog. Ratios derived from page data: 2500/280 is about 8.9x on Linux and 2500/200 is 12.5x on Windows.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/IMQS/uberlog",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Not stated for the README numbers. The repo build script uses clang++ -O2 -ggdb -std=c++11 on Linux and macOS; an msvc/ project covers Windows.",
+    "hardware": "Intel Core i7-6700K (Windows and Linux)",
+    "compared_against_cpp_std_directly": false,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2020-04-08",
+    "maintenance_status": "abandoned",
+    "is_fork_of": null,
+    "stars_or_usage": "18 stars, 10 forks",
+    "has_code": true,
+    "tradeoffs": "Multi-process design: a spawned child process (uberlogger) drains a shared-memory ring buffer and writes the file, so a crash in the main process still flushes earlier messages; the caller stalls only when the ring is full. Adds a second process and shared memory; fixed log line format unless you derive from Logger; printf-compatible type-safe formatting (tsf); log rolling built in; C++11.",
+    "caveats": "The baseline is hypothetical, not a measured run: the 2500 ns figure adds a quoted ~1500 ns write() cost to an assumed 1000 ns of formatting. test.cpp does time a 5-byte write() (BenchFileWriteLatency, 200000 iterations) and the logger latency modes (raw, simple fmt, param fmt; 50000 messages after 100 warmup into a 32 MB ring sized never to stall), but no result file is stored and the README numbers name no compiler or flags. test.cpp also has a 'spd comparison' benchmark that only times 1M uberlog Info() calls and contains no spdlog code; there are no spdlog numbers anywhere in the repo. Third-party logging shootouts found (MuggleWei cc_log_benchmark) do not list uberlog. Latency counts only the in-program cost, not the writer process's work. README itself says a naive logger is fine below many thousands of messages per second, and the 2018 Meltdown/KPTI benefit is 'not measured'. The seed lead (from a C++ book) says it is not as fast as specialized low-latency loggers. No commits since 2020-04-08 (over 6 years); no releases.",
+    "found_via": [
+      "seed-record pass, starting from https://github.com/IMQS/uberlog (README Benchmarks section, test.cpp, build script); WebSearch 'IMQS uberlog benchmark spdlog comparison latency' found no third-party comparison."
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.45,
+    "assignment_ids": [
+      "w11-mine-s"
+    ],
+    "id": "https://github.com/imqs/uberlog",
+    "verification": {
+      "date": "2026-10-01",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "First-party README Benchmarks table (i7-6700K: 200 ns / 350 MB/s Windows, 280 ns / 465 MB/s Linux) with no compiler, flags or stored results for those runs; the 2500 ns naive-logger baseline is an estimate (quoted ~1500 ns write() plus an assumed 1000 ns of formatting), not a measured run. test.cpp holds latency and write() benches but no results, so C.",
+      "notes": "README, LICENSE (MIT, IMQS Software 2016), build script (clang++ -O2 -ggdb -std=c++11) and test.cpp benches checked; repo page shows 18 stars, 10 forks, 68 commits, last commit Apr 8 2020. Record accurate apart from the age wording in caveats.",
+      "urls_opened": [
+        "https://github.com/IMQS/uberlog",
+        "https://github.com/IMQS/uberlog/commits",
+        "https://raw.githubusercontent.com/IMQS/uberlog/HEAD/README.md",
+        "https://raw.githubusercontent.com/IMQS/uberlog/HEAD/test.cpp",
+        "https://raw.githubusercontent.com/IMQS/uberlog/HEAD/build",
+        "https://raw.githubusercontent.com/IMQS/uberlog/HEAD/LICENSE"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "caveats": "The baseline is hypothetical, not a measured run: the 2500 ns figure adds a quoted ~1500 ns write() cost to an assumed 1000 ns of formatting. test.cpp does time a 5-byte write() (BenchFileWriteLatency) and the logger latency modes, but no result file is stored. test.cpp also has a 'spd comparison' benchmark that only times 1M uberlog Info() calls and contains no spdlog code; there are no spdlog numbers anywhere in the repo or issues (0 issues). Third-party logging shootouts found (MuggleWei cc_log_benchmark) do not list uberlog. Latency counts only the in-program cost, not the writer process's work. README itself says a naive logger is fine below many thousands of messages per second, and the 2018 Meltdown/KPTI benefit is 'not measured'. The seed lead (from a C++ book) says it is not as fast as specialized low-latency loggers. No commits since 2020-04-08 (over 3 years)."
+    }
+  },
+  {
     "name": "zlog",
     "repo_url": "https://github.com/HardySimpson/zlog",
     "language": "C",
@@ -9858,6 +9922,71 @@
       "benchmark_url": null,
       "baseline": "Intel oneTBB, OpenMP and the Cilk Plus runtime (the abstract says only 'the other runtimes'; these three are the back ends the paper added, so they are inferred as the baselines)",
       "caveats": "Numbers come from the abstract snippet of 'OpenCilk: A Modular and Extensible Software Infrastructure for Fast Task-Parallel Code' (Schardl and Lee, PPoPP '23, pp. 189-203); the paper itself (ACM, MIT DSpace, SciSpace, PPoPP site, NSF PAR) was unreachable in this environment (host not resolvable), so tables, CPU model, compiler flags, the exact list of 'other runtimes' and the per-runtime geomeans are unseen. Tier B rests on peer review only; no artifact repository was found (the OpenCilk org lists smallapps and applications for regression tests and examples, nothing labelled as the paper's artifact), so A is not supported. The 4%-26% and 10%-120% ranges span several baselines, so the margin against oneTBB or OpenMP alone is unknown and may be the small end. The authors own the compiler, so this is first-party-authored though peer reviewed. Cilk Plus is deprecated and gone from current GCC and ICC, so that baseline is historical. The repo README makes no numeric or named comparison (only 'optimize task-parallel programs more effectively than mainstream compilers'). Weak independent hint, snippet only: Los and Petushkov (arXiv 2410.01222, i7-8700, fine-grained SMT kernels) report their Relic framework 30.1% faster than oneTBB and 21.4% faster than OpenCilk, which implies OpenCilk ahead of oneTBB there (derived, not checked). The repo is a fork of llvm/llvm-project that adds Tapir and Cilk support; licence is the LLVM Apache-2.0 with LLVM exception, and OpenCilk's own changes are MIT with an addendum allowing distribution under the LLVM licence instead. Retier once the paper PDF is readable."
+    }
+  },
+  {
+    "name": "Rayon",
+    "repo_url": "https://github.com/rayon-rs/rayon",
+    "language": "Rust",
+    "domain": "runtime-and-systems",
+    "category": "thread-pools-work-stealing",
+    "baseline": "OpenMP parallel for (C++ with static and dynamic scheduling)",
+    "baseline_in_list": true,
+    "metric": "latency",
+    "workload": "Fork Union README Performance section: N-body at 512 bodies on every logical core (microseconds per iteration, static / dynamic) and connected components by label propagation on a ~27M-edge R-MAT 'necklace' graph (GTEPS, 84 fork-join rounds per pass), one fixed 30-second window per cell, four machines. Rayon static is par_chunks_mut with one stripe per worker in N-body and plain par_iter_mut (Rayon's default adaptive splitting) in connected components; Rayon dynamic is par_iter_mut().with_max_len(1). OpenMP uses schedule(static) and schedule(dynamic, 1).",
+    "claimed_speedup": "Mixed, mostly OpenMP ahead. Rayon wins: N-body on the 24x Intel RPL Windows box, Rayon 151 / 151 us vs OpenMP 360 / 627 us (about 2.4x static, 4.2x dynamic, derived from page data); connected components with dynamic (one-vertex) scheduling, Rayon vs OpenMP GTEPS 6.5 vs 0.4 on 128x Intel SPR (about 16x, derived from page data), 6.2 vs 0.4 on 192x Graviton 5 (about 15x, derived from page data), 5.2 vs 0.1 on 24x Intel RPL (about 50x from rounded values, derived from page data); static connected components on 18x Apple M5 Pro 23.8 vs 23.0 (about 1.03x, derived from page data). Rayon loses: N-body on M5 Pro 222 / 339 us vs 115 / 137, on SPR 483 / 739 vs 115 / 226, on Graviton 5 490 / 580 vs 266 / 216; dynamic connected components on M5 Pro 14.6 vs 18.3 GTEPS; static connected components on SPR 8.5 vs 28.2, on Graviton 5 8.4 vs 53.9, on RPL 9.4 vs 11.4.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/ashvardanian/fork_union",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "C++ side: Release build adds -O3 -march=native -mtune=native and -ffp-contract=off (scripts/CMakeLists.txt), no LTO; OpenMP is -fopenmp (libgomp) under GCC and Homebrew libomp under Clang/AppleClang (OpenMP is disabled for Clang without Homebrew). The compiler used for each machine is not stated; the README names MinGW-GCC for the 24x i9 (RPL) Windows box, and the macOS instructions use Homebrew LLVM clang plus libomp. N-body runs under numactl --interleave=all with OMP_PROC_BIND=spread OMP_PLACES=cores per the scripts/nbody.cpp header; connected-components cells run bare without pinning per the scripts/propagation.{cpp,rs} headers. Rust side: cargo build --release with RUSTFLAGS='-C target-cpu=native', profile opt-level 3, lto false, codegen-units 1, unchecked hot loops, rayon '1.11' requirement in Cargo.toml.",
+    "hardware": "18x Apple M5 Pro (macOS); 24x Intel RPL (Windows, also called a 24x i9 in the README); 128x Intel SPR (Linux); 192x AWS Graviton 5 (Linux); exact CPU SKUs not given",
+    "compared_against_cpp_std_directly": false,
+    "license": "MIT OR Apache-2.0",
+    "usability": "copyable",
+    "last_commit": "2026-08-28",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "13.4k stars, 618 forks; rayon 1.12.0 published on crates.io 2026-04-14",
+    "has_code": true,
+    "tradeoffs": "Rust-only (C++ projects must call it over FFI or rewrite the loop); par_iter is a one-line change and the API guarantees data-race freedom; dynamic splitting by default means no static schedule, so uniform loops pay stealing overhead and tiny per-item work can run slower than serial (forum reports, not opened).",
+    "caveats": "Evidence is a side result of a competing library's benchmark: the README belongs to Fork Union (ForkUnion, Rust and C++), whose author promotes it as about 3-6x faster than OpenMP and 12-16x faster than Rayon, so the figures were not produced by the Rayon project. Rayon beats OpenMP only in a minority of cells; OpenMP's 'dynamic' columns use schedule(dynamic, 1), a one-vertex grain whose shared queue collapses at high thread counts (0.1-0.4 GTEPS, as the README itself explains), which is why the 15-50x Rayon wins appear; against OpenMP's static schedule Rayon is behind on most machines (up to 6.4x lower GTEPS on Graviton 5, derived from page data) and it also loses dynamic connected components on the M5 Pro. The one N-body win is on the Windows box where the README names MinGW-GCC, so the OpenMP runtime there is probably libgomp, not libomp. Fork Union's documentation disagrees on fast-math: the scripts/nbody.cpp and nbody.rs headers say the C++ build adds -ffast-math, while scripts/CMakeLists.txt says strict IEEE math is deliberate and adds only -ffp-contract=off; which build produced the tables is not stated. Rayon 'static' in connected components is plain par_iter_mut with adaptive splitting, not a fixed per-worker stripe as the doc comment says. Exact CPU models and compiler versions are not given, and the benchmark does not use the cited 'oneTBB parallel_for' or 'std::execution::par' baselines. Rayon's own repo has no comparison against OpenMP, TBB or std::execution::par: the README carries no numbers, PR #1156 (par_sort sync) says 'mostly the same or slightly better' with no figures, and rayon-demo prints sequential-vs-parallel speedups at run time without stored results. A search snippet (arXiv 2502.15536, NPB-Rust, page blocked and not opened) reports Rayon slower than C++ OpenMP on the NAS kernels; snippet only.",
+    "found_via": [
+      "seed-record pass, starting from https://github.com/rayon-rs/rayon (README, FAQ.md, RELEASES.md, rayon-demo checked, no cross-library numbers); WebSearch 'Rust rayon vs C++ OpenMP vs oneTBB parallel_for benchmark' surfaced the Fork Union / 'beyond openmp in cpp rust' material; the Fork Union README Performance tables carry the Rayon and OpenMP columns."
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.4,
+    "assignment_ids": [
+      "w11-mine-s"
+    ],
+    "id": "https://github.com/rayon-rs/rayon",
+    "verification": {
+      "date": "2026-10-01",
+      "verdict": "downgrade",
+      "tier_before": "B",
+      "tier_reason": "The only Rayon-vs-OpenMP numbers are in the competing Fork Union README (benchmark code public in scripts/nbody.{cpp,rs} and scripts/propagation.{cpp,rs}, flags -O3 -march=native / target-cpu=native stated), but no compiler or version is named for the tables and CPUs are families only (Intel SPR, RPL, Apple M5 Pro, Graviton 5), so not A; a competitor library's README is not a well-known independent benchmark suite (precedent: TurboPFor README numbers run by a competitor's author were tiered C), and Rayon beats OpenMP only in a minority of cells.",
+      "notes": "All table numbers match the Fork Union README rows for Rayon and OpenMP; the record missed the M5 Pro dynamic connected-components loss and misattributed 'LLVM clang plus libomp' and '-ffast-math' as the general C++ build (CMake uses GCC libgomp or Homebrew libomp and states strict IEEE). Consider decision keep with shortcoming 'not faster than OpenMP in most cells'; Fork Union itself was tiered C in batch-44.",
+      "urls_opened": [
+        "https://github.com/rayon-rs/rayon",
+        "https://github.com/rayon-rs/rayon/commits/main",
+        "https://raw.githubusercontent.com/ashvardanian/fork_union/HEAD/README.md",
+        "https://raw.githubusercontent.com/ashvardanian/fork_union/HEAD/scripts/nbody.cpp",
+        "https://raw.githubusercontent.com/ashvardanian/fork_union/HEAD/scripts/nbody.rs",
+        "https://raw.githubusercontent.com/ashvardanian/fork_union/HEAD/scripts/propagation.cpp",
+        "https://raw.githubusercontent.com/ashvardanian/fork_union/HEAD/scripts/propagation.rs",
+        "https://raw.githubusercontent.com/ashvardanian/fork_union/HEAD/Cargo.toml",
+        "https://raw.githubusercontent.com/ashvardanian/fork_union/HEAD/CMakeLists.txt",
+        "https://raw.githubusercontent.com/ashvardanian/fork_union/HEAD/scripts/CMakeLists.txt",
+        "https://crates.io/api/v1/crates/rayon/versions?per_page=3"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "claimed_speedup": "Mixed, mostly OpenMP ahead. Rayon wins: N-body on the 24x Intel RPL Windows box, Rayon 151 / 151 us vs OpenMP 360 / 627 us (about 2.4x static, 4.2x dynamic, derived from page data); connected components with dynamic scheduling, Rayon vs OpenMP GTEPS 6.5 vs 0.4 on 128x Intel SPR (about 16x, derived), 6.2 vs 0.4 on 192x Graviton 5 (about 15x, derived), 5.2 vs 0.1 on 24x Intel RPL (about 50x from rounded values, derived); static connected components on 18x Apple M5 Pro 23.8 vs 23.0 (about 1.03x, derived). Rayon loses: N-body on M5 Pro 222 / 339 us vs 115 / 137, on SPR 483 / 739 vs 115 / 226, on Graviton 5 490 / 580 vs 266 / 216; static connected components on SPR 8.5 vs 28.2 GTEPS, on Graviton 5 8.4 vs 53.9, on RPL 9.4 vs 11.4.",
+      "workload": "Fork Union README Performance section: N-body at 512 bodies on every logical core (microseconds per iteration, static / dynamic) and connected components by label propagation on a ~27M-edge R-MAT community graph (GTEPS, 84 fork-join rounds per pass), 30-second window per cell, four machines; Rayon par_iter_mut with static chunks or unit grain against OpenMP in C++.",
+      "compiler_and_flags": "C++ side: -O3 -march=native, no LTO, with -ffast-math, built with LLVM clang plus libomp per the scripts/nbody.cpp header (compiler versions not stated; the README names MinGW-GCC for the Windows i9 box); run under numactl --interleave=all with OMP_PROC_BIND=spread OMP_PLACES=cores. Rust side: cargo build --release with RUSTFLAGS='-C target-cpu=native', no LTO, unchecked hot loops, rayon 1.11 requirement in Cargo.toml.",
+      "stars_or_usage": "13.4k stars; releases up to rayon 1.12.0 (2026-04-13)",
+      "caveats": "Evidence is a side result of a competing library's benchmark: the README belongs to Fork Union (ForkUnion, Rust and C++), whose author promotes it as 3-6x faster than OpenMP and 12-16x faster than Rayon, so the figures were not produced by the Rayon project and a verifier may prefer tier C. Rayon beats OpenMP only in a minority of cells; OpenMP's 'dynamic' columns use a one-vertex grain that makes its shared queue collapse (0.1-0.4 GTEPS), which is why the 15-50x Rayon wins appear; against OpenMP's static schedule Rayon is behind on most machines (up to 6.4x lower GTEPS on Graviton 5). The one N-body win is on the Windows box where the README names MinGW-GCC for C++, so the OpenMP runtime there is probably libgomp, not libomp. The C++ build adds -ffast-math, which Rust cannot express globally (kernels reduce in a fixed order to compensate, per the source comment). Exact CPU models and compiler versions are not given and the benchmark does not use the cited 'oneTBB parallel_for' or 'std::execution::par' baselines. Rayon's own repo has no comparison against OpenMP, TBB or std::execution::par: README, FAQ.md and RELEASES.md carry no numbers, PR #1156 (par_sort sync) says 'mostly the same or slightly better' with no figures, and rayon-demo prints sequential-vs-parallel speedups at run time without stored results. A search snippet (arXiv 2502.15536, NPB-Rust, page blocked and not opened) reports Rayon slower than C++ OpenMP on the NAS kernels; snippet only."
     }
   },
   {

@@ -15,7 +15,7 @@
 | **Hardware** | Intel i7 3770k, 16G RAM; Windows 7 on an SSD, and Ubuntu 17.04 in a VirtualBox VM on a HDD |
 | **Compiler and flags** | MSVC 2017 15.8.1, MinGW-w64 GCC 8.1.0, Linux GCC 6.3.0, Linux Clang 4.0.0. scripts/bench/bench.py configures CMake with CMAKE_BUILD_TYPE Debug or Release (so CMake's default per-config flags apply: -O3 -DNDEBUG for GCC/Clang Release, /O2 /Ob2 /DNDEBUG for MSVC Release), adds -std=c++11 on non-MSVC and -w on GCC/Clang, and builds single-threaded with cmake --build; scripts/bench/run_all.py averages 3 runs per table cell. |
 | **Adoption** | 6.9k stars |
-| **Last commit** | 2026-03-27 |
+| **Last commit** | 2026-10-18 |
 | **Links** | [repository](https://github.com/doctest/doctest) · [benchmark](https://raw.githubusercontent.com/doctest/doctest/HEAD/doc/markdown/benchmarks.md) |
 
 ## Verdict
@@ -67,10 +67,11 @@ Against [Boost].UT, pick doctest when you cannot require C++20, want the more wi
 ## Known shortcomings
 
 - 2018 run (doctest 2.2.0 vs Catch 2.3.0, no Catch2 v3); Linux results from a VirtualBox VM on an HDD; scripts/bench/bench.py edited since the run; no variance given. Plain-assert runtime at parity on GCC; Linux GCC assert compile only 2.4x. A test framework measured on compile time: compile-caching-and-distribution is a loose category fit (no test-framework category exists).
+- Enricher: cells over 60 s are single runs (max_accum_time=60); assert columns include header cost; the maintainer calls the benchmarks outdated and issue #1168 has Catch2 v3.7.1 and doctest 2.5.2 level on a real project; open #1208 (SUBCASE-in-loop slowdown) and #1138 (VS2026 miscompile).
 
 ## Caveats and trade-offs
 
-The project's own benchmark (Dec 2018): doctest 2.2.0 against Catch 2.3.0, both far behind current releases; Catch2 v3 became a compiled library with a different compile-time profile and was not measured. Flags come from the public script (CMake build-type defaults) rather than the page text. Linux numbers come from a VirtualBox VM on a HDD. run_all.py at HEAD averages 3 runs per cell, but the page gives no variance, and bench.py has been edited since the 2018 run (a 2019 fix, a 2025 newline/encoding chore, a 2026 cmake_minimum_required bump to 3.14), so a rerun uses a slightly different script. Runtime for plain asserts is near parity on GCC and Clang Release (0.29s vs 0.29s, 0.28s vs 0.32s); the large runtime win is only with INFO logging (the page's 'over 18 times faster' case is MSVC Debug, 11.41s vs 213.91s). README says compile time is better 'by orders of magnitude', while the tables show roughly 9-10x on whole-build header cost and up to about 8x on assert macros (MSVC Release 58.73s vs 448.68s; Linux GCC Release only about 2.4x, derived from page data). Google Test and Boost.Test are not benchmarked on the page. doctest is a unit-testing framework whose speed claim is compile time; it does not cache or distribute builds.
+The project's own benchmark (Dec 2018): doctest 2.2.0 against Catch 2.3.0, both far behind current releases; Catch2 v3 became a compiled library with a different compile-time profile and was not measured. Flags come from the public script (CMake build-type defaults) rather than the page text. Linux numbers come from a VirtualBox VM on a HDD. run_all.py at HEAD averages 3 runs per cell, but the page gives no variance, and bench.py has been edited since the 2018 run (a 2019 fix, a 2025 newline/encoding chore, a 2026 cmake_minimum_required bump to 3.14), so a rerun uses a slightly different script. Runtime for plain asserts is near parity on GCC and Clang Release (0.29s vs 0.29s, 0.28s vs 0.32s); the large runtime win is only with INFO logging (the page's 'over 18 times faster' case is MSVC Debug, 11.41s vs 213.91s). README says compile time is better 'by orders of magnitude', while the tables show roughly 9-10x on whole-build header cost and up to about 8x on assert macros (MSVC Release 58.73s vs 448.68s; Linux GCC Release only about 2.4x, derived from page data). Google Test and Boost.Test are not benchmarked on the page. doctest is a unit-testing framework whose speed claim is compile time; it does not cache or distribute builds. [retier] Enricher: run_all.py does not always average 3 runs: max_accum_time=60 stops averaging, so cells over 60 s are single runs and cells of 30-60 s get 2, which covers most Catch header and assert cells. The assert-table columns include header cost (Catch baseline 10.13 s vs doctest 3.15 s on MSVC Release before any assert). master stops at 2026-03-27 (v2.5.0), v2.5.3 was tagged 2026-07-06 and the dev branch has commits to 2026-10-18. Open issue #1168 reports Catch2 v3.7.1 and doctest 2.5.2 both at about 30 s on a real 13-file executable, and the maintainer calls the benchmarks outdated; also open: #1208 (SUBCASE in a loop, 112 s to 2420 s in 2.5.x) and #1138 (VS2026 cl 19.51+ miscompiles CHECK).
 
 Smaller feature set than Catch2 (modelled on Catch; the FAQ lists the differences, not read). The biggest assert-compile wins need the non-decomposing CHECK_EQ(a,b) form and the DOCTEST_CONFIG_SUPER_FAST_ASSERTS define, so they are not like-for-like with Catch's CHECK(a==b). DOCTEST_CONFIG_DISABLE strips tests from the binary. Single header, C++11.
 
@@ -84,8 +85,8 @@ Actively maintained (v2.5.3 tagged 2026-07-06, dev branch commits through 2026-1
 - **Verification** (2026-09-24): confirm; tier before verification A, tier now A.
 - **Tier reason:** doc/markdown/benchmarks.md compares doctest 2.2.0 against Catch 2.3.0 using the public harness scripts/bench/bench.py (generates the sources and CMakeLists, downloads catch.hpp 2.3.0, times cmake --build) driven by scripts/bench/run_all.py, with compiler versions and the CPU (Intel i7 3770k) stated; flags are fixed by the script (CMAKE_BUILD_TYPE Debug/Release, -std=c++11, -w), so the setup is reproducible.
 - **Verifier notes:** All claimed_speedup numbers match the page rows. Category compile-caching-and-distribution is a loose fit (test framework with a compile-time claim); orchestrator may want a category/domain override. Metadata checked on github.com: MIT, 6.9k stars, not archived or fork, last commit 2026-03-27 (v2.5.0 release).
-- **Fields the verifier corrected:** `compiler_and_flags`, `caveats`
-- **Shortcomings recorded by:** verifier batch-11 (wave 2 book seed pass, 2026-10-24)
+- **Fields the verifier corrected:** `compiler_and_flags`, `caveats`, `last_commit`
+- **Shortcomings recorded by:** verifier batch-11 (wave 2 book seed pass, 2026-10-24); enrichment (wave 2 book seed pass, 2026-10-24)
 - **Pages the verifier opened:**
   - <https://raw.githubusercontent.com/doctest/doctest/HEAD/doc/markdown/benchmarks.md>
   - <https://raw.githubusercontent.com/doctest/doctest/HEAD/scripts/bench/bench.py>
@@ -115,6 +116,7 @@ Actively maintained (v2.5.3 tagged 2026-07-06, dev branch commits through 2026-1
   - <https://github.com/doctest/doctest/tags>
   - <https://github.com/doctest/doctest/commits/dev>
   - <https://github.com/doctest/doctest/commits/master>
+  - <https://raw.githubusercontent.com/cpp-testing/ut-benchmark/master/results/Compilation_suite+assert+stl.png>
 - **Raw records:** [data/wave2/verified.json](../../../data/wave2/verified.json) (id `https://github.com/doctest/doctest`) · [data/wave2/enrich/raw/github_com_doctest_doctest.json](../../../data/wave2/enrich/raw/github_com_doctest_doctest.json) (enrichment confidence 0.85)
 
 </details>

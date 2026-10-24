@@ -4,12 +4,12 @@
 
 Compilers, linkers, build systems and compile caches that turn source into binaries faster than GCC, Clang, GNU ld, Make or ccache.
 
-**33 entries in 6 categories:** 8 tier A · 4 tier B · 20 tier C · 1 tier D
+**36 entries in 6 categories:** 8 tier A · 4 tier B · 23 tier C · 1 tier D
 
 | Category | Entries | A | B | C | D | What they beat |
 |---|--:|--:|--:|--:|--:|---|
-| [Build systems](build-systems/README.md) | 6 | 1 | 1 | 4 | 0 | CMake+Ninja, Make, Bazel, Cargo |
-| [Compile caching and distribution](compile-caching-and-distribution/README.md) | 5 | 1 | 0 | 4 | 0 | ccache, sccache, distcc |
+| [Build systems](build-systems/README.md) | 7 | 1 | 1 | 5 | 0 | CMake+Ninja, Make, Bazel, Cargo |
+| [Compile caching and distribution](compile-caching-and-distribution/README.md) | 7 | 1 | 0 | 6 | 0 | ccache, sccache, distcc |
 | [Compilers and front ends](compilers-frontends/README.md) | 7 | 1 | 1 | 4 | 1 | GCC, Clang, MSVC, rustc |
 | [Formatters, linters and language servers](formatters-linters-lsps/README.md) | 6 | 3 | 0 | 3 | 0 | clang-format, clang-tidy, clangd, rust-analyzer |
 | [Linkers](linkers/README.md) | 4 | 2 | 1 | 1 | 0 | GNU ld, gold, lld, MSVC link.exe |
