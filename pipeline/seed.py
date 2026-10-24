@@ -56,6 +56,7 @@ ORCHESTRATOR HARNESS NOTES
   Then check it parses:
     python3 -c "import json,sys; json.load(open(sys.argv[1]))" {output_path}
 - Final reply to the orchestrator: one line per project, "name: tier".
+  Style: caveman ultra in all your own text and this reply (fragments, no articles, no filler, no arrows, no invented abbreviations; names, numbers and errors exact); the JSON output stays normal prose.
 """
 
 
