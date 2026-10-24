@@ -46,6 +46,9 @@ build history is `docs/build-log.md`).
 - No personal data, home-directory paths or credentials in tracked files or commit metadata. Prompts rendered on a
   local machine embed the checkout's absolute path: run `python3 pipeline/check_pii.py --fix` before committing them
   (CI runs the same check with `--commits`). Copyright lines say "the fastpp contributors".
+- Commits are authored by `Claude <noreply@anthropic.com>`. Land work on main by squashing locally under that
+  identity (`git commit-tree <branch>^{tree} -p origin/main`) and fast-forwarding main; a squash or merge through
+  GitHub writes the merging account's identity, and with it a personal email, into main's history.
 
 ## Evidence tiers
 
