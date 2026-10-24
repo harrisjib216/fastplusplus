@@ -4,7 +4,7 @@
 
 Containers, algorithms and utilities that beat the C++ standard library's own: hash maps, sorting, number parsing, allocators, regex and more.
 
-**299 entries in 25 categories:** 118 tier A · 24 tier B · 142 tier C · 15 tier D
+**300 entries in 25 categories:** 118 tier A · 24 tier B · 143 tier C · 15 tier D
 
 | Category | Entries | A | B | C | D | What they beat |
 |---|--:|--:|--:|--:|--:|---|
@@ -26,7 +26,7 @@ Containers, algorithms and utilities that beat the C++ standard library's own: h
 | [Random numbers](random/README.md) | 9 | 4 | 2 | 3 | 0 | std::mt19937, std::uniform_\*_distribution, std::shuffle |
 | [Ranges and views](ranges-and-views/README.md) | 1 | 0 | 0 | 1 | 0 | std::ranges / std::views (libstdc++ 13): filter, chunk… |
 | [Regex](regex/README.md) | 9 | 3 | 3 | 3 | 0 | std::regex |
-| [Searching](searching/README.md) | 6 | 2 | 0 | 4 | 0 | std::lower_bound, std::binary_search, std::find, std::search |
+| [Searching](searching/README.md) | 7 | 2 | 0 | 5 | 0 | std::lower_bound, std::binary_search, std::find, std::search |
 | [Sequence containers](sequence-containers/README.md) | 12 | 3 | 0 | 7 | 2 | std::vector, std::deque, std::list, std::array |
 | [Small-buffer containers and strings](small-buffer-and-strings/README.md) | 15 | 1 | 0 | 11 | 3 | std::string, std::string_view, SSO |
 | [Smart pointers and reference counting](smart-pointers-and-refcount/README.md) | 10 | 3 | 2 | 4 | 1 | std::shared_ptr, std::unique_ptr, std::function |
