@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/nginx/nginx",
+  "one_liner": "Event-driven C web server and reverse proxy; served a small static page at 1.9-3.2x Apache httpd's request rate.",
+  "what_it_does": "NGINX is a standalone web server, reverse proxy, load balancer and content cache configured through a text file of directives; features come from modules compiled in or loaded as dynamic modules (since 1.9.11), with njs for JavaScript scripting. It replaces Apache httpd's static-file and proxy roles, but not its in-process application modules (mod_php and similar) or per-directory .htaccess files: dynamic content goes to FastCGI, uwsgi or HTTP upstreams. It is installed as a binary package or built with auto/configure and make, not linked as a library.",
+  "how_it_is_fast": "A master process reads the config and manages a fixed set of single-threaded worker processes (worker_processes, auto matches the core count), each running a non-blocking event loop over epoll (or kqueue), so thousands of keep-alive connections cost a small connection struct each rather than a thread or process. Accept load can be spread with per-worker SO_REUSEPORT listening sockets (listen ... reuseport) or EPOLLEXCLUSIVE wakeups, with accept4 and SOCK_NONBLOCK; the accept_mutex is off by default. Per-request memory comes from region pools (ngx_pool_t, 16 KB default blocks, freed all at once when the request ends), static files go out with zero-copy sendfile (optionally offloaded to thread pools), and the HTTP request-line parser is a hand-written byte state machine that matches method names with single 32-bit compares on little-endian CPUs.",
+  "when_to_use": [
+    "Serving static files or small cached responses to many concurrent keep-alive clients, the case the binserve and gist runs measure.",
+    "Reverse proxy, TLS termination and load balancing in front of application servers (FastCGI, uwsgi, HTTP upstreams) where a large, well-documented directive set and module ecosystem matter more than the last few percent of throughput.",
+    "Replacing a prefork or thread-per-connection Apache setup that runs out of workers under many idle or slow connections.",
+    "Edge caching and rate limiting with shared-memory zones across workers, without adding a separate cache tier."
+  ],
+  "when_not_to_use": [
+    "You rely on .htaccess, mod_rewrite rule files edited per directory, or in-process modules such as mod_php: NGINX has no per-directory overrides and needs a reload for config changes.",
+    "Maximum req/s per core on micro-benchmarks is the only goal: catalog siblings such as H2O, Kore, libuhttpd and Sogou Workflow report higher numbers than nginx on their own tests.",
+    "Dynamic, API-driven configuration at runtime (service-mesh xDS style): the open-source build reloads config files; Envoy or Pingora-based proxies fit that model better.",
+    "Windows production hosts: the README calls the Windows build a proof of concept for development and testing only.",
+    "You want to drop in third-party modules freely: a module is either compiled into the binary or built as a dynamic module for your nginx build, so every addition means a rebuild or a matching package."
+  ],
+  "integration": {
+    "form": "standalone server binary (official packages, or built from source with auto/configure and make); modules are static or dynamic shared objects",
+    "dependencies": "Minimal build per README: a C compiler (gcc), make, PCRE (libpcre3-dev) for rewrites and regex locations, zlib for gzip; OpenSSL (libssl-dev) for TLS; more for optional modules.",
+    "min_toolchain": "Any C compiler supported by auto/configure (README shows GCC); no C standard version documented in the files read",
+    "platforms": "Linux (epoll; the Linux sendfile path requires sendfile64), FreeBSD and other kqueue systems; Windows build is proof-of-concept only",
+    "thread_safety": "Multi-process: each worker process is single-threaded with its own event loop; workers share state only through configured shared-memory zones; optional thread pools handle blocking file I/O (aio threads, sendfile offload)",
+    "drop_in_for_baseline": "partial — covers Apache's static file, reverse proxy and TLS roles, but needs a rewritten configuration; no .htaccess, mod_php or Apache module compatibility"
+  },
+  "gotchas": [
+    "Out-of-the-box config is conservative: the repository's conf/nginx.conf sets worker_processes 1 and worker_connections 1024, and the compiled-in defaults are 1 worker and 512 connections, so a 'default NGINX' benchmark row can mean one worker; the binserve page does not say which default it ran.",
+    "The binserve 'Tuned' row follows denji/nginx-tuning (worker_processes auto, multi_accept on, access_log off, open_file_cache, keepalive_requests 100000), while Apache2 shows no tuning, so the 3.2x figure is tuned against apparently stock; the like-for-like default row is 1.9x.",
+    "In the 2016 gist cross-check, the author notes the nginx HTTP/1.0 run was limited by docker-proxy, so the +13% non-keep-alive gap is bounded by Docker's userland port proxy rather than the servers; nginx also served a 612 B page against Apache's 45 B page and was raised to 4 workers.",
+    "Security fixes arrive in batches on both branches: October 2026's 1.31.7 and 1.30.6 fixed five CVEs (buffer overflows in alias-with-rewrite and string expressions, HTTP/3 request body injection, TLS session-ticket rotation, SSI with AIO use-after-free), and September's releases fixed an HTTP/3 buffer overflow; stay on a current stable or mainline release."
+  ],
+  "pick_this_over_siblings_when": "Pick NGINX over H2O, Kore or libuhttpd when you need the broadest module set, documentation and packaging for static files plus reverse proxying, even if those servers post higher micro-benchmark numbers; over Envoy when plain HTTP/1 proxy throughput matters (Envoy ran at 0.77x of NGINX in Proxy-Benchmarks); prefer Pingora only if you will write the proxy logic in Rust.",
+  "verified_claims_summary": "binserve's BENCHMARKS.md ran wrk (12 threads, 500 connections, 5 s, best of three) against one small static page over localhost on a Core i7-8550U laptop with Linux 5.17.5: NGINX default 116,415 req/s and NGINX tuned 201,407 req/s against Apache2 at 62,125 req/s (1.9x and 3.2x, derived from page data), with nginx and Apache versions, configs, MPM and build flags not stated, and the Apache row internally inconsistent (178.92 ms mean latency at that rate). A 2016 gist (ab -c 50, Docker images, nginx 1.11.8 with 4 workers vs stock Apache 2.4.25 event MPM, hardware not stated) found nginx 19% ahead with keep-alive and 13% without.",
+  "status_note": "Actively developed by F5 under BSD-2-Clause (32.0k stars, mainline 1.31.8 released Oct 21, 2026, master at 1.31.9) with separate stable and mainline branches and an F5 security process; ships as packages for most Linux distributions.",
+  "sources_read": [
+    "https://github.com/nginx/nginx",
+    "https://raw.githubusercontent.com/nginx/nginx/HEAD/README.md",
+    "https://raw.githubusercontent.com/nginx/nginx/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/nginx/nginx/HEAD/CONTRIBUTING.md",
+    "https://raw.githubusercontent.com/nginx/nginx/HEAD/conf/nginx.conf",
+    "https://raw.githubusercontent.com/nginx/nginx/HEAD/src/core/nginx.h",
+    "https://raw.githubusercontent.com/nginx/nginx/HEAD/src/core/nginx.c",
+    "https://raw.githubusercontent.com/nginx/nginx/HEAD/src/core/ngx_palloc.h",
+    "https://raw.githubusercontent.com/nginx/nginx/HEAD/src/event/ngx_event.h",
+    "https://raw.githubusercontent.com/nginx/nginx/HEAD/src/event/ngx_event.c",
+    "https://raw.githubusercontent.com/nginx/nginx/HEAD/src/event/ngx_event_accept.c",
+    "https://raw.githubusercontent.com/nginx/nginx/HEAD/src/event/modules/ngx_epoll_module.c",
+    "https://raw.githubusercontent.com/nginx/nginx/HEAD/src/os/unix/ngx_process_cycle.c",
+    "https://raw.githubusercontent.com/nginx/nginx/HEAD/src/os/unix/ngx_linux_sendfile_chain.c",
+    "https://raw.githubusercontent.com/nginx/nginx/HEAD/src/http/ngx_http_parse.c",
+    "https://github.com/nginx/nginx/releases",
+    "https://github.com/nginx/nginx/security/advisories",
+    "https://raw.githubusercontent.com/mufeedvh/binserve/HEAD/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/denji/nginx-tuning/HEAD/README.md",
+    "https://gist.github.com/lukassup/d5ad12753ee13325b177429db01e0258"
+  ],
+  "confidence": 0.75
+}

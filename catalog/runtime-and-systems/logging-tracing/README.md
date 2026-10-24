@@ -3,7 +3,7 @@
 <sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Runtime and systems](../README.md)</sub>
 
 **What these beat:** spdlog, glog, OpenTelemetry SDK  
-**25 entries:** 14 tier A · 1 tier B · 9 tier C · 1 tier D · 24 copyable, 1 study only
+**26 entries:** 14 tier A · 1 tier B · 10 tier C · 1 tier D · 25 copyable, 1 study only
 
 | # | Project | What it is | Tier | Language | License | Status |
 |--:|---|---|:-:|---|---|---|
@@ -30,7 +30,8 @@
 | 21 | [**low-latency-log**](wang-lp-low-latency-log.md) | Small async Rust file logger with deferred formatting; higher backend throughput than spdlog-rs, fast_log, ftlog in its own harness. | **C** | Rust | Apache-2.0 (some code from… | 🟡 stale |
 | 22 | [**Easylogging++**](abumq-easyloggingpp.md) | Archived feature-heavy synchronous C++ stream logger; 6-9% faster than glog at 1-10 threads in spdlog's old bench, 4x slower at 100. | **C** | C++ | MIT | 🔴 abandoned |
 | 23 | [**llcpp**](blapid-llcpp.md) | Header-only C++17 synchronous binary logger: writes format string plus raw argument bytes, about 4x lower median latency than spdlog. | **C** | C++ | MIT | 🔴 abandoned |
-| 24 | [**Serenity Logger**](usafrenzy-serenity-logger.md) | Alpha C++20 synchronous logger (console, file, rotating targets) whose own crude benchmark beats spdlog's single-threaded sinks. | **C** | C++ | MIT | 🔴 abandoned |
-| 25 | [**P7Baical (libP7)**](cmakeports-libp7-baical.md) | Binary trace/telemetry logger with deferred formatting; its call-site enqueue beats vsprintf-to-buffer and printf-to-console in its own test. | **D** | C++ | LGPL-3.0-or-later | 🔴 abandoned |
+| 24 | [**uberlog**](imqs-uberlog.md) | Two-process C++ logger: callers format into a shared-memory ring that a child process drains, avoiding one write() per message. | **C** | C++ | MIT | 🔴 abandoned |
+| 25 | [**Serenity Logger**](usafrenzy-serenity-logger.md) | Alpha C++20 synchronous logger (console, file, rotating targets) whose own crude benchmark beats spdlog's single-threaded sinks. | **C** | C++ | MIT | 🔴 abandoned |
+| 26 | [**P7Baical (libP7)**](cmakeports-libp7-baical.md) | Binary trace/telemetry logger with deferred formatting; its call-site enqueue beats vsprintf-to-buffer and printf-to-console in its own test. | **D** | C++ | LGPL-3.0-or-later | 🔴 abandoned |
 
 <sub>Tiers: **A** reproducible public benchmark (code, compiler, flags and CPU stated) · **B** independent or peer-reviewed measurement · **C** first-party claim · **D** directional, no numbers. Status: 🟢 active · 🔵 finished · 🟡 slow or stale · 🔴 abandoned · ⚪ unknown. *Study only* means no usable open-source license: read the idea, don't copy the code.</sub>

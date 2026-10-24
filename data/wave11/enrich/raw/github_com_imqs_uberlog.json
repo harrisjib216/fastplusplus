@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/imqs/uberlog",
+  "one_liner": "Two-process C++ logger: callers format into a shared-memory ring that a child process drains, avoiding one write() per message.",
+  "what_it_does": "uberlog::Logger opens a log file by spawning a helper executable (uberlogger) and sharing a memory-mapped ring buffer with it. Debug/Info/Warn/Error/Fatal take printf-compatible format strings with type-safe %v through the embedded tsf formatter, and LogRaw sends pre-formatted bytes. The child process writes and rolls the files (maximum size and number of archives) and keeps draining after the parent dies, so the messages logged just before a crash still reach the file. It is not a drop-in for another logging API, and the line format (date, [level], thread id, message) is fixed unless you wrap LogRaw.",
+  "how_it_is_fast": "The calling thread only formats into a 200-byte stack buffer, stamps a cached date string (TimeKeeper rebuilds the YYYY-MM-DD part once a day and formats only the time-of-day digits per message), takes a mutex and memcpys a header plus payload into the shared-memory ring, then publishes with an atomic write-pointer store. All file syscalls happen in the uberlogger process, which batches small messages into a 1 KB write buffer and backs off its polling (up to 1024 ms sleeps) when idle. The README attributes about 40 ns to the ring copy and 130 ns to the date string, the rest to message formatting.",
+  "when_to_use": [
+    "Application or service logs at thousands to tens of thousands of messages per second, where a write() per message is measurable and you want the log tail to survive a crash of the main process.",
+    "Cross-platform (Windows, Linux, macOS) programs that want one small MIT-licensed logger with no dependencies and built-in size-based rolling.",
+    "Kernels with costly syscalls (KPTI mitigations), where moving file writes to another process helps; the README argues this but did not measure it.",
+    "Single-threaded or lightly threaded producers whose messages fit the 200-byte stack buffer."
+  ],
+  "when_not_to_use": [
+    "Hot-path or low-latency logging: its 200-280 ns enqueue (README, i7-6700K) is far above in-process asynchronous loggers such as Quill, fmtlog or PlatformLab NanoLog, which report single-digit nanoseconds in their catalog entries.",
+    "Many threads logging at once: every LogRaw call takes a single std::mutex per Logger, and no multithreaded numbers exist.",
+    "Deployments that cannot ship and launch a second executable (uberlogger must sit next to the program or be named with SetLoggerProgramPath), or sandboxes that forbid process spawning or POSIX shared memory.",
+    "Durability against power loss or OS crashes: the writer calls write() with no fsync, so only crashes of the main process are covered.",
+    "Projects that need a maintained dependency: no commits since 2020-04-08, no releases and no CI configuration."
+  ],
+  "integration": {
+    "form": "source-drop (uberlog.cpp and tsf.cpp in your program, plus a separately built uberlogger executable)",
+    "dependencies": "none (tsf is embedded; -lrt on Linux)",
+    "min_toolchain": "C++11 (build script uses clang++ -O2 -std=c++11; an MSVC project covers Windows)",
+    "platforms": "Windows, Linux, macOS",
+    "thread_safety": "Logging calls may come from any thread: formatting runs outside the lock and LogRaw serializes ring writes on one std::mutex per Logger. At midnight the cached date string is rewritten under its own mutex while other threads may read it unlocked.",
+    "drop_in_for_baseline": "partial: replaces a hand-rolled write()-per-message logger, but needs the uberlogger helper binary, its fixed line format and its own printf-compatible API"
+  },
+  "gotchas": [
+    "Off-by-two in the embedded tsf no-argument fast path: fmt_core accepts len <= staticbuf_size + 1 and then copies len + 1 bytes, so a log call with no format arguments whose text is 157 or 158 characters on Linux (156 or 157 on Windows) with the default 42-byte date prefix writes up to 2 bytes past Log()'s 200-byte stack buffer, and LogRaw then reads past it. Calls with arguments go through a bounds-checked buffer.",
+    "On Linux every formatted message calls syscall(__NR_gettid) for the thread-id column, so formatted logging is not syscall-free despite the README's KPTI argument; TeeStdOut adds a write() per message.",
+    "The producer never drops: when the ring is full it sleeps in a loop (0, then 1, then 5 ms) until the writer catches up, and the writer may be in an idle backoff sleep of up to 1024 ms. The first message after Open waits up to 10 s for the child to drain it, and a message larger than the ring (default 1 MB) is truncated with an out-of-band warning.",
+    "Timestamps use the standard-time UTC offset from libc's timezone variable (ftime on Windows) read once at Logger construction, so during daylight saving time lines show standard time, not wall-clock time."
+  ],
+  "pick_this_over_siblings_when": "Pick uberlog over Quill, fmtlog or PlatformLab NanoLog only when keeping the log tail after a main-process crash (a separate process drains the shared ring once the parent dies) matters more than hot-path cost, which is 200-280 ns here against single-digit nanoseconds for those in-process loggers. Against a plain write()-per-message logger, its own README says it only pays off above several thousand messages per second.",
+  "verified_claims_summary": "The README reports 200 ns (Windows) and 280 ns (Linux) per formatted message and 350/465 MB/s throughput on an i7-6700K with no compiler or flags, against a naive write()-per-message logger whose about 2500 ns per message is an estimate (a quoted 1500 ns 100-byte write() plus an assumed 1000 ns of formatting), not a measured run. The current test.cpp measures mean enqueue latency only (no percentiles, writer-process work excluded) with formatted lines of about 108-114 bytes rather than the 200 bytes the README states; its throughput bench pushes unformatted 200-byte LogRaw messages, its write() bench uses 5-byte writes, and its 'spd comparison' contains no spdlog code.",
+  "status_note": "Abandoned since 2020-04-08 (68 commits, 18 stars, no releases, one closed issue) but MIT-licensed and about 2,400 lines, so it can be vendored after fixing the tsf no-argument buffer check.",
+  "sources_read": [
+    "https://github.com/IMQS/uberlog",
+    "https://github.com/IMQS/uberlog/commits/master",
+    "https://github.com/IMQS/uberlog/issues?q=is%3Aissue",
+    "https://github.com/IMQS/uberlog/issues/2",
+    "https://raw.githubusercontent.com/IMQS/uberlog/HEAD/README.md",
+    "https://raw.githubusercontent.com/IMQS/uberlog/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/IMQS/uberlog/HEAD/build",
+    "https://raw.githubusercontent.com/IMQS/uberlog/HEAD/uberlog.h",
+    "https://raw.githubusercontent.com/IMQS/uberlog/HEAD/uberlog.cpp",
+    "https://raw.githubusercontent.com/IMQS/uberlog/HEAD/uberlogger.cpp",
+    "https://raw.githubusercontent.com/IMQS/uberlog/HEAD/test.cpp",
+    "https://raw.githubusercontent.com/IMQS/uberlog/HEAD/tsf.h",
+    "https://raw.githubusercontent.com/IMQS/uberlog/HEAD/tsf.cpp"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/carterli/liburing4cpp",
+  "one_liner": "Header-only C++20 coroutine wrapper over liburing; its echo server roughly matches the author's raw C io_uring server.",
+  "what_it_does": "Wraps a liburing ring in a uio::io_service object whose methods (read, write, recv, send, accept, connect, poll, splice, openat, statx, timeout, msg_ring and more) each prepare one SQE and return an awaitable, so I/O is written as co_await service.recv(...) inside uio::task<> coroutines. service.run(task) is the event loop: io_uring_submit_and_wait, then resume each completed coroutine. It is a different interface from epoll/libevent callbacks or Asio; you write coroutines against Linux syscall-shaped calls.",
+  "how_it_is_fast": "Every operation is a single io_uring SQE with the awaiting coroutine's resolver stored in user_data, so a completion resumes the coroutine directly with no callback queue, executor layer or per-operation heap allocation (the awaiter lives in the coroutine frame). Submission is batched: SQEs are only submitted by the run loop (or when the SQ fills), and the loop drains all available CQEs before advancing the CQ head. Fixed files, fixed buffers, IOSQE_IO_LINK chains and splice are exposed for zero-copy paths.",
+  "when_to_use": [
+    "Single-threaded Linux programs (or one ring per thread) that want co_await over raw io_uring opcodes with almost no abstraction cost.",
+    "Learning or prototyping io_uring patterns in C++20: echo servers, file servers, link-chained copies (demo/link_cp.cpp).",
+    "Code that needs io_uring-only operations such as splice, tee, statx, openat or msg_ring as awaitables rather than through a portable runtime.",
+    "Small tools where vendoring a few MIT headers beats pulling in Asio or Seastar."
+  ],
+  "when_not_to_use": [
+    "Anything needing cancellation or timeouts on in-flight operations: there is no cancel API (the author removed it as slow and hard to use safely, issue #27), and a dropped task does not cancel the kernel operation.",
+    "Production servers: two crash reports remain open (SIGSEGV in file_server #9, heap-use-after-free in the test app #8) and the last commit is from July 2024.",
+    "Non-Linux targets or old kernels: Linux io_uring only, and the README says old kernel support is dropped as new kernels ship.",
+    "Multi-threaded use of one loop: io_service is documented as not thread safe; you need one io_service per thread (optionally sharing workers via IORING_SETUP_ATTACH_WQ).",
+    "If you need a measured win over epoll: the repo's only comparison is against the author's own C io_uring server, not epoll."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "liburing (linked), pthreads; the CMake target also links fmt, fetched from fmt's master branch if not found",
+    "min_toolchain": "C++20 coroutines (<coroutine>); README recommends GCC 10.3+ or Clang 10+; liburing headers new enough to define IORING_OP_SENDMSG_ZC, IORING_FEAT_REG_REG_RING and io_uring_prep_msg_ring (exact liburing version not documented)",
+    "platforms": "Linux with io_uring (README: 'requires the latest kernel'; benchmark run on 5.9.0-rc6); opcodes are probed at runtime",
+    "thread_safety": "io_service is not thread safe; use one io_service per thread (header comment recommends IORING_SETUP_ATTACH_WQ to share the kernel worker pool)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Tasks start eagerly and destroying an unfinished task only detaches it; the kernel operation keeps running, so a stack buffer passed to read/recv can be written after it goes out of scope (README's own warning).",
+    "utils.hpp defines uio::panic as a non-inline function in a header, so including the library from more than one translation unit of the same program should give a duplicate-symbol link error.",
+    "Errors surface as std::system_error thrown by panic_on_err (and rethrown from task<T> results); task<T, true> is the nothrow variant.",
+    "The README still says it compiles in clang C++17 mode with -fcoroutines-ts, but task.hpp now includes <coroutine> and CMakeLists forces C++20; on GCC the CMakeLists overwrites CMAKE_CXX_FLAGS with -fcoroutines, dropping user flags."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Condy or uring_exec only when you want the thinnest possible coroutine layer over raw liburing calls and can live without cancellation or maintenance; those siblings carry measured wins over epoll or Asio's io_uring backend, while liburing4cpp only shows parity with a hand-written C io_uring server. For portable multi-backend code COROIO or the Asio io_uring backend fit better.",
+  "verified_claims_summary": "The author's README (Xeon E5-2620 v4, Ubuntu 20.04.1, kernel 5.9.0-rc6, clang 10, build flags not stated) drives each echo server with rust_echo_bench and takes the median of 3 runs: C++ RECV-SEND 120,239 req/s vs the C io_uring server's RECV-SEND 114,461 (105.05%). The C server's RECV-SEND mode submits every recv with IOSQE_ASYNC (forcing a worker-thread punt) while the C++ server does not, so the like-for-like row is POLL-RECV-SEND, where C++ reaches 111,210 vs C 114,893 req/s, about 96.8% (derived from page data); splice variants are 78-82%, and the yield path is about 3% slower than a raw IORING_OP_NOP loop (about 544 vs 527 ns per op, derived from page data).",
+  "status_note": "Stale (last commit July 2024, numbers from late 2020) with open crash issues, but MIT-licensed and a handful of headers, so it is easy to vendor as a reference or starting point.",
+  "sources_read": [
+    "https://github.com/CarterLi/liburing4cpp",
+    "https://raw.githubusercontent.com/CarterLi/liburing4cpp/HEAD/README.md",
+    "https://raw.githubusercontent.com/CarterLi/liburing4cpp/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/CarterLi/liburing4cpp/HEAD/CMakePresets.json",
+    "https://raw.githubusercontent.com/CarterLi/liburing4cpp/HEAD/include/liburing/io_service.hpp",
+    "https://raw.githubusercontent.com/CarterLi/liburing4cpp/HEAD/include/liburing/task.hpp",
+    "https://raw.githubusercontent.com/CarterLi/liburing4cpp/HEAD/include/liburing/sqe_awaitable.hpp",
+    "https://raw.githubusercontent.com/CarterLi/liburing4cpp/HEAD/include/liburing/utils.hpp",
+    "https://raw.githubusercontent.com/CarterLi/liburing4cpp/HEAD/demo/echo_server.cpp",
+    "https://raw.githubusercontent.com/CarterLi/liburing4cpp/HEAD/demo/bench.cpp",
+    "https://github.com/CarterLi/liburing4cpp/issues?q=is%3Aissue",
+    "https://github.com/CarterLi/liburing4cpp/issues/27",
+    "https://github.com/CarterLi/liburing4cpp/commits/async/demo/echo_server.cpp",
+    "https://raw.githubusercontent.com/CarterLi/io_uring-echo-server/HEAD/README.md",
+    "https://raw.githubusercontent.com/CarterLi/io_uring-echo-server/HEAD/io_uring_echo_server.c",
+    "https://raw.githubusercontent.com/CarterLi/io_uring-echo-server/HEAD/global.h",
+    "https://github.com/CarterLi/io_uring-echo-server/commits/master/io_uring_echo_server.c"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/envoyproxy/envoy",
+  "one_liner": "CNCF C++ L7 proxy for service meshes and edges; in third-party HTTP/1 runs it is slower than NGINX and HAProxy.",
+  "what_it_does": "Envoy is a standalone edge, middle and sidecar proxy (HTTP/1.1, HTTP/2, HTTP/3, gRPC, TCP) configured by YAML bootstrap or streamed at runtime from a control plane through the xDS data-plane API. Requests pass through a listener's network filter chain, the HTTP connection manager and an HTTP filter chain ending in the router, with built-in stats, tracing, circuit breaking and hot restart. It is not a drop-in for NGINX or HAProxy: there is no config translation, no static file serving role, and most deployments drive it from a control plane such as Istio rather than hand-written files.",
+  "how_it_is_fast": "One process with a main thread for xDS, stats flushing and admin, plus N worker threads (default one per hardware thread) that each run a libevent-based Dispatcher; a connection stays on one worker for life, so the hot path takes no locks. Shared state such as cluster membership and stats reaches workers through thread-local slots updated by posted closures, and each worker keeps its own upstream connection pools. HTTP/1 is parsed by QUICHE's Balsa parser (codec_impl.cc no longer constructs the old http-parser), HTTP/2 by nghttp2 or oghttp2, and an io_uring I/O path exists but is still being worked toward stable support. None of this makes it faster than the baselines in the measurements found; its design target is dynamic configuration and observability at acceptable per-request cost.",
+  "when_to_use": [
+    "Service-mesh sidecars and gateways where routes, clusters and certificates change at runtime through xDS from a control plane (Istio, Envoy Gateway) without reloads.",
+    "You need per-request telemetry (stats, tracing via OpenTelemetry, Zipkin or Datadog, access logs), circuit breaking and per-worker connection pooling built into the proxy rather than added by modules.",
+    "HTTP/2, gRPC and HTTP/3 traffic where one proxy must speak all three on both sides.",
+    "Extending the proxy with C++ filters, Lua or Proxy-Wasm, with the same filter model at the edge and in the mesh."
+  ],
+  "when_not_to_use": [
+    "Raw HTTP/1 reverse-proxy throughput per core is the goal: third-party runs put Envoy at 0.77x of NGINX and 0.66x of HAProxy (Proxy-Benchmarks) and 0.45x of HAProxy (issue 5536), and a direct_response test reached 123,949 req/s against 446,352 for an nginx return (issue 17266, Envoy 1.18.3 with request ids and stats turned off).",
+    "Very high core counts with many HTTP/1 upstream hosts: each worker has its own upstream pool, so connections scale with workers times backends; issue 38554 hit about 64k upstream sockets and 2-5x NGINX's CPU on a 128-core host until workers were cut to 32 (then about 20-30% behind NGINX).",
+    "Small teams wanting a hand-edited config and simple builds: the YAML/protobuf config is verbose, and building from source needs Bazel, Clang 18+ (or GCC 13+) and about 2 GB RAM per build core.",
+    "Windows hosts: the build docs state Windows support has ended; ppc64le is best-effort and outside the security policy.",
+    "You want a static-file web server or an in-process application host: Envoy's role is proxying, with direct_response limited to fixed replies."
+  ],
+  "integration": {
+    "form": "standalone binary (statically linked; official Docker images), built from source with Bazel; extensions are compiled in",
+    "dependencies": "Built in through Bazel modules: BoringSSL, libevent, nghttp2, QUICHE (Balsa HTTP/1 parser, HTTP/3), abseil-cpp, protobuf, gRPC, c-ares, yaml-cpp, re2, zlib-ng, brotli, zstd, tcmalloc (gperftools fallback), plus optional extensions (LuaJIT, Proxy-Wasm, Hyperscan/Vectorscan, Kafka and others).",
+    "min_toolchain": "Clang >= 18 (CI uses Clang 22) or GCC >= 13; C++20; Bazel 9.3.1 per .bazelversion",
+    "platforms": "Linux x86-64 and aarch64 (primary); macOS builds with tcmalloc disabled; s390x and ppc64le community CI builds, ppc64le best-effort and not covered by the security policy; Windows support ended",
+    "thread_safety": "Multi-threaded daemon: main thread plus --concurrency worker threads; each connection is pinned to one worker, and filter code runs single-threaded on its worker's Dispatcher, with cross-thread data through thread-local slots",
+    "drop_in_for_baseline": "partial — fills the reverse-proxy and load-balancer role of NGINX/HAProxy, but needs a new Envoy YAML or xDS config; no nginx.conf/haproxy.cfg compatibility, modules or static file serving"
+  },
+  "gotchas": [
+    "Defaults are not benchmark-neutral: Envoy's own FAQ says to disable circuit breaking (defaults such as 1024 connections per cluster), generate_request_id and dynamic_stats, set --concurrency to match the other proxy, and measure below the latency knee with an open-loop generator. The Proxy-Benchmarks envoy.yaml leaves all of these at defaults while its nginx.conf adds upstream keepalive 32, so its Envoy row is a default-config result.",
+    "That suite's echo backend returns what it receives, and the Envoy row reports 253 B per request against 126 B for NGINX; headers Envoy adds by default (such as a request id) plausibly account for part of the difference, so the proxies did not move identical bytes (inference, not measured).",
+    "HTTP/2 codec regression: from v1.34.0 the oghttp2 codec raised average latency about 15-25% in one sidecar test (issue 40070, still open); PR 42319 (merged Dec 2025) made nghttp2 the default again, and envoy.reloadable_features.http2_use_oghttp2=false is the workaround on affected releases.",
+    "Security cadence is high: the advisory list runs to 14 pages, with a critical Brotli decompressor out-of-bounds write (Oct 23, 2026) and several 2026 crash and auth-bypass fixes in filters (OAuth2, ext_authz, RBAC); stable branches get fixes for 12 months, so plan regular upgrades."
+  ],
+  "pick_this_over_siblings_when": "Pick Envoy over Pingora when you want a ready-made proxy driven by xDS or a mesh control plane rather than writing proxy logic in Rust, and over nghttpx or Pipy when you need its filter ecosystem, telemetry and gRPC/HTTP/3 support; for maximum plain HTTP/1 proxying speed per core NGINX, HAProxy or H2O are the better choice.",
+  "verified_claims_summary": "No speedup: in NickMRamirez/Proxy-Benchmarks (hey, 100,000 GETs over 250 connections, prebuilt Docker images on AWS m5.xlarge VMs, CPU model not stated, one run) Envoy 1.22.8 served 25,852 req/s against 33,506 for NGINX 1.22.1 and 39,437 for HAProxy 2.7.3, beating them only on p90-p99 latency at that lower throughput while its slowest request was worse. In issue 5536 (wrk, 100 connections, 4 workers each, Docker host networking, hardware not stated) Envoy reached 39,749 req/s against HAProxy's 88,446.",
+  "status_note": "Very active CNCF project (29.1k stars, v1.40.1 released Oct 23, 2026, main at 1.41.0-dev) under Apache-2.0, with quarterly releases and 12 months of stable-branch fixes; usable as a prebuilt binary or image, but not a library you vendor.",
+  "sources_read": [
+    "https://github.com/envoyproxy/envoy",
+    "https://raw.githubusercontent.com/envoyproxy/envoy/HEAD/README.md",
+    "https://raw.githubusercontent.com/envoyproxy/envoy/HEAD/VERSION.txt",
+    "https://raw.githubusercontent.com/envoyproxy/envoy/HEAD/.bazelversion",
+    "https://raw.githubusercontent.com/envoyproxy/envoy/HEAD/.bazelrc",
+    "https://raw.githubusercontent.com/envoyproxy/envoy/HEAD/MODULE.bazel",
+    "https://raw.githubusercontent.com/envoyproxy/envoy/HEAD/RELEASES.md",
+    "https://raw.githubusercontent.com/envoyproxy/envoy/HEAD/bazel/README.md",
+    "https://raw.githubusercontent.com/envoyproxy/envoy/HEAD/docs/root/start/building.rst",
+    "https://raw.githubusercontent.com/envoyproxy/envoy/HEAD/docs/root/intro/arch_overview/intro/threading_model.rst",
+    "https://raw.githubusercontent.com/envoyproxy/envoy/HEAD/docs/root/intro/arch_overview/upstream/circuit_breaking.rst",
+    "https://raw.githubusercontent.com/envoyproxy/envoy/HEAD/docs/root/faq/performance/how_fast_is_envoy.rst",
+    "https://raw.githubusercontent.com/envoyproxy/envoy/HEAD/docs/root/faq/performance/how_to_benchmark_envoy.rst",
+    "https://raw.githubusercontent.com/envoyproxy/envoy/HEAD/source/common/http/http1/BUILD",
+    "https://raw.githubusercontent.com/envoyproxy/envoy/HEAD/source/common/http/http1/codec_impl.cc",
+    "https://raw.githubusercontent.com/envoyproxy/envoy/HEAD/source/common/runtime/runtime_features.cc",
+    "https://github.com/envoyproxy/envoy/releases",
+    "https://github.com/envoyproxy/envoy/security/advisories",
+    "https://github.com/envoyproxy/envoy/issues/5536",
+    "https://github.com/envoyproxy/envoy/issues/17266",
+    "https://github.com/envoyproxy/envoy/issues/38554",
+    "https://github.com/envoyproxy/envoy/issues/40070",
+    "https://github.com/envoyproxy/envoy/issues/48467",
+    "https://raw.githubusercontent.com/NickMRamirez/Proxy-Benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/NickMRamirez/Proxy-Benchmarks/HEAD/main.tf",
+    "https://raw.githubusercontent.com/NickMRamirez/Proxy-Benchmarks/HEAD/client/run_tests.sh",
+    "https://raw.githubusercontent.com/NickMRamirez/Proxy-Benchmarks/HEAD/envoy/envoy.yaml",
+    "https://raw.githubusercontent.com/NickMRamirez/Proxy-Benchmarks/HEAD/nginx/nginx.conf",
+    "https://raw.githubusercontent.com/NickMRamirez/Proxy-Benchmarks/HEAD/haproxy/haproxy.cfg"
+  ],
+  "confidence": 0.8
+}

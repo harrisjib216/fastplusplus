@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/resetius/coroio",
+  "one_liner": "C++23 coroutine networking library with compile-time epoll/kqueue/IOCP/io_uring backends; lower dispatch latency than libevent at small descriptor counts.",
+  "what_it_does": "A single-threaded event loop, TLoop<TPoller>, plus coroutine types (TFuture<T> and fire-and-forget TVoidTask) and async sockets and file handles whose ReadSome/WriteSome/Accept/Connect are co_awaited. On top it ships a DNS resolver, an HTTP/1.1 server, a client-only WebSocket layer, OpenSSL TLS sockets, child-process pipes and an actor system that can span processes. It is not a libevent drop-in: you write coroutines against its own API instead of registering callbacks.",
+  "how_it_is_fast": "The poller is a template parameter, so the backend (TEPoll, TKqueue, TIOCp, TUring, TPoll, TSelect) is fixed at compile time with no virtual dispatch on the hot path. ReadSome/WriteSome try the non-blocking syscall first and only register with the poller on EAGAIN; registrations go into a change list applied in one batch at the start of each Poll, and an fd that the same coroutine re-arms keeps its epoll registration, so the steady state issues no epoll_ctl calls. Ready events resume the waiting coroutine handle directly instead of going through callback and event structures.",
+  "when_to_use": [
+    "Single-threaded C++23 servers or clients that want co_await-style I/O with the same code on Linux (epoll or io_uring), macOS/FreeBSD (kqueue) and Windows (IOCP).",
+    "Event dispatch with few registered descriptors (1 to 256) where the author's i7-12800H epoll bench shows 1.11x-1.56x lower p50 latency than libevent with 1 active connection and 1.61x-1.87x with 100 active (derived from page data).",
+    "Small services that also need DNS, an HTTP server, TLS or a lightweight actor system without pulling in Asio or Seastar (the author's miniraft-cpp Raft implementation uses it).",
+    "Distributed actor messaging between processes: its README ring benchmark shows 1,137,790 msg/s vs 182,525 for Ydb/actors (author-run)."
+  ],
+  "when_not_to_use": [
+    "Thousands of registered descriptors with many active connections: on the i7-12800H with 100 active connections it is 13-36% slower than libevent from 2048 to 32768 descriptors.",
+    "Multi-core scaling inside one process: the loop is single-threaded and there is no built-in multi-threaded scheduler.",
+    "Toolchains without C++23 support (the library target requires cxx_std_23).",
+    "Projects needing a WebSocket server, binary WebSocket frames or an HTTP client (WebSocket is client-only and text-only; HTTP client and server upgrade are open issues #131 and #130).",
+    "Production use of io_uring with TLS or of connect error handling until open bugs #35 (io_uring+SSL assertion failure) and #93 (failed connect reported as success) are fixed."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none required; optional liburing (io_uring backend) and OpenSSL (TLS) found via pkg-config; ws2_32 and bundled wepoll on Windows",
+    "min_toolchain": "C++23 (cxx_std_23; TFuture stores results in std::expected), CMake 3.22; benchmarks built with clang 16",
+    "platforms": "Linux (epoll, io_uring, poll, select), macOS and FreeBSD (kqueue, poll, select), Windows (IOCP, wepoll, poll, select)",
+    "thread_safety": "Single-threaded event loop; no locking in the poller, so each loop and its sockets belong to one thread (actors also run one per thread)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "TVoidTask silently swallows exceptions; use TFuture<T> when you need errors to propagate. ReadSome/WriteSome return -1 on transient errors (EAGAIN, EINTR) and throw std::system_error on others, so callers must handle both.",
+    "The Linux epoll backend calls epoll_pwait2, a Linux 5.11+ syscall, so TEPoll will not work on older kernels.",
+    "Closing a socket removes its registration but does not resume a coroutine still waiting on it (poller.hpp: 'TODO: resume waiting coroutines here'), so such a coroutine can stay suspended forever.",
+    "TWebSocket holds a reference to the socket, which must outlive it."
+  ],
+  "pick_this_over_siblings_when": "Pick COROIO over libhv or libev when you want coroutines rather than callbacks and one API across epoll, kqueue, IOCP and io_uring in a single-threaded loop; libhv is the better-measured choice for multi-threaded servers (its README beats both libevent and libuv at 1,000 connections). For Linux-only io_uring throughput, Condy or uring_exec carry their own measured wins, and Boost.Corosio is the choice inside a Boost/Asio codebase.",
+  "verified_claims_summary": "The author's port of libevent's bench.c (examples/bench.cpp) passes 1-byte writes around a ring of N descriptors and reports the p50 of 25 runs in microseconds; results from April-May 2023, CPU pinned with isolcpus, build flags not stated. On an i7-12800H (Ubuntu 23.04, clang 16) with epoll and 1 active connection, COROIO took 64 vs libevent's 88 us at 1 descriptor (1.38x) and 59 vs 92 at 4 (1.56x), was 5-7% slower at 1024-2048 and at parity near 131072; with 100 active it was 1.61x-1.87x faster from 1 to 256 descriptors (below 100 descriptors the 100 initial writes all land on the first pipe, in both harnesses) but 13-36% slower from 2048 to 32768, while the i5-11400F (WSL2) and M1 (kqueue) runs favor COROIO by up to 1.74x. COROIO's side uses pipe() pairs, while stock libevent bench.c uses AF_UNIX socketpairs with recv/send unless built with USE_PIPES, and the bench-libevent build is not in the repo, so the two sides may be timing different kernel primitives.",
+  "status_note": "Actively developed (last commit August 2026) and BSD-2-Clause, but the benchmark data dates from April-May 2023 and has not been re-run on the current code.",
+  "sources_read": [
+    "https://github.com/resetius/coroio",
+    "https://raw.githubusercontent.com/resetius/coroio/HEAD/README.md",
+    "https://raw.githubusercontent.com/resetius/coroio/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/resetius/coroio/HEAD/coroio/CMakeLists.txt",
+    "https://raw.githubusercontent.com/resetius/coroio/HEAD/coroio/socket.hpp",
+    "https://raw.githubusercontent.com/resetius/coroio/HEAD/coroio/poller.hpp",
+    "https://raw.githubusercontent.com/resetius/coroio/HEAD/coroio/loop.hpp",
+    "https://raw.githubusercontent.com/resetius/coroio/HEAD/coroio/backends/epoll.hpp",
+    "https://raw.githubusercontent.com/resetius/coroio/HEAD/coroio/backends/epoll.cpp",
+    "https://raw.githubusercontent.com/resetius/coroio/HEAD/coroio/corochain.hpp",
+    "https://raw.githubusercontent.com/resetius/coroio/HEAD/coroio/promises.hpp",
+    "https://raw.githubusercontent.com/resetius/coroio/HEAD/examples/bench.cpp",
+    "https://raw.githubusercontent.com/resetius/coroio/ae9d389/examples/bench.cpp",
+    "https://raw.githubusercontent.com/resetius/coroio/HEAD/bench/run.sh",
+    "https://raw.githubusercontent.com/resetius/coroio/HEAD/bench/run_libevent.sh",
+    "https://raw.githubusercontent.com/resetius/coroio/HEAD/bench/netlib_12800H_epoll.txt",
+    "https://raw.githubusercontent.com/resetius/coroio/HEAD/bench/libevent_12800H_epoll.txt",
+    "https://raw.githubusercontent.com/resetius/coroio/HEAD/bench/netlib_12800H_uring.txt",
+    "https://raw.githubusercontent.com/resetius/coroio/HEAD/bench/netlib_12800H_100_epoll.txt",
+    "https://raw.githubusercontent.com/resetius/coroio/HEAD/bench/libevent_12800H_100_epoll.txt",
+    "https://raw.githubusercontent.com/resetius/coroio/HEAD/bench/netlib_12800H_100_uring.txt",
+    "https://github.com/resetius/coroio/tree/master/bench",
+    "https://github.com/resetius/coroio/commits/master/bench",
+    "https://github.com/resetius/coroio/commits/master/examples/bench.cpp",
+    "https://github.com/resetius/coroio/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/libevent/libevent/4c993a0/test/bench.c",
+    "https://raw.githubusercontent.com/libevent/libevent/master/test/bench.c",
+    "https://raw.githubusercontent.com/libevent/libevent/4c993a0/CMakeLists.txt",
+    "https://raw.githubusercontent.com/libevent/libevent/4c993a0/test/include.am"
+  ],
+  "confidence": 0.75
+}

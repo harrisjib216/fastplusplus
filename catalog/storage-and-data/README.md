@@ -4,12 +4,12 @@
 
 Embedded key-value stores, caches, indexes, probabilistic filters, columnar engines and message logs measured against RocksDB, Redis, Kafka and others.
 
-**234 entries in 7 categories:** 24 tier A · 77 tier B · 129 tier C · 4 tier D
+**237 entries in 7 categories:** 24 tier A · 77 tier B · 132 tier C · 4 tier D
 
 | Category | Entries | A | B | C | D | What they beat |
 |---|--:|--:|--:|--:|--:|---|
-| [Caches](caches/README.md) | 39 | 1 | 17 | 21 | 0 | memcached, Redis, LRU baselines the benchmark names |
-| [Columnar analytics](columnar-analytics/README.md) | 36 | 4 | 12 | 20 | 0 | Apache Arrow, DuckDB, ClickHouse, pandas, polars |
+| [Caches](caches/README.md) | 40 | 1 | 17 | 22 | 0 | memcached, Redis, LRU baselines the benchmark names |
+| [Columnar analytics](columnar-analytics/README.md) | 38 | 4 | 12 | 22 | 0 | Apache Arrow, DuckDB, ClickHouse, pandas, polars |
 | [Database client drivers](database-client-drivers/README.md) | 1 | 0 | 0 | 1 | 0 | QtSql with the QMYSQL driver |
 | [Embedded key-value stores](embedded-kv/README.md) | 52 | 4 | 13 | 32 | 3 | RocksDB, LevelDB, LMDB, SQLite |
 | [Indexes](indexes/README.md) | 34 | 3 | 20 | 11 | 0 | B-tree/LSM in the above; learned index baselines |

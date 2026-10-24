@@ -3,7 +3,7 @@
 <sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Storage and data](../README.md)</sub>
 
 **What these beat:** memcached, Redis, LRU baselines the benchmark names  
-**39 entries:** 1 tier A · 17 tier B · 21 tier C · 0 tier D · 34 copyable, 5 study only
+**40 entries:** 1 tier A · 17 tier B · 22 tier C · 0 tier D · 35 copyable, 5 study only
 
 | # | Project | What it is | Tier | Language | License | Status |
 |--:|---|---|:-:|---|---|---|
@@ -41,10 +41,11 @@
 | 32 | [**IKV (Inlined Key-Value Store)**](inlinedio-ikv-store.md) | Embedded, eventually consistent Rust key-value store for ML features that serves reads in-process instead of calling a remote Redis. | **C** | Rust | MIT | 🟡 stale |
 | 33 | [**golang-fifo**](scalalang2-golang-fifo.md) | Go generic in-process cache implementing SIEVE and S3-FIFO eviction; about 16-18% fewer misses than hashicorp LRU, but no higher ops/sec. | **C** | Go | MIT | 🟡 stale |
 | 34 | [**mrcache**](markreedz-mrcache.md) | Single-threaded io_uring key-value cache server in C; README claims 7x Redis and 46x memcached GET throughput at 16 B. | **C** | C | MIT | 🟡 stale |
-| 35 | [**Cachelot**](cachelot-cachelot.md) | Single-threaded C++ LRU cache library plus a memcached-text-protocol server that fits 7-16% more data than Memcached in the same RAM. | **C** | C++ | BSD-2-Clause | 🔴 abandoned |
-| 36 | [**Vettel**](japrozs-vettel.md) | A \~300-line C CLI key-value store on one flat text file; its README times it slightly faster than redis-cli. | **C** | C | MIT | 🔴 abandoned |
-| 37 | [**Dragonfly**](dragonflydb-dragonfly.md) | Multi-threaded, shared-nothing in-memory store that speaks the Redis and Memcached protocols; beats single-process Redis once there are many cores. | **C** | C++ | BUSL-1.1 (study only) | 🟢 active |
-| 38 | [**EloqKV**](eloqdata-eloqkv.md) | Multi-threaded Redis-API distributed KV database with ACID transactions; vendor benchmark shows about 4.5-8.5x single-threaded Redis throughput. | **C** | C++ | GPL-2.0-only OR… (study only) | 🟢 active |
-| 39 | [**W-TinyLFU (C++ header-only, based on the TinyLFU paper)**](vimpunk-w-tinylfu.md) | Small C++ header-only W-TinyLFU cache: frequency-sketch admission in front of segmented LRU, for higher hit ratios than plain LRU. | **C** | C++ | reference (no LICENSE file… (study only) | 🔴 abandoned |
+| 35 | [**Varnish Cache**](varnishcache-varnish-cache.md) | Multi-threaded HTTP reverse-proxy cache programmed in VCL; beats a single-worker nginx proxy_cache but not nginx on all cores. | **C** | C | BSD-2-Clause | ⚪ unknown |
+| 36 | [**Cachelot**](cachelot-cachelot.md) | Single-threaded C++ LRU cache library plus a memcached-text-protocol server that fits 7-16% more data than Memcached in the same RAM. | **C** | C++ | BSD-2-Clause | 🔴 abandoned |
+| 37 | [**Vettel**](japrozs-vettel.md) | A \~300-line C CLI key-value store on one flat text file; its README times it slightly faster than redis-cli. | **C** | C | MIT | 🔴 abandoned |
+| 38 | [**Dragonfly**](dragonflydb-dragonfly.md) | Multi-threaded, shared-nothing in-memory store that speaks the Redis and Memcached protocols; beats single-process Redis once there are many cores. | **C** | C++ | BUSL-1.1 (study only) | 🟢 active |
+| 39 | [**EloqKV**](eloqdata-eloqkv.md) | Multi-threaded Redis-API distributed KV database with ACID transactions; vendor benchmark shows about 4.5-8.5x single-threaded Redis throughput. | **C** | C++ | GPL-2.0-only OR… (study only) | 🟢 active |
+| 40 | [**W-TinyLFU (C++ header-only, based on the TinyLFU paper)**](vimpunk-w-tinylfu.md) | Small C++ header-only W-TinyLFU cache: frequency-sketch admission in front of segmented LRU, for higher hit ratios than plain LRU. | **C** | C++ | reference (no LICENSE file… (study only) | 🔴 abandoned |
 
 <sub>Tiers: **A** reproducible public benchmark (code, compiler, flags and CPU stated) · **B** independent or peer-reviewed measurement · **C** first-party claim · **D** directional, no numbers. Status: 🟢 active · 🔵 finished · 🟡 slow or stale · 🔴 abandoned · ⚪ unknown. *Study only* means no usable open-source license: read the idea, don't copy the code.</sub>
