@@ -4,7 +4,7 @@
 
 Containers, algorithms and utilities that beat the C++ standard library's own: hash maps, sorting, number parsing, allocators, regex and more.
 
-**335 entries in 26 categories:** 118 tier A · 25 tier B · 177 tier C · 15 tier D
+**337 entries in 26 categories:** 118 tier A · 25 tier B · 179 tier C · 15 tier D
 
 | Category | Entries | A | B | C | D | What they beat |
 |---|--:|--:|--:|--:|--:|---|
@@ -17,7 +17,7 @@ Containers, algorithms and utilities that beat the C++ standard library's own: h
 | [I/O and filesystem](io-and-filesystem/README.md) | 4 | 1 | 0 | 3 | 0 | iostreams, fstream, std::filesystem, fread/fwrite |
 | [JSON serialization](serialization-json/README.md) | 17 | 7 | 0 | 9 | 1 | iostreams + std::string, std::format (record actual baseline) |
 | [k-mer dictionaries](k-mer-dictionaries/README.md) | 3 | 1 | 2 | 0 | 0 | SSHash; Pufferfish (and dBG-FM, BLight k-mer dictionaries); Pufferfish |
-| [Math, SIMD and linear algebra](math-simd-linear-algebra/README.md) | 32 | 5 | 3 | 21 | 3 | std::valarray, std::transform, std::reduce, &lt;cmath&gt; |
+| [Math, SIMD and linear algebra](math-simd-linear-algebra/README.md) | 34 | 5 | 3 | 23 | 3 | std::valarray, std::transform, std::reduce, &lt;cmath&gt; |
 | [Minimal perfect hash functions](minimal-perfect-hash-functions/README.md) | 20 | 14 | 2 | 4 | 0 | BBHash; CMPH; RecSplit |
 | [Number parsing and formatting](number-parsing-formatting/README.md) | 22 | 9 | 2 | 11 | 0 | std::to_chars, std::from_chars, std::stod, std::format, iostreams |
 | [Ordered maps and trees](ordered-maps-trees/README.md) | 10 | 4 | 0 | 5 | 1 | std::map, std::set, std::multimap |

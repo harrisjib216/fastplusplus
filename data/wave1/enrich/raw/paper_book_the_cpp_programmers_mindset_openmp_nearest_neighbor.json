@@ -1,0 +1,54 @@
+{
+  "id": "paper:book-the-cpp-programmers-mindset-openmp-nearest-neighbor",
+  "one_liner": "Book sample: one OpenMP 'parallel for' min-reduction pragma on an O(n^2) closest-pair loop, about 4x over one thread.",
+  "what_it_does": "A chapter-4 companion sample from a Packt C++ book: two functions with the same signature, float f(std::span<const Point2D>), that return the smallest Euclidean distance between any two points (the closest-pair distance) by checking every pair. The OpenMP version is the sequential double loop plus one '#pragma omp parallel for reduction(min:min_distance)' line on the outer loop; it returns only the distance, not which pair. A Google Benchmark driver times both on 65,536 random float points in [-1,1]^2.",
+  "how_it_is_fast": "Plain fork-join thread parallelism: OpenMP splits the outer loop's rows across a team of threads (one per logical CPU by default), each thread keeps a private minimum, and the min reduction combines them at the end. The per-pair work is unchanged (one std::hypot call per pair) and the algorithm stays O(n^2). The rows are triangular (row i does n-i-1 pairs) and there is no schedule clause, so under the usual static schedule the first of 8 threads gets about 23% of all pairs, which caps the speedup near 4.3x (derived from the code); the reported 4.1x sits right at that cap.",
+  "when_to_use": [
+    "As a minimal template for parallelising an embarrassingly parallel outer loop that ends in a scalar min, max or sum reduction, in code that already builds with OpenMP.",
+    "Brute-force all-pairs kernels on a few thousand to tens of thousands of points where writing a spatial index is not worth it; the min reduction is exact and order-independent, so the result is identical to the sequential loop.",
+    "Teaching or measuring OpenMP scaling and load imbalance on a multi-core desktop, where the gap between 4.1x and 8x is itself the lesson."
+  ],
+  "when_not_to_use": [
+    "Closest-pair search on large point sets: a divide-and-conquer or sweep-line closest-pair algorithm, or a uniform grid or k-d tree, is O(n log n), about a million steps at n = 65,536 against 2.1 billion pair checks here, which no thread count makes up for (derived).",
+    "When you need the pair itself (the two indices); the functions return only the minimum distance.",
+    "Toolchains without an OpenMP runtime: find_package(OpenMP REQUIRED) fails where none is installed (AppleClang does not ship one by default), and MSVC needs the experimental runtime that the CMake file selects for reduction(min).",
+    "Code that already runs inside its own thread pool or several application threads: each call opens its own OpenMP team, so concurrent callers oversubscribe the cores.",
+    "Small inputs: only 65,536 points are benchmarked, so the size below which thread start-up and the final barrier outweigh the gain is not documented."
+  ],
+  "integration": {
+    "form": "source-drop (two functions in Chapter-04/nearest_neighbor.cpp plus a short header; the speedup is a single pragma)",
+    "dependencies": "an OpenMP runtime (libgomp, LLVM libomp or MSVC's); the benchmark needs Google Benchmark, and the shared Chapter-04 CMake project also requires GTest and Threads at configure time (BLAS optional)",
+    "min_toolchain": "C++20 (std::span; the benchmark's emplace_back on the aggregate Point2D needs parenthesised aggregate initialisation, GCC 10+ or Clang 16+), OpenMP 3.1+ for reduction(min), CMake 3.30+ as the CMakeLists requires",
+    "platforms": "any OS and CPU with an OpenMP-capable C++20 compiler; no ISA-specific code",
+    "thread_safety": "Reentrant (reads a const span and returns a value), but every call starts an OpenMP parallel region; concurrent calls from several threads oversubscribe the cores, and calls nested inside another parallel region usually run with one thread.",
+    "drop_in_for_baseline": "partial: same signature and the same result as nearest_neighbor_distance_seq, but the translation unit must be compiled with the OpenMP flag (-fopenmp, /openmp) and linked against the runtime; without it the pragma is ignored and the code runs sequentially."
+  },
+  "gotchas": [
+    "No schedule clause on a triangular loop: with the default static schedule thread 0 gets rows 0-8191, about 503 million of the 2.15 billion pairs, so 8 threads cannot exceed about 4.3x; schedule(dynamic, chunk), schedule(guided) or pairing row i with row n-1-i should balance the work (derived from the code, not measured).",
+    "Each pair calls std::hypot, which guards against overflow and is slower than sqrt(dx*dx + dy*dy); comparing squared distances and taking one sqrt at the end lightens the inner loop for both versions and makes it a candidate for auto-vectorisation, so SIMD and threads could compound (derived, not measured).",
+    "The benchmark does not call UseRealTime(); Google Benchmark's default CPU timer measures only the main thread, so read the wall-clock Time column for the OpenMP row. At 1-5 s per call the default 0.5 s minimum time is met after one iteration, so each figure is probably a single call unless --benchmark_repetitions was passed (derived from the Google Benchmark user guide).",
+    "Chapter-04/CMakeLists.txt sets no CMAKE_BUILD_TYPE, so a plain configure builds without optimisation; configure Release to compare. Open PR #14 (December 2025, unmerged) fixes build errors in the same chapter's gemm files (a missing matrix.h include, asserts naming undeclared a, b, c), so build the bench_nearest_neighbor target on its own if the full project fails."
+  ],
+  "pick_this_over_siblings_when": "None of the SIMD siblings (xsimd, Vc, NumKong) add threads; use this pattern when the kernel is already acceptable per element and idle cores are the cheapest win, and reach for NumKong or xsimd to speed up the per-pair arithmetic instead (the two combine; NumKong's distance kernels target long vectors rather than 2-D points).",
+  "verified_claims_summary": "The repository holds code only; the book's run, relayed by the seed lead, gives 4,797 ms for the sequential all-pairs loop and 1,161 ms with OpenMP on 8 threads over 65,536 random float points (about 4.1x), timed with Google Benchmark against the same author's single-threaded loop. Compiler, flags, OpenMP runtime and CPU model are not stated, and the repository's CMake sets no optimisation level.",
+  "status_note": "Packt book companion repository, MIT-licensed, 20 stars and 8 forks; the last commit (2026-01-22) changed only the README and the code last changed in November 2025, with one open issue (#15, about the chapter-4 clamp loop) and one unmerged build-fix PR (#14); the technique is a single pragma, so there is nothing to vendor.",
+  "sources_read": [
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/commits/main",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/tree/main/Chapter-04",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/issues?q=is%3Aissue",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/issues/15",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/pulls",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/pull/14/files",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/bench_nearest_neighbor.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/nearest_neighbor.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/nearest_neighbor.h",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/open_mp_demo.cpp",
+    "https://raw.githubusercontent.com/google/benchmark/main/docs/user_guide.md",
+    "https://raw.githubusercontent.com/google/benchmark/main/src/benchmark.cc"
+  ],
+  "confidence": 0.7
+}

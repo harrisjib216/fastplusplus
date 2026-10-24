@@ -4,13 +4,13 @@
 
 BLAS, FFT, sparse solvers, big integers, random numbers, geometry and ML kernels measured against MKL, FFTW, GMP, Eigen and their peers.
 
-**453 entries in 7 categories:** 76 tier A · 90 tier B · 257 tier C · 30 tier D
+**455 entries in 7 categories:** 76 tier A · 90 tier B · 259 tier C · 30 tier D
 
 | Category | Entries | A | B | C | D | What they beat |
 |---|--:|--:|--:|--:|--:|---|
 | [Autodiff and ML kernels](autodiff-and-ml-kernels/README.md) | 102 | 12 | 22 | 66 | 2 | oneDNN, cuDNN, XNNPACK, Eigen tensor |
 | [Big integers and arbitrary precision](big-integer-arbitrary-precision/README.md) | 43 | 10 | 4 | 26 | 3 | GMP, MPFR |
-| [BLAS and LAPACK](blas-lapack/README.md) | 61 | 14 | 13 | 26 | 8 | OpenBLAS, Intel MKL, Eigen, BLIS |
+| [BLAS and LAPACK](blas-lapack/README.md) | 63 | 14 | 13 | 28 | 8 | OpenBLAS, Intel MKL, Eigen, BLIS |
 | [FFT](fft/README.md) | 49 | 13 | 9 | 21 | 6 | FFTW, MKL FFT, KissFFT |
 | [Geometry and spatial](geometry-spatial/README.md) | 76 | 5 | 12 | 55 | 4 | Boost.Geometry, CGAL, GEOS, R-tree baselines |
 | [Random and quasi-random numbers](random-and-quasi-random/README.md) | 62 | 15 | 5 | 39 | 3 | std::mt19937, PCG, xoshiro |

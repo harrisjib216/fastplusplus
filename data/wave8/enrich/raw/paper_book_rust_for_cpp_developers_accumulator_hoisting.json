@@ -1,0 +1,51 @@
+{
+  "id": "paper:book-rust-for-cpp-developers-accumulator-hoisting",
+  "one_liner": "Book example: keep a matrix-multiply dot product in a local sum, storing once; book-reported 4.1x over in-place accumulation.",
+  "what_it_does": "matrix_multiply_indexing_opt in chapter_10/src/lib.rs of the Packt book companion repo multiplies two Matrix = Vec<Vec<f32>> values (taken by value) and returns a new Vec<Vec<f32>>, using the plain i-j-k triple loop with safe indexing. The only change from the baseline matrix_multiply_original is that the k loop adds into a local `let mut sum = 0.0` and writes out[i][j] = sum once, instead of doing out[i][j] += a[i][k] * b[k][j] on every step. It is a loop idiom, not a library: the first step of the chapter's optimization chain (hoisted accumulator, then get_unchecked indexing, then std::simd).",
+  "how_it_is_fast": "Scalar replacement (register promotion) of the accumulator. In the baseline every k step is a read-modify-write of a heap f32 reached through two Vec indirections; rustc emits no type-based alias information and the row buffers are reached through pointers loaded from memory, so LLVM most likely cannot prove that the f32 store leaves the Vec headers and elements of a, b and out untouched, and it keeps the load-add-store, reloads the row headers and re-checks bounds on each step, putting a memory round trip into the 100-long dependency chain of every output element. With a local sum the loop body has no stores, the accumulator stays in a register and only the floating-point add chain remains; this mechanism is inferred from the code, since the repo publishes no assembly or profile.",
+  "when_to_use": [
+    "Any hot Rust loop that accumulates into an indexed heap element or a field (out[i][j] += ..., self.total += ..., *p += ...): keep the running value in a local and store it once after the loop.",
+    "The same pattern in C++ code, where an output pointer that may alias the inputs (no __restrict) also forces the compiler to keep the load-add-store; a local accumulator removes the dependence on alias analysis.",
+    "When you want a safe-Rust fix with no unsafe blocks and no new dependency: the function keeps the baseline's signature and its bounds checks.",
+    "As the first exercise in profiling a naive kernel: it is the largest single step (book-reported 2.24 ms to about 540 us) in the chapter's chain before unchecked indexing and SIMD."
+  ],
+  "when_not_to_use": [
+    "As a matrix multiply for real work: the book figure works out to about 3.7 GFLOPS at 100x100 (derived: 2*100^3 flops in 540 us), far below the BLAS-class siblings; use a tuned library.",
+    "Larger matrices: it still walks b down a column of a Vec<Vec<f32>>, one row-Vec dereference and one cache line per element, with no transpose, packing or blocking, so cache misses take over as n grows.",
+    "Code that already accumulates in a local or a register-held variable: there is nothing to hoist, and the 4.1x figure belongs to this naive Vec<Vec<f32>> baseline on an unstated machine.",
+    "Untrusted shapes: a_cols and b_cols come from a[0].len() and b[0].len(), so empty input panics, a b with fewer than a_cols rows panics, and extra rows in b are silently ignored; nothing checks that the dimensions agree."
+  ],
+  "integration": {
+    "form": "source-drop (an 18-line function in chapter_10/src/lib.rs of the book's performance_test example crate)",
+    "dependencies": "none for the function (std only); the chapter crate pulls rand 0.8.5, elapsed 0.1.2 and flame 0.2.2, plus criterion 0.5.1 as a dev-dependency (Cargo.lock)",
+    "min_toolchain": "stable Rust, edition 2021; the repo README asks for Rust 1.82.0 or newer (no rust-toolchain file is checked in)",
+    "platforms": "any Rust target (scalar code, no target-specific features)",
+    "thread_safety": "pure function on owned inputs with no shared state; single-threaded",
+    "drop_in_for_baseline": "partial — same signature as matrix_multiply_original and the same summation order, so the output is bit-identical; it is an edit you apply to your own loop rather than a component you link"
+  },
+  "gotchas": [
+    "The repo's Criterion bench (benches/multiply.rs, 'multiply 100x100') times only the matrix_multiply alias, which lib.rs points at matrix_multiply_unsafe_indexing on stable and matrix_multiply_simd with --features nightly; reproducing this comparison means editing the pub use line, and no results, CPU or rustc version are in the repo.",
+    "The timed closure clones both 100x100 inputs (about 202 heap allocations and 80 KB of copying) and allocates and then drops the 101-allocation output on every iteration; that fixed cost is the same for both versions, so it shrinks the measured ratio rather than inflating it.",
+    "The safe version still bounds-checks a[i][k], b[k] and b[k][j] on every step (a_cols is taken from a[0] only, so the compiler cannot drop the checks for other rows); removing them is the chapter's next, unsafe step.",
+    "The repo has no tests; equivalence with matrix_multiply_original rests on reading the code (both add the k terms in the same order starting from 0.0)."
+  ],
+  "pick_this_over_siblings_when": "Never as a replacement for the catalogued GEMM libraries: for real multiplies in Rust pick faer, and for sizes around 100 consider BLASFEO, which targets small matrices. Use this entry when the lesson itself is the point, a safe one-line accumulator fix in your own loop; the sibling Rust-for-CPP-Developers entries (unsafe indexing, f32x4 SIMD) are the next steps of the same chain.",
+  "verified_claims_summary": "Nothing is measured in the repo. The book, as relayed by the lead, reports the Criterion 100x100 f32 benchmark at about 2.24 ms for matrix_multiply_original and about 540 us for matrix_multiply_indexing_opt (75.9 percent less time, about 4.1x derived), built with the release profile on an unstated rustc (README: 1.82.0 or newer) with no RUSTFLAGS and on an unstated CPU; derived throughput is about 0.9 and 3.7 GFLOPS.",
+  "status_note": "A Packt book companion snapshot (MIT, 11 stars, 3 commits, content committed 2026-03-13, an unmerged Dependabot PR #2 bumping rand to 0.8.6) rather than a maintained library, but the idiom is a few lines and free to copy.",
+  "sources_read": [
+    "https://github.com/PacktPublishing/Rust-for-CPP-Developers",
+    "https://github.com/PacktPublishing/Rust-for-CPP-Developers/commits/main",
+    "https://github.com/PacktPublishing/Rust-for-CPP-Developers/issues",
+    "https://github.com/PacktPublishing/Rust-for-CPP-Developers/pulls",
+    "https://github.com/PacktPublishing/Rust-for-CPP-Developers/pull/2",
+    "https://github.com/PacktPublishing/Rust-for-CPP-Developers/tree/main/chapter_10",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/chapter_10/Cargo.toml",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/chapter_10/Cargo.lock",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/chapter_10/src/lib.rs",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/chapter_10/src/simd.rs",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/chapter_10/benches/multiply.rs",
+    "https://raw.githubusercontent.com/PacktPublishing/Rust-for-CPP-Developers/HEAD/chapter_10/src/bin/cli.rs"
+  ],
+  "confidence": 0.55
+}

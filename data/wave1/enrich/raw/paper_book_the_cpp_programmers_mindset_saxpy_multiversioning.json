@@ -1,0 +1,57 @@
+{
+  "id": "paper:book-the-cpp-programmers-mindset-saxpy-multiversioning",
+  "one_liner": "Book sample: one scalar saxpy loop compiled per ISA (SSE4.2, AVX2, AVX-512F) with CPUID dispatch; 1.27-1.35x over default build.",
+  "what_it_does": "A chapter-4 sample from a Packt C++ book showing hand-rolled function multiversioning: CMake's configure_file stamps one plain loop (y[i] += a*x[i] over std::span) into saxpy_default, saxpy_sse42, saxpy_avx2 and saxpy_avx512f, each source compiled with its own -m flag (/arch: on MSVC), and ct::saxpy picks one at run time from CPUID feature bits. A hand-written AVX2 intrinsics version (saxpy_hand) and OpenBLAS cblas_saxpy are benchmarked alongside. The benchmark calls each variant directly on 5,120 floats; the ct::saxpy dispatcher itself is never timed.",
+  "how_it_is_fast": "No new algorithm: the compiler auto-vectorises the same loop at a wider width when allowed a newer instruction set (4 floats per SSE register, 8 per AVX2, 16 per AVX-512), and run-time CPUID dispatch lets one binary use the widest copy the CPU supports while still running on baseline x86-64. The book's gains (1.27x for AVX2, 1.35x for AVX-512F over the SSE2 default) are far below the width ratios, consistent with SAXPY doing two loads and one store per multiply-add, so cache bandwidth rather than arithmetic sets the pace; the two 20 KB arrays (40 KB together) exceed a 32 KB L1 data cache (derived). SSE4.2 adds no float arithmetic over SSE2 for this loop, which matches its unchanged time.",
+  "when_to_use": [
+    "Shipping one x86-64 binary to a mixed fleet where a hot, simple, auto-vectorisable loop should use AVX2 or AVX-512 when present without raising the baseline ISA.",
+    "When you want explicit control over which ISA tiers are built and how they are chosen, rather than GCC/Clang's [[gnu::target_clones]] (which the same repository uses in Chapter-14/saxpy_mt.cpp).",
+    "Element-wise kernels with more arithmetic per byte than SAXPY, where wider vectors should pay off more than the 1.3x seen here (general expectation, not measured in the repository).",
+    "Learning how per-ISA builds, CPUID feature bits and dispatch fit together before adopting target_clones or a SIMD library."
+  ],
+  "when_not_to_use": [
+    "Calling ct::saxpy on small arrays in a hot path as written: the dispatcher calls get_best_instructions(), two or three CPUID instructions, on every call with no caching; CPUID is serialising and under virtualisation it normally traps to the hypervisor, which can rival the roughly 300 ns of work at N = 5,120 (derived; the dispatcher is never timed).",
+    "Large, memory-resident arrays: SAXPY is bandwidth-bound, so wider vectors gain little once the data leave cache; only one cache-resident size (5,120 floats) is benchmarked.",
+    "Non-x86 targets, MSVC or 32-bit builds: my_cpuid.h expands to static_assert(false) on non-x86 targets, tests __MSVC__ (MSVC defines _MSC_VER) so cl.exe gets no my_cpuid definition, and tests __X86__ rather than __i386__ so 32-bit GCC also hits the static_assert.",
+    "Machines or VMs whose OS has not enabled AVX or AVX-512 register state: get_best_instructions() reads CPUID feature bits only, without the OSXSAVE/XGETBV check, so it can select a copy that faults.",
+    "When you want BLAS-grade performance across sizes: the auto-vectorised copies edge out OpenBLAS only at this one small size, where call overhead weighs most."
+  ],
+  "integration": {
+    "form": "source-drop (saxpy.cpp.in template, saxpy.h, the saxpy.cpp dispatcher, get_best_instructions.h, my_cpuid.h and the CMake configure_file loop that adds per-file -m flags)",
+    "dependencies": "none for the kernels; the benchmark needs Google Benchmark and optionally a BLAS with cblas.h (CMake asks for a static ILP64 BLAS via BLA_SIZEOF_INTEGER 8 and BLA_STATIC ON and silently drops the OpenBLAS row if none is found); the shared Chapter-04 project also requires GTest, Threads and OpenMP at configure time",
+    "min_toolchain": "C++20 (std::span), CMake 3.30+, GCC or Clang targeting x86-64 (<cpuid.h>, -msse4.2/-mavx2/-mavx512f)",
+    "platforms": "x86-64 only, with GCC or Clang (clang-cl defines __clang__ and should work); plain MSVC cl.exe and 32-bit GCC do not compile my_cpuid.h as written; the AVX-512F tier needs an AVX-512F CPU",
+    "thread_safety": "The kernels are stateless and safe on disjoint output spans; the dispatcher keeps no state (it re-queries CPUID on every call), so it is thread-safe but slow.",
+    "drop_in_for_baseline": "partial: ct::saxpy has the same signature as saxpy_default and computes the same mul-then-add, but it needs the per-ISA CMake setup, and its per-call CPUID should be cached before it is worth calling on small arrays."
+  },
+  "gotchas": [
+    "Cache the dispatch: store the get_best_instructions() result once (a function-local static or a function pointer) or use target_clones/ifunc as Chapter-14 does; as shipped, every ct::saxpy call pays several CPUID instructions.",
+    "-mavx2 does not imply -mfma, so the avx2 tier and saxpy_hand issue a separate multiply and add; -mavx2 -mfma (or -march=x86-64-v3) is the fairer AVX2 tier, and any tier that fuses the multiply-add can differ from the default build in the last bit.",
+    "Neither the per-ISA loops nor saxpy_hand check that x is at least as long as y; only the dispatcher asserts it, and assert compiles away under NDEBUG, so a short x is read out of bounds.",
+    "Chapter-04/CMakeLists.txt sets no CMAKE_BUILD_TYPE, so a plain configure builds without optimisation and none of the tiers vectorise; configure Release. Per-file -mavx2/-mavx512f flags also risk the linker keeping an AVX-compiled copy of an inline header function for the default path (a general hazard of per-file ISA flags, not observed in this repo). Open PR #14 (unmerged) fixes build errors in the chapter's gemm files, so build the bench_saxpy target alone if the full project fails."
+  ],
+  "pick_this_over_siblings_when": "Pick this pattern when a few simple loops already auto-vectorise and you only need ISA selection; xsimd or Vc give explicit SIMD types at the cost of rewriting the kernel, NumKong ships ready-made dispatched dot-product and distance kernels, and SLEEF or fmath cover transcendental functions that per-ISA recompilation alone does not speed up.",
+  "verified_claims_summary": "The repository holds code only; the book's run, relayed by the seed lead, times the same scalar loop on 5,120 floats at 329 ns (default x86-64 build), 330 ns (SSE4.2), 259 ns (AVX2), 243 ns (AVX-512F) and 298 ns for hand-written AVX2 intrinsics, against 278 ns for OpenBLAS cblas_saxpy, so the AVX-512F and AVX2 builds are about 1.35x and 1.27x faster than the default build and the hand intrinsics lose to the compiler. Compiler, optimisation level, OpenBLAS version and the AVX-512-capable CPU are not stated, and the CPUID dispatcher a real caller goes through is not timed.",
+  "status_note": "Packt book companion repository, MIT-licensed, 20 stars and 8 forks; the last commit (2026-01-22) changed only the README and the code last changed in November 2025, with one open issue (#15, about the clamp loop) and one unmerged build-fix PR (#14); the pattern is a handful of small files to copy, but fix the per-call CPUID and the compiler-macro checks first.",
+  "sources_read": [
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/commits/main",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/tree/main/Chapter-04",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/issues?q=is%3Aissue",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/issues/15",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/pulls",
+    "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/pull/14/files",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/bench_saxpy.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/saxpy.cpp.in",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/saxpy.h",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/saxpy.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/saxpy_hand.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/get_best_instructions.h",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/my_cpuid.h",
+    "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-14/saxpy_mt.cpp"
+  ],
+  "confidence": 0.7
+}
