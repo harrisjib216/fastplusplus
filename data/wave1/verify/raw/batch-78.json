@@ -1,0 +1,76 @@
+[
+  {
+    "id": "paper:book-the-cpp-programmers-mindset-openmp-nearest-neighbor",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": false,
+    "evidence_tier_final": "C",
+    "tier_reason": "Chapter-04/bench_nearest_neighbor.cpp times nearest_neighbor_distance_seq against nearest_neighbor_distance_omp (Google Benchmark, Arg(65536), milliseconds) on the same kernel, but the repo holds code only: the 4,797 ms and 1,161 ms figures appear nowhere in the repository and come from the book via the seed lead. Compiler, flags and CPU are not stated and CMakeLists.txt sets no build type, so first-party tier C.",
+    "corrections": {
+      "compiler_and_flags": "Not stated. Chapter-04/CMakeLists.txt requires C++20 (CMake 3.30), links OpenMP::OpenMP_CXX and Google Benchmark, and sets no CMAKE_BUILD_TYPE or optimisation flags; the repository has no CMakePresets.json, so with an empty build type CMake adds no -O flag and the optimisation level depends on how the reader configures it.",
+      "caveats": "The numbers are the book's own figures as paraphrased in the seed lead; they are not printed anywhere in the repository (the Chapter-04 listing shows 23 source and build files and no results), and the book itself was deliberately not consulted. Baseline is the book's own single-threaded loop, so this shows OpenMP scaling on a toy O(n^2) kernel, not an improvement on a library or std facility (nearest_neighbor.cpp includes <execution> but does not use parallel algorithms). The triangular loop uses '#pragma omp parallel for' with no schedule clause; under a static default schedule (libgomp's default) the first of 8 threads gets rows 0-8191, about 503 million of the 2,147,450,880 pairs (23.4%), which caps the speedup near 4.27x, so the reported 4.1x mostly reflects load imbalance and schedule(dynamic) or guided would likely scale further (derived from the code). Each pair calls std::hypot (about 2.2 ns per pair at 4,797 ms, derived); comparing squared distances would remove it from both versions. The sequential and OpenMP benchmarks generate separate random point sets from std::random_device on every run (work is data-independent, so the effect is small). Compiler, flags and CPU are not stated, so no tier A. Tier C: first-party book measurement."
+    },
+    "notes": "Code verified: same kernel with and without 'omp parallel for reduction(min:...)', std::hypot on float Point2D, 65,536 points, Google Benchmark in ms; numbers not in the repo (book-only). MIT (Copyright 2025 Packt), 20 stars, 8 forks, last commit 2026-01-22 (active), not a fork, not archived. Category math-simd-linear-algebra is a loose fit; this is OpenMP thread parallelism.",
+    "urls_opened": [
+      "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset",
+      "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/commits/main",
+      "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/tree/main/Chapter-04",
+      "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/README.md",
+      "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/CMakeLists.txt",
+      "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/blob/main/Chapter-04/bench_nearest_neighbor.cpp",
+      "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/bench_nearest_neighbor.cpp",
+      "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/nearest_neighbor.cpp",
+      "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/nearest_neighbor.h"
+    ]
+  },
+  {
+    "id": "paper:book-the-cpp-programmers-mindset-saxpy-multiversioning",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": false,
+    "evidence_tier_final": "C",
+    "tier_reason": "Chapter-04/bench_saxpy.cpp registers saxpy_default, saxpy_sse42, saxpy_avx2, saxpy_avx512f, saxpy_hand and (with BLAS) cblas_saxpy over N = 5*1024 floats, so the code compares against the default-target build and OpenBLAS, but no results are in the repo; the ns figures come from the book via the seed lead, with compiler, flags and CPU unstated, so first-party tier C.",
+    "corrections": {
+      "workload": "y[i] += a*x[i] over 5,120 floats (N = 5*1024, x = 1.0, y = -1.0, a = 2.0), Google Benchmark time per call in ns, comparing the same scalar loop (saxpy.cpp.in) compiled for default, -msse4.2, -mavx2 and -mavx512f, a hand-written AVX2 intrinsics version (saxpy_hand.cpp) and cblas_saxpy. main() calls get_best_instructions() (CPUID) to decide which rows to register; the ct::saxpy dispatcher itself is not timed.",
+      "compiler_and_flags": "Not stated; the lead implies GCC -O3. Chapter-04/CMakeLists.txt compiles saxpy.cpp.in once per ISA via configure_file with per-source -msse4.2 / -mavx2 / -mavx512f (or /arch: on MSVC) and saxpy_hand.cpp with -mavx2, but sets no CMAKE_BUILD_TYPE or -O level and the repo has no CMakePresets.json. 329 ns for 5,120 floats (about 0.064 ns per element) implies optimised, vectorised code, so the book's build used an optimisation level the repo does not set (derived). The repo does NOT use [[gnu::target_clones]] for this chapter-4 benchmark (Chapter-14/saxpy_mt.cpp does use target_clones(\"avx2,default\")).",
+      "caveats": "The numbers are the book's own figures as paraphrased in the seed lead; they are not printed anywhere in the repository (the Chapter-04 listing shows 23 source and build files and no results), and the book itself was deliberately not consulted. Single small size (20 KB per vector, cache resident); the book itself warns that OpenBLAS call overhead may distort this size. The gains (1.1-1.35x) come from compiler auto-vectorisation at a wider ISA, not from a new algorithm; the 'default' baseline is deliberately the lowest ISA tier, and its speed depends on the unstated -O level (GCC before 12 does not vectorise at -O2). The benchmark main() uses switch fall-through so a given CPU registers every lower tier too. get_best_instructions() checks only CPUID feature bits, not OSXSAVE/XGETBV, so the dispatcher can pick AVX/AVX-512 on an OS that has not enabled that register state; my_cpuid.h tests __MSVC__ rather than _MSC_VER, so its MSVC branch looks unreachable. CPU model, compiler and flags not stated. Tier C: first-party book measurement."
+    },
+    "notes": "Code verified (per-ISA builds of one loop, fall-through registration, hand AVX2 version, cblas_saxpy reference, N = 5120); numbers not in the repo (book-only). Chapter-14 target_clones claim confirmed. MIT, 20 stars, last commit 2026-01-22 (active).",
+    "urls_opened": [
+      "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset",
+      "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/commits/main",
+      "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/tree/main/Chapter-04",
+      "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/README.md",
+      "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/CMakeLists.txt",
+      "https://github.com/PacktPublishing/The-CPP-Programmers-Mindset/blob/main/Chapter-04/bench_saxpy.cpp",
+      "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/bench_saxpy.cpp",
+      "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/saxpy.cpp.in",
+      "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/saxpy.h",
+      "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/saxpy.cpp",
+      "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/saxpy_hand.cpp",
+      "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/get_best_instructions.h",
+      "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-04/my_cpuid.h",
+      "https://raw.githubusercontent.com/PacktPublishing/The-CPP-Programmers-Mindset/HEAD/Chapter-14/saxpy_mt.cpp"
+    ]
+  },
+  {
+    "id": "paper:bendersky-cost-of-virtual-calls-vs-crtp-dispatch",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": null,
+    "numbers_found_on_page": null,
+    "evidence_tier_final": "C",
+    "tier_reason": "Single first-party blog measurement of the same loop through virtual and CRTP dispatch; the post (and its isocpp.org mirror) is blocked here and five verifier searches confirmed the post, its December 2013 date and its benchmark method but returned no snippet with the 1.25 s / 0.21 s figures or the i7-4771, so the numbers rest on the search agent's snippet summaries. No compiler, flags or repo-hosted code were seen, so it cannot reach A or B.",
+    "corrections": {
+      "caveats": "Snippet only: eli.thegreenplace.net is blocked from this environment (getaddrinfo ENOTFOUND), so the page was never opened; the numbers and CPU come from WebSearch result summaries seen by the search agent (two searches agreeing on 1.25 s for the dynamic run, one giving 0.21 s for CRTP), and compiler and flags were not seen (null). The verifier could not re-confirm them: eli.thegreenplace.net, the isocpp.org mirror and an HN mirror all failed with getaddrinfo ENOTFOUND, and five further searches returned the post's topic, date and its warning that benchmarks, 'including the one posted here', should be taken with a large grain of salt, but no timing figures. The code is inline in the article; the eliben/code-for-blog 2013 directory has no matching file (its listing shows only two JavaScript inheritance files and two Twisted IRC files), so no repo carries it and no license was seen (usability reference). One trivial method in a tight loop: the large gap is mostly inlining (a secondary source says so), the worst case for virtual calls; a real gap depends on method size and cache behaviour. 2013-era CPU and compiler. Tier C: single first-party blog measurement, methodology not verified."
+    },
+    "notes": "Widely cited post (mirrored on isocpp.org); kept at C on the same basis as other blocked first-party blog posts, but its numbers were seen only by the search agent, so treat claimed_speedup as unverified. A copy of the post or its code in a reachable repo would settle it.",
+    "urls_opened": [
+      "https://github.com/eliben/code-for-blog/tree/main/2013"
+    ]
+  }
+]
