@@ -4,6 +4,31 @@ Status notes the orchestrating Claude Code session wrote at the close of each wa
 first. Counts are as of each note; the live counts are in the [README](../README.md). The project rules these notes
 refer to are in [CLAUDE.md](../CLAUDE.md), and the open backlog is in [QUEUE.md](QUEUE.md).
 
+## Status (2026-10-24, book seed pass)
+
+- Book seed pass closed 2026-10-24, run from a cloud session: 24 C++ books (the user's own EPUB copies) mined in 87
+  chunks into `data/seeds/raw/book-*.json`; the merge gave 79 new seeds, 19 of them companion repos carrying about
+  120 book techniques (one `paper:book-<repo>-<technique>` record per technique whose code the repo carries). 26 seed
+  passes (`w{N}-mine-*`, each wave's own `today`) gave 82 new verified entries, all enriched (A 3, B 6, C 70, D 3;
+  wave 1 37, wave 11 12, wave 2 11, wave 5 5, wave 8 5, wave 6 3, wave 12 3, wave 4 2, wave 13 2, wave 9 1,
+  wave 14 1) and 73 no-evidence rows; book files, text and prompts stayed in the scratchpad. New category
+  `polymorphic-dispatch` (wave 1: CRTP, virtual call against dynamic_cast, Bendersky's virtual-vs-CRTP numbers).
+  oneTBB folded into its known wave 1 entry as evidence. RetroWrite's held enrichment was run, so every verified
+  entry is now enriched.
+- Rejects for invalid evidence: the AoWEP pointer-array branchless selection (its fast path adds pointers, not
+  values) and the GPU Programming with C++ and CUDA prime-test kernel (MQF precedent: clang 18's NVPTX backend
+  compiles `checkPrimeKernel` to a bare `ret` at -O1 and -O3, so the timed kernel does nothing).
+- Enricher retiers: serde_json and serde A to C (kostya Json rows are typed partial decodes against full DOM
+  builds, measured with an older toolchain than the README lists), CMSIS-NN B to C (one user issue; its 1.07x row
+  measures a -fno-builtin build handicap), libcoro A to C (asymmetric io_socket_st timing), Bazel B to C (wins only
+  against default-rules Make), STM32 LL C to D (its win is a Debug-build artifact), computed-goto dispatch C to D,
+  CMake unity builds C to B (independent j-jorge/unity-build runs, mixed results). liburing4cpp stays C but is not
+  faster like for like (its 105% row is asymmetric: the C baseline sets IOSQE_ASYNC on recv; POLL-RECV-SEND is
+  about 96.8% of C). Security bug recorded: uberlog's tsf no-argument fast path writes up to 2 bytes past a
+  200-byte stack buffer.
+- Lists: 3095 rendered entries (copyable 2827, reference 230, mixed 38; A 603, B 489, C 1740, D 263), 43 rejected,
+  102 categories; SEEDS_NO_EVIDENCE 693.
+
 ## Status (2026-10-13, seed sweep)
 
 - Seed sweep of the wave 13 and 14 enricher leads closed 2026-10-13: 13 seed groups across ten waves (w1-seed-c,

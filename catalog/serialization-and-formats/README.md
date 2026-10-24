@@ -4,13 +4,13 @@
 
 JSON, YAML, TOML, XML and binary-schema libraries measured against RapidJSON, nlohmann/json, Protobuf and the other usual defaults.
 
-**168 entries in 4 categories:** 57 tier A · 19 tier B · 87 tier C · 5 tier D
+**170 entries in 4 categories:** 57 tier A · 19 tier B · 89 tier C · 5 tier D
 
 | Category | Entries | A | B | C | D | What they beat |
 |---|--:|--:|--:|--:|--:|---|
 | [Binary schemas](binary-schemas/README.md) | 53 | 16 | 11 | 25 | 1 | Protobuf, FlatBuffers, Cap'n Proto, MessagePack |
-| [JSON](json/README.md) | 69 | 29 | 5 | 32 | 3 | RapidJSON, nlohmann/json, simdjson, serde_json, encoding/json |
-| [Reflection and code generation](reflection-and-codegen/README.md) | 13 | 3 | 1 | 8 | 1 | Boost.Serialization, cereal |
+| [JSON](json/README.md) | 70 | 29 | 5 | 33 | 3 | RapidJSON, nlohmann/json, simdjson, serde_json, encoding/json |
+| [Reflection and code generation](reflection-and-codegen/README.md) | 14 | 3 | 1 | 9 | 1 | Boost.Serialization, cereal |
 | [YAML, TOML and XML](yaml-toml-xml/README.md) | 33 | 9 | 2 | 22 | 0 | libyaml, yaml-cpp, toml++, libxml2, pugixml |
 
 ## Most-adopted tier A picks

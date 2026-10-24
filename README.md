@@ -4,7 +4,7 @@
 
 <!-- fastpp:badges -->
 <p align="center">
-  <img alt="verified entries: 3,093" src="https://img.shields.io/badge/verified_entries-3%2C093-2ea44f">
+  <img alt="verified entries: 3,095" src="https://img.shields.io/badge/verified_entries-3%2C095-2ea44f">
   <img alt="tier A: 603" src="https://img.shields.io/badge/tier_A-603-1f6feb">
   <img alt="categories: 102" src="https://img.shields.io/badge/categories-102-8250df">
   <img alt="claims rejected: 43" src="https://img.shields.io/badge/claims_rejected-43-cf222e">
@@ -21,7 +21,7 @@ other incumbents. Every entry names what it beats, quotes the published numbers,
 trusted, and writes down what goes wrong if you adopt it.
 
 <!-- fastpp:stats -->
-**3,093 entries** across **102 categories** in **14 domains** · 603 tier A · 489 tier B · 1,738 tier C · 263 tier D · 43 claims rejected
+**3,095 entries** across **102 categories** in **14 domains** · 603 tier A · 489 tier B · 1,740 tier C · 263 tier D · 43 claims rejected
 <!-- /fastpp:stats -->
 
 ## Find something faster
@@ -32,7 +32,7 @@ trusted, and writes down what goes wrong if you adopt it.
 | [**C++ standard library replacements**](catalog/stdlib-replacements/README.md) | 337 | [Math, SIMD and linear algebra](catalog/stdlib-replacements/math-simd-linear-algebra/README.md) 34 · [Sorting](catalog/stdlib-replacements/sorting/README.md) 29 · [Hash maps and sets](catalog/stdlib-replacements/hash-maps-sets/README.md) 28 · [Number parsing and formatting](catalog/stdlib-replacements/number-parsing-formatting/README.md) 22 · [Perfect hashing and static tables](catalog/stdlib-replacements/perfect-hash-static-tables/README.md) 21 · [Minimal perfect hash functions](catalog/stdlib-replacements/minimal-perfect-hash-functions/README.md) 20 · [Allocators](catalog/stdlib-replacements/allocators/README.md) 19 · [JSON serialization](catalog/stdlib-replacements/serialization-json/README.md) 17 · [+18 more](catalog/stdlib-replacements/README.md) |
 | [**Toolchain and build**](catalog/toolchain-and-build/README.md) | 42 | [Compile caching and distribution](catalog/toolchain-and-build/compile-caching-and-distribution/README.md) 12 · [Compilers and front ends](catalog/toolchain-and-build/compilers-frontends/README.md) 7 · [Build systems](catalog/toolchain-and-build/build-systems/README.md) 7 · [Formatters, linters and language servers](catalog/toolchain-and-build/formatters-linters-lsps/README.md) 6 · [Preprocessors and code generators](catalog/toolchain-and-build/preprocessors-and-codegen/README.md) 6 · [Linkers](catalog/toolchain-and-build/linkers/README.md) 4 |
 | [**Parsing and text**](catalog/parsing-and-text/README.md) | 102 | [Unicode and UTF-8](catalog/parsing-and-text/unicode-utf8/README.md) 23 · [CSV and tabular data](catalog/parsing-and-text/csv-tabular/README.md) 18 · [Text search and indexing](catalog/parsing-and-text/text-search-and-indexing/README.md) 15 · [Parser generators and combinators](catalog/parsing-and-text/parser-generators-and-combinators/README.md) 12 · [Regex engines](catalog/parsing-and-text/regex-engines/README.md) 12 · [HTML, Markdown and markup](catalog/parsing-and-text/markup-html-markdown/README.md) 11 · [Lexers and tokenizers](catalog/parsing-and-text/lexers-tokenizers/README.md) 11 |
-| [**Serialization and formats**](catalog/serialization-and-formats/README.md) | 168 | [JSON](catalog/serialization-and-formats/json/README.md) 69 · [Binary schemas](catalog/serialization-and-formats/binary-schemas/README.md) 53 · [YAML, TOML and XML](catalog/serialization-and-formats/yaml-toml-xml/README.md) 33 · [Reflection and code generation](catalog/serialization-and-formats/reflection-and-codegen/README.md) 13 |
+| [**Serialization and formats**](catalog/serialization-and-formats/README.md) | 170 | [JSON](catalog/serialization-and-formats/json/README.md) 70 · [Binary schemas](catalog/serialization-and-formats/binary-schemas/README.md) 53 · [YAML, TOML and XML](catalog/serialization-and-formats/yaml-toml-xml/README.md) 33 · [Reflection and code generation](catalog/serialization-and-formats/reflection-and-codegen/README.md) 14 |
 | [**Networking and servers**](catalog/networking-and-servers/README.md) | 186 | [HTTP servers and frameworks](catalog/networking-and-servers/http-servers-frameworks/README.md) 55 · [Event loops and async I/O](catalog/networking-and-servers/event-loops-io/README.md) 47 · [WebSocket, gRPC and RPC](catalog/networking-and-servers/websocket-grpc-rpc/README.md) 25 · [HTTP parsers](catalog/networking-and-servers/http-parsers/README.md) 25 · [DNS, QUIC and HTTP/3](catalog/networking-and-servers/dns-quic-http3/README.md) 18 · [TLS](catalog/networking-and-servers/tls/README.md) 16 |
 | [**Storage and data**](catalog/storage-and-data/README.md) | 237 | [Embedded key-value stores](catalog/storage-and-data/embedded-kv/README.md) 52 · [Probabilistic filters](catalog/storage-and-data/probabilistic-filters/README.md) 43 · [Caches](catalog/storage-and-data/caches/README.md) 40 · [Columnar analytics](catalog/storage-and-data/columnar-analytics/README.md) 38 · [Indexes](catalog/storage-and-data/indexes/README.md) 34 · [Message queues and logs](catalog/storage-and-data/message-queues-logs/README.md) 29 · [Database client drivers](catalog/storage-and-data/database-client-drivers/README.md) 1 |
 | [**Crypto and hashing**](catalog/crypto-and-hashing/README.md) | 122 | [Non-cryptographic hashes](catalog/crypto-and-hashing/non-crypto-hashes/README.md) 31 · [Encoding (base64, hex, CRC)](catalog/crypto-and-hashing/encoding/README.md) 26 · [Signatures and key exchange](catalog/crypto-and-hashing/signatures-kem/README.md) 23 · [AEAD and ciphers](catalog/crypto-and-hashing/aead-and-ciphers/README.md) 23 · [Cryptographic hashes](catalog/crypto-and-hashing/crypto-hashes/README.md) 19 |
@@ -117,9 +117,9 @@ run as 14 waves (one domain each) plus backfill passes that mined curated lists 
 flowchart LR
   S["Search agents<br/>959 reports"] --> M["Merge and dedup"]
   M --> V["Verifier agents<br/>1,231 batches"]
-  V --> E["Enrichment agents<br/>3,115 write-ups"]
-  E --> R["Retier checks and decisions<br/>142 retier files, 3,031 decisions"]
-  R --> C["Catalog<br/>3,093 entries"]
+  V --> E["Enrichment agents<br/>3,117 write-ups"]
+  E --> R["Retier checks and decisions<br/>143 retier files, 3,031 decisions"]
+  R --> C["Catalog<br/>3,095 entries"]
   V -. invalid evidence .-> X["Rejected<br/>43 claims"]
 ```
 <!-- /fastpp:pipeline -->

@@ -3,7 +3,7 @@
 <sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Serialization and formats](../README.md)</sub>
 
 **What these beat:** RapidJSON, nlohmann/json, simdjson, serde_json, encoding/json  
-**69 entries:** 29 tier A · 5 tier B · 32 tier C · 3 tier D · 67 copyable, 2 study only
+**70 entries:** 29 tier A · 5 tier B · 33 tier C · 3 tier D · 68 copyable, 2 study only
 
 | # | Project | What it is | Tier | Language | License | Status |
 |--:|---|---|:-:|---|---|---|
@@ -42,39 +42,40 @@
 | 33 | [**json_struct**](jorgen-json-struct.md) | Single-header C++11 JSON-to-struct binder; about 2.6x faster roundtrip than nlohmann/json on a third-party M1 benchmark. | **B** | C++ | HPND-sell-variant (study only) | 🟢 active |
 | 34 | [**Mison (speculative structural-index JSON parser)**](paper-mison-speculative-structural-index-json-parser.md) | VLDB 2017 JSON parser (no public code) that jumps straight to queried fields; reports 5.5-9.1x over best of RapidJSON/Jackson/Gson. | **B** | C++ | no license (study only) | ⚪ unknown |
 | 35 | [**orjson**](ijl-orjson.md) | CPython JSON extension in Rust (yyjson-backed parser) that serializes \~11-14x and parses \~2-6x faster than stdlib json. | **C** | Rust | MPL-2.0 AND (Apache-2.0 OR… | 🟢 active |
-| 36 | [**easyjson**](mailru-easyjson.md) | Go codegen tool producing reflection-free struct JSON marshalers; README (2016) shows \~2.8x marshal, \~5.7x unmarshal vs encoding/json. | **C** | Go | MIT | 🟢 active |
-| 37 | [**Coost co/json**](idealvin-coost-json.md) | JSON DOM module of the coost C++ base library; first-party numbers claim 1.4-3.6x faster parse/stringify than RapidJSON 1.1.0. | **C** | C++ | MIT | 🟢 active |
-| 38 | [**go-json**](goccy-go-json.md) | Import-swap replacement for Go's encoding/json; unmarshalled typed structs \~2x faster than encoding/json in one third-party benchmark. | **C** | Go | MIT | 🟢 active |
-| 39 | [**glaze**](stephenberry-glaze.md) | Header-only, C++23 reflection-based JSON (plus BEVE/CBOR/MessagePack/TOML/YAML/CSV) library; beats RapidJSON in first-party benchmarks. | **C** | C++ | MIT | 🟢 active |
-| 40 | [**fastjson (valyala)**](valyala-fastjson.md) | Pure-Go schemaless JSON parser/validator with a reusable zero-allocation value tree; \~4-15x faster than encoding/json (2019 numbers). | **C** | Go | MIT | 🟢 active |
-| 41 | [**reflect-cpp**](getml-reflect-cpp.md) | C++20 reflection serializer that reads JSON into structs through embedded yyjson; claims \~2x hand-written RapidJSON, \~10x nlohmann/json. | **C** | C++ | MIT | 🟢 active |
-| 42 | [**sonic-rs**](cloudwego-sonic-rs.md) | Serde-compatible Rust JSON library using SIMD; about 1.7-2.8x faster than serde_json at typed parsing on x86_64. | **C** | Rust | Apache-2.0 | 🟢 active |
-| 43 | [**jsoncons**](danielaparker-jsoncons.md) | Header-only C++ JSON/CBOR/MessagePack/BSON library whose DOM reads \~2x and writes \~2-4x faster than nlohmann/json in the author's benchmark. | **C** | C++ | BSL-1.0 | 🟢 active |
-| 44 | [**fastgron**](adamritter-fastgron.md) | C++20 simdjson-based CLI that flattens JSON into greppable gron assignments and back; \~50-80x faster than gron. | **C** | C++ | MIT | 🟢 active |
-| 45 | [**jiter**](pydantic-jiter.md) | Rust JSON parser from Pydantic: borrowed-string DOM, pull iterator and Python parser; \~2x serde_json::Value DOM throughput. | **C** | Rust | MIT | 🟢 active |
-| 46 | [**libjson (vincenthz)**](vincenthz-libjson.md) | Tiny interruptible SAX-style (callback) JSON parser and printer in C; its suite wins over nlohmann/json come from harness code. | **C** | C | LGPL-2.1-only OR… | 🟢 active |
-| 47 | [**NetJSON**](rpgmaker-netjson.md) | C# JSON serializer that emits per-type IL at runtime; \~3.4x faster serialization than Json.NET in a 2014 benchmark. | **C** | C# | MIT | 🟢 active |
-| 48 | [**ssrJSON**](antares0982-ssrjson.md) | SIMD C extension replacing CPython's json.dumps/loads; README claims 4-31x faster dumps and 2-8x faster loads. | **C** | C | MIT | 🟢 active |
-| 49 | [**metal-json**](brooooooklyn-metal-json.md) | Rust crate that parses JSON to a simdjson-format tape on Apple Silicon GPUs (Metal); beats C++ simdjson above \~4-5 MiB. | **C** | Rust | MIT | 🟢 active |
-| 50 | [**JsonFusion**](tucher-jsonfusion.md) | Header-only C++23 reflection-based JSON parser that parses, validates and fills your structs in one pass, beating RapidJSON plus hand-written mapping. | **C** | C++ | MIT | 🟢 active |
-| 51 | [**libjson (xnacly)**](xnacly-libjson.md) | Minimal pure-Go JSON parser with dot-path queries; parses about 2x faster than encoding/json into any by mutating input. | **C** | Go | MIT | 🟢 active |
-| 52 | [**libJSON (IgnacioPomar)**](ignaciopomar-libjson.md) | Learning-project C++17 JSON DOM (shared_ptr nodes) that parses and walks 1.25-1.42x faster than nlohmann/json in its author's benchmark. | **C** | C++ | Unlicense | 🟢 active |
-| 53 | [**simdjson-go**](minio-simdjson-go.md) | Go port of simdjson's SIMD parser for AVX2 amd64; builds a navigable tape 2.3-16.5x faster than encoding/json's interface{} decode. | **C** | Go | Apache-2.0 | 🟡 stale |
-| 54 | [**sonnet**](sugawarayuuta-sonnet.md) | Pure-Go rewrite of encoding/json with the same API; decodes typed structs about 4x faster than the stdlib in author benchmarks. | **C** | Go | BSD-3-Clause | 🟡 stale |
-| 55 | [**zimdjson**](ezequielramis-zimdjson.md) | Zig port of simdjson with streaming and reflection decoding; its On-Demand parser beats simdjson on 3 of 5 author benchmarks. | **C** | Zig | MIT | 🟡 stale |
-| 56 | [**jist**](adelamodwala-jist.md) | Rust CLI that pulls one value by exact key/index path from multi-GB JSON files, far faster than jq. | **C** | Rust | GPL-3.0 | 🟡 stale |
-| 57 | [**Tachyon JSON (Rust, TachyonConcepts)**](tachyonconcepts-tachyonjson.md) | Tiny unsafe Rust JSON writer for compile-time-constant objects into a fixed stack buffer; claims 8 ns vs serde_json's 23 ns. | **C** | Rust | MIT | 🟡 stale |
-| 58 | [**jsoniter (json-iterator/go)**](json-iterator-go.md) | Pure-Go encoding/json replacement with cached per-type codecs; \~1.8x faster typed-struct Unmarshal than encoding/json. Archived. | **C** | Go | MIT | 🔴 abandoned |
-| 59 | [**ffjson**](pquerna-ffjson.md) | Go code generator that emits static per-struct MarshalJSON/UnmarshalJSON methods to replace encoding/json's reflection-based codec. | **C** | Go | Apache-2.0 | 🔴 abandoned |
-| 60 | [**pikkr**](pikkr-pikkr.md) | Rust implementation of the Mison speculative JSON field extractor; pulls named fields 2-4x faster than serde_json in its benchmark. | **C** | Rust | MIT | 🔴 abandoned |
-| 61 | [**simdjson_nodejs**](luizperes-simdjson-nodejs.md) | Node.js N-API binding to C++ simdjson 0.9; lazyParse beats JSON.parse up to 2.3x by never building JS objects. | **C** | JavaScript | Apache-2.0 | 🔴 abandoned |
-| 62 | [**libdart**](target-libdart.md) | C++14 JSON library whose finalized flat binary packets parse 9.2x faster than nlohmann/json and read with zero parsing. | **C** | C++ | Apache-2.0 | 🔴 abandoned |
-| 63 | [**metajson (iod::metajson)**](iodcpp-metajson.md) | Header-only C++17 JSON codec for structs with compile-time-known shape; README claims up to 9x nlohmann/json, 2x RapidJSON. | **C** | C++ | MIT | 🔴 abandoned |
-| 64 | [**jbson**](chrismanning-jbson.md) | Header-only C++14 JSON-to-BSON parser; author's 2015 runs: 1.46x faster than JsonCpp on canada.json, 9x slower than RapidJSON. | **C** | C++ | BSL-1.0 | 🔴 abandoned |
-| 65 | [**libjson (SourceForge)**](sourceforge-net-projects-libjson.md) | Configurable C/C++ JSON DOM library with lazy parsing; about 1.09x faster than JsonCpp in one 2013 MSVC run. | **C** | C++ | BSD-2-Clause | 🔴 abandoned |
-| 66 | [**ujson (µjson)**](bitbucket-org-awangk-ujson.md) | Small C++11 UTF-8 JSON DOM library with an re2c scanner; parses about 2x and prints 3.5-4.5x faster than nlohmann/json 2.0.3. | **C** | C++ | MIT | 🔴 abandoned |
-| 67 | [**Sonic-Cpp**](bytedance-sonic-cpp.md) | Header-only SIMD JSON DOM parser and serializer for C++ with a RapidJSON-style API, about 2x RapidJSON on nativejson-benchmark files. | **D** | C++ | Apache-2.0 | 🟢 active |
-| 68 | [**json.h**](sheredom-json-h.md) | Public-domain single-header C/C++ JSON parser into one read-only allocation; out-parsed nlohmann/json v2.0.3 in a 2016 shootout. | **D** | C | Unlicense | 🟢 active |
-| 69 | [**qajson4c**](dehecht-qajson4c.md) | C99 JSON DOM parser building the whole tree in one caller-supplied buffer; claims lower parse memory than RapidJSON (unpublished). | **D** | C | MIT | 🔴 abandoned |
+| 36 | [**serde_json (typed, #[derive(Deserialize)])**](serde-rs-json.md) | Rust's standard JSON crate; typed derive decoding beat a RapidJSON DOM parse 1.4-1.8x in kostya's suite, but not simdjson. | **C** | Rust | MIT OR Apache-2.0 | 🟢 active |
+| 37 | [**easyjson**](mailru-easyjson.md) | Go codegen tool producing reflection-free struct JSON marshalers; README (2016) shows \~2.8x marshal, \~5.7x unmarshal vs encoding/json. | **C** | Go | MIT | 🟢 active |
+| 38 | [**Coost co/json**](idealvin-coost-json.md) | JSON DOM module of the coost C++ base library; first-party numbers claim 1.4-3.6x faster parse/stringify than RapidJSON 1.1.0. | **C** | C++ | MIT | 🟢 active |
+| 39 | [**go-json**](goccy-go-json.md) | Import-swap replacement for Go's encoding/json; unmarshalled typed structs \~2x faster than encoding/json in one third-party benchmark. | **C** | Go | MIT | 🟢 active |
+| 40 | [**glaze**](stephenberry-glaze.md) | Header-only, C++23 reflection-based JSON (plus BEVE/CBOR/MessagePack/TOML/YAML/CSV) library; beats RapidJSON in first-party benchmarks. | **C** | C++ | MIT | 🟢 active |
+| 41 | [**fastjson (valyala)**](valyala-fastjson.md) | Pure-Go schemaless JSON parser/validator with a reusable zero-allocation value tree; \~4-15x faster than encoding/json (2019 numbers). | **C** | Go | MIT | 🟢 active |
+| 42 | [**reflect-cpp**](getml-reflect-cpp.md) | C++20 reflection serializer that reads JSON into structs through embedded yyjson; claims \~2x hand-written RapidJSON, \~10x nlohmann/json. | **C** | C++ | MIT | 🟢 active |
+| 43 | [**sonic-rs**](cloudwego-sonic-rs.md) | Serde-compatible Rust JSON library using SIMD; about 1.7-2.8x faster than serde_json at typed parsing on x86_64. | **C** | Rust | Apache-2.0 | 🟢 active |
+| 44 | [**jsoncons**](danielaparker-jsoncons.md) | Header-only C++ JSON/CBOR/MessagePack/BSON library whose DOM reads \~2x and writes \~2-4x faster than nlohmann/json in the author's benchmark. | **C** | C++ | BSL-1.0 | 🟢 active |
+| 45 | [**fastgron**](adamritter-fastgron.md) | C++20 simdjson-based CLI that flattens JSON into greppable gron assignments and back; \~50-80x faster than gron. | **C** | C++ | MIT | 🟢 active |
+| 46 | [**jiter**](pydantic-jiter.md) | Rust JSON parser from Pydantic: borrowed-string DOM, pull iterator and Python parser; \~2x serde_json::Value DOM throughput. | **C** | Rust | MIT | 🟢 active |
+| 47 | [**libjson (vincenthz)**](vincenthz-libjson.md) | Tiny interruptible SAX-style (callback) JSON parser and printer in C; its suite wins over nlohmann/json come from harness code. | **C** | C | LGPL-2.1-only OR… | 🟢 active |
+| 48 | [**NetJSON**](rpgmaker-netjson.md) | C# JSON serializer that emits per-type IL at runtime; \~3.4x faster serialization than Json.NET in a 2014 benchmark. | **C** | C# | MIT | 🟢 active |
+| 49 | [**ssrJSON**](antares0982-ssrjson.md) | SIMD C extension replacing CPython's json.dumps/loads; README claims 4-31x faster dumps and 2-8x faster loads. | **C** | C | MIT | 🟢 active |
+| 50 | [**metal-json**](brooooooklyn-metal-json.md) | Rust crate that parses JSON to a simdjson-format tape on Apple Silicon GPUs (Metal); beats C++ simdjson above \~4-5 MiB. | **C** | Rust | MIT | 🟢 active |
+| 51 | [**JsonFusion**](tucher-jsonfusion.md) | Header-only C++23 reflection-based JSON parser that parses, validates and fills your structs in one pass, beating RapidJSON plus hand-written mapping. | **C** | C++ | MIT | 🟢 active |
+| 52 | [**libjson (xnacly)**](xnacly-libjson.md) | Minimal pure-Go JSON parser with dot-path queries; parses about 2x faster than encoding/json into any by mutating input. | **C** | Go | MIT | 🟢 active |
+| 53 | [**libJSON (IgnacioPomar)**](ignaciopomar-libjson.md) | Learning-project C++17 JSON DOM (shared_ptr nodes) that parses and walks 1.25-1.42x faster than nlohmann/json in its author's benchmark. | **C** | C++ | Unlicense | 🟢 active |
+| 54 | [**simdjson-go**](minio-simdjson-go.md) | Go port of simdjson's SIMD parser for AVX2 amd64; builds a navigable tape 2.3-16.5x faster than encoding/json's interface{} decode. | **C** | Go | Apache-2.0 | 🟡 stale |
+| 55 | [**sonnet**](sugawarayuuta-sonnet.md) | Pure-Go rewrite of encoding/json with the same API; decodes typed structs about 4x faster than the stdlib in author benchmarks. | **C** | Go | BSD-3-Clause | 🟡 stale |
+| 56 | [**zimdjson**](ezequielramis-zimdjson.md) | Zig port of simdjson with streaming and reflection decoding; its On-Demand parser beats simdjson on 3 of 5 author benchmarks. | **C** | Zig | MIT | 🟡 stale |
+| 57 | [**jist**](adelamodwala-jist.md) | Rust CLI that pulls one value by exact key/index path from multi-GB JSON files, far faster than jq. | **C** | Rust | GPL-3.0 | 🟡 stale |
+| 58 | [**Tachyon JSON (Rust, TachyonConcepts)**](tachyonconcepts-tachyonjson.md) | Tiny unsafe Rust JSON writer for compile-time-constant objects into a fixed stack buffer; claims 8 ns vs serde_json's 23 ns. | **C** | Rust | MIT | 🟡 stale |
+| 59 | [**jsoniter (json-iterator/go)**](json-iterator-go.md) | Pure-Go encoding/json replacement with cached per-type codecs; \~1.8x faster typed-struct Unmarshal than encoding/json. Archived. | **C** | Go | MIT | 🔴 abandoned |
+| 60 | [**ffjson**](pquerna-ffjson.md) | Go code generator that emits static per-struct MarshalJSON/UnmarshalJSON methods to replace encoding/json's reflection-based codec. | **C** | Go | Apache-2.0 | 🔴 abandoned |
+| 61 | [**pikkr**](pikkr-pikkr.md) | Rust implementation of the Mison speculative JSON field extractor; pulls named fields 2-4x faster than serde_json in its benchmark. | **C** | Rust | MIT | 🔴 abandoned |
+| 62 | [**simdjson_nodejs**](luizperes-simdjson-nodejs.md) | Node.js N-API binding to C++ simdjson 0.9; lazyParse beats JSON.parse up to 2.3x by never building JS objects. | **C** | JavaScript | Apache-2.0 | 🔴 abandoned |
+| 63 | [**libdart**](target-libdart.md) | C++14 JSON library whose finalized flat binary packets parse 9.2x faster than nlohmann/json and read with zero parsing. | **C** | C++ | Apache-2.0 | 🔴 abandoned |
+| 64 | [**metajson (iod::metajson)**](iodcpp-metajson.md) | Header-only C++17 JSON codec for structs with compile-time-known shape; README claims up to 9x nlohmann/json, 2x RapidJSON. | **C** | C++ | MIT | 🔴 abandoned |
+| 65 | [**jbson**](chrismanning-jbson.md) | Header-only C++14 JSON-to-BSON parser; author's 2015 runs: 1.46x faster than JsonCpp on canada.json, 9x slower than RapidJSON. | **C** | C++ | BSL-1.0 | 🔴 abandoned |
+| 66 | [**libjson (SourceForge)**](sourceforge-net-projects-libjson.md) | Configurable C/C++ JSON DOM library with lazy parsing; about 1.09x faster than JsonCpp in one 2013 MSVC run. | **C** | C++ | BSD-2-Clause | 🔴 abandoned |
+| 67 | [**ujson (µjson)**](bitbucket-org-awangk-ujson.md) | Small C++11 UTF-8 JSON DOM library with an re2c scanner; parses about 2x and prints 3.5-4.5x faster than nlohmann/json 2.0.3. | **C** | C++ | MIT | 🔴 abandoned |
+| 68 | [**Sonic-Cpp**](bytedance-sonic-cpp.md) | Header-only SIMD JSON DOM parser and serializer for C++ with a RapidJSON-style API, about 2x RapidJSON on nativejson-benchmark files. | **D** | C++ | Apache-2.0 | 🟢 active |
+| 69 | [**json.h**](sheredom-json-h.md) | Public-domain single-header C/C++ JSON parser into one read-only allocation; out-parsed nlohmann/json v2.0.3 in a 2016 shootout. | **D** | C | Unlicense | 🟢 active |
+| 70 | [**qajson4c**](dehecht-qajson4c.md) | C99 JSON DOM parser building the whole tree in one caller-supplied buffer; claims lower parse memory than RapidJSON (unpublished). | **D** | C | MIT | 🔴 abandoned |
 
 <sub>Tiers: **A** reproducible public benchmark (code, compiler, flags and CPU stated) · **B** independent or peer-reviewed measurement · **C** first-party claim · **D** directional, no numbers. Status: 🟢 active · 🔵 finished · 🟡 slow or stale · 🔴 abandoned · ⚪ unknown. *Study only* means no usable open-source license: read the idea, don't copy the code.</sub>

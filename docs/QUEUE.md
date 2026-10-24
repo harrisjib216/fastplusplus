@@ -1,16 +1,13 @@
 # Queue: extensions saved for the end
 
-## Unfinished work (resume here first; updated 2026-10-13)
+## Unfinished work (resume here first; updated 2026-10-24)
 
 This section is the open backlog from the main wave loop. It is not an extension; run it before the
 extension passes further down. Waves 1-14 are closed (see docs/build-log.md); extensions 2-4 below are done. The backlog seed sweep of
 2026-10-07 seeded every uncatalogued lead with a reachable repo from waves 8-12 (29 projects, 22 verified,
 4 duplicates), so what remains here is blocked on the environment or on the user:
 
-1. **RetroWrite (wave 11) enrichment**: `data/wave11/enrich/prompts/github_com_hexhive_retrowrite.txt` has no
-   `enrich/raw` file because its enricher was stopped by a safety classifier mid-write on 2026-10-06. Ask the
-   user before relaunching; when relaunched, run `render_lists.py` again so the "missing enrichment" note clears.
-2. **Paper-access retiers** (need an environment that reaches arXiv, ACM, IEEE, Springer, usenix, Dagstuhl,
+1. **Paper-access retiers** (need an environment that reaches arXiv, ACM, IEEE, Springer, usenix, Dagstuhl,
    IACR ePrint, openproceedings, TUM, Saarland, STFC and the other hosts named in each wave's leads.md): wave 8
    (ttm, costa, pargeo, nicslu, spral, openequivariance, wrs, m4ri, amgt, tilespmv, kokkos-kernels, gpunufft,
    avxbls-sig ePrint 2026/947, SpLLT STFC papers, plus the older list in `data/wave8/leads.md`); wave 9 (h0_bv,
@@ -22,10 +19,10 @@ extension passes further down. Waves 1-14 are closed (see docs/build-log.md); ex
    SPDK); wave 12 (Instrew VEE'21, TPDE, Box64 EuroSys, aWsm, WARP, rv32emu VMIL, HHVM, Deegen, Pallene, YJIT,
    Wizard OOPSLA 2022 paper, mutable EDBT 2023 and ADC 2023 arXiv 2311.04692, Higgs arXiv 1507.02437, weval PLDI,
    riscv-sbt, Segue/ColorGuard ASPLOS 2025, LC thesis cross-check).
-3. **Thin-yield searches queued for a re-run** from an environment that reaches HN Algolia, news.ycombinator.com
+2. **Thin-yield searches queued for a re-run** from an environment that reaches HN Algolia, news.ycombinator.com
    and personal blogs: the b7/b8 assignments of waves 8-12 (`w{8..12}-*-{blogs,hn}`), which ran on WebSearch
    snippets plus github.com.
-4. **Seed leads still unseeded** (no reachable repo, or surfaced after the sweep): wave 8 gMAGNUS (no repo), AVXPoS
+3. **Seed leads still unseeded** (no reachable repo, or surfaced after the sweep): wave 8 gMAGNUS (no repo), AVXPoS
    (ePrint 2026/1827, repo not found); wave 9 emmanuel-marty/em_inflate, smalLZ4, jibsen/blz4, LZ4X, Apple LZMESH
    (no repo), Tessil/sparse-map and other hash-map leads (wave 1 backfill), aditya12agd5/cuda_bzip2; wave 10 Vship
    (codeberg, blocked), Getreuer IPOL survey (ipol.im blocked), BlazeDiff (teimurjan/blazediff), ESP32_JPEG
@@ -33,24 +30,23 @@ extension passes further down. Waves 1-14 are closed (see docs/build-log.md); ex
    Biotite (repos unknown), ClangJIT, Pycket (pycket/pycket), QMDB (LayerZero-Labs/qmdb, wave 5), asllvm (no
    numbers), Hazelight StaticJIT (gated). Repo_url overrides to consider: kostya/topaz (the fork that was measured),
    lmcad-unicamp/riscv-sbt (redirect), mpsops/mps-flash-attention (moved, folded into metal-flash-attention).
-5. **Harness re-runs that would settle disputes** (need a build machine): HarfBuzz benchmark-shape with
+4. **Harness re-runs that would settle disputes** (need a build machine): HarfBuzz benchmark-shape with
    -Dkbts=enabled on kb v2.28, pillow-lunasvg against a release-profile resvg, libblur and kornia-rs against a
    pinned OpenCV build, bcn_decoder_tester on current bcdec and ConvectionKernels, ThePhD/lua-bindings-shootout for
    LuaBridge3 vs sol2, a JIT_NO_SUSPEND run of the AngelScript JIT, kvmserver's Wasmtime and isolated-vm groups for
    TinyKVM, a randomised-key memtier run for bluebox, an AVX2 randompack build for zurand.
-6. **Cross-wave leads from wave 12 enrichers** (seed candidates for the named waves): radfordneal/xsum and
+5. **Cross-wave leads from wave 12 enrichers** (seed candidates for the named waves): radfordneal/xsum and
    radfordneal/matprod (wave 8 numerics), 6/qj (wave 4 json), eBay/tsv-utils (wave 3 csv-tabular), Turso Rust
    SQLite rewrite and QMDB (wave 5 databases), ml-rust/splintr (tokenizers), lmcad-unicamp/MOSFHET (crypto),
    klippa-app/go-pdfium wazero-vs-wazy benchmark (wasm cross-check).
-7. **Usage-limit lesson:** 15-20 Opus or Sonnet agents at once exhausted the session limit on 2026-10-02 and
+6. **Usage-limit lesson:** 15-20 Opus or Sonnet agents at once exhausted the session limit on 2026-10-02 and
    again on 2026-10-06 (nine enrichers killed mid-run; their complete output files were kept). 8-12 at a time,
    recording each report before launching more, runs a full day without a kill.
-8. **Book mining** (started 2026-10-24): 24 C++ books (EPUB) mined in 87 chunks into
-   `data/seeds/raw/book-*.json`; the merge gave 79 new seeds, 19 of them book-technique repos (mostly Packt
-   companion repos, about 120 techniques). 26 seed passes registered (`w{N}-mine-*`, group 4, each wave's own
-   `today`): w1-mine-ah..am, w2-mine-d..f, w3-mine-j, w4-mine-n, w5-mine-t..u, w6-mine-j..k, w7-mine-f,
-   w8-mine-o, w9-mine-f, w10-mine-u, w11-mine-p..s, w12-mine-h, w13-mine-a, w14-mine-a. Open: run them, then
-   merge, verify, enrich and render per wave. More books: section F, "Books".
+7. **Book mining** (done 2026-10-24): 24 C++ books (EPUB) mined in 87 chunks into
+   `data/seeds/raw/book-*.json`; 79 new seeds, 19 of them book-technique repos (about 120 techniques), run as 26
+   seed passes (`w{N}-mine-*`) and closed through verify, enrich and render: 82 verified, 73 no-evidence rows, 2
+   rejects (see docs/build-log.md). Open: techniques with numbers but no public code stay in the raw files with
+   `repo_url` null for a later pass; more books go through section F, "Books".
 
 Closed waves, for reference: wave 8 (398 then 401 verified), wave 9 (136 then 141), wave 10 (254 then 265),
 wave 11 (144 then 145), wave 12 (220 then 227), wave 13 (303), wave 14 (274); details in docs/build-log.md.
@@ -59,7 +55,7 @@ Added 2026-10-13: paper-access retiers for waves 13-14 (Savina TACO 2023, Rewrit
 arXiv 2502.15536, ixy ANCS 2019, Perceus TR cross-check) and the seed leads in `data/wave13/leads.md` and
 `data/wave14/leads.md` (zipgrep, megadepth, sylph, zimdjson, Singeli, copia, armeria, hunt-rs, uutils/findutils,
 noodles, dSFMT, zspell, sroar, zawk, qulacs, block-aligner, Verstable, daachorse, redcon.c, gnet, Dart AOT and Free
-Pascal benchLANG/compiler-benchmark rows, and others) join items 2 and 4 above.
+Pascal benchLANG/compiler-benchmark rows, and others) join items 1 and 3 above.
 
 ## Presentation: make the repo beautiful and useful for agents (added 2026-10-03)
 

@@ -136,6 +136,9 @@ Merging and ids:
   record's identity.
 - Decision ids must match merged ids exactly (lowercase canonical URL). Build decision and retier ids from the
   enrich/raw file's own `id` field rather than retyping them.
+- A seed record at a moved repo's old URL (oneapi-src/oneTBB, listed as uxlfoundation/oneTBB) is not caught as
+  known: set its `repo_url` to the listed URL and `is_evidence_for_known` true in the raw file before merging, so
+  merge.py files it in `evidence_for_known.json` instead of creating a second entry.
 
 Decisions and retiers:
 
@@ -149,7 +152,10 @@ Decisions and retiers:
 - More reject precedents: an interpreter that pattern-matches the benchmark's function names and replaces them with
   native loops (R8/NoClip), a compile row that hits an in-memory cache (wazero via the PolkaVM benchtool), a RegExp
   fast path that never runs a regex (Pipa), design targets presented as measurements (r8e) and a hard-coded speedup
-  table (zig-evm).
+  table (zig-evm), a GPU kernel the compiler reduces to a bare `ret` (the CUDA prime-test book kernel; with no nvcc,
+  check with clang's NVPTX backend: `clang++ -x cuda --cuda-device-only -nocudainc -nocudalib --cuda-gpu-arch=sm_70
+  -O3 -S` plus a small shim defining `__global__` and `threadIdx`) and a branchless fast path that adds pointers
+  instead of values (AoWEP pointer-array selection).
 - Downgrade precedents: third-party numbers measured before a hot-path correctness fix (Paserati #550), a tuned fork
   measured in place of upstream (Topaz), a baseline crippled by a build default (AssemblyScript's tsc
   useDefineForClassFields), cross-run or cross-container comparisons (LangArena rows before a harness change,
@@ -181,6 +187,11 @@ Running agents:
   shortcomings from its gotchas and status_note fields, and relaunch only the missing partner (as a single-prompt
   pair-NNNb variant). An agent that never reports and whose raw file is missing or stale needs a relaunch.
 - Default search assignments to a C++ language filter; "any"-language passes are extra coverage.
+- Book-derived records (`paper:book-<repo>-<technique>`): verifiers and enrichers judge from the companion repo and
+  never look for or quote the book; the book's own timings are tier C at most.
+- An agent's shell can reset its working directory to the repo root mid-run, so a relative download path lands in
+  the checkout; harness notes tell agents to save every fetched file by absolute scratch path, and `git status` after
+  each report catches the rest.
 
 Dates and rendering:
 
@@ -188,6 +199,11 @@ Dates and rendering:
   Render seed prompts for a closed wave with its original `today`.
 - `render_lists.py` writes `catalog/` (pages per domain, category and entry, JSONL and CSV) and the README's marked
   blocks; CI fails if a fresh render differs from the commit, so re-render before every data commit.
+- While enrichers are still writing, render in a scratch copy of the checkout with their in-flight enrich/raw drafts
+  removed and copy `catalog/` and `README.md` back, so the commit matches CI's fresh render of the committed files.
+- `render_lists.py` exits when a category has no title in `pipeline/catalog_meta.py` CATEGORY_TITLES; add the title
+  when a verifier or override creates a category (polymorphic-dispatch), and check the render's exit code rather
+  than piping it through a filter that hides it.
 
 ## Status
 

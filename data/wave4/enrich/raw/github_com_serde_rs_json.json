@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/serde-rs/json",
+  "one_liner": "Rust's standard JSON crate; typed derive decoding beat a RapidJSON DOM parse 1.4-1.8x in kostya's suite, but not simdjson.",
+  "what_it_does": "serde_json is the JSON format for Rust's serde framework. from_str, from_slice and from_reader parse JSON into any type that implements serde::Deserialize, usually a #[derive(Deserialize)] struct, or into the untyped serde_json::Value tree; to_string, to_vec and to_writer serialize. It is one of the most used Rust crates (about 1.49 billion crates.io downloads) and has no C API, so a C++ program can reach it only through an FFI shim or a separate process. Typed decoding is a different interface from a RapidJSON Document: the Rust type is the schema.",
+  "how_it_is_fast": "On the typed path no tree is built. serde_derive generates a field-name match and a visitor for each struct, and serde_json's recursive-descent Deserializer calls them while it scans. Keys the struct does not name are skipped by ignore_value, which keeps an explicit bracket stack and allocates nothing, and strings without escapes come back as slices borrowed from the input. Strings are scanned with a SWAR (Mycroft-style word-at-a-time) test for quote, backslash and control bytes, or with memchr2 where control bytes are allowed. Whitespace is skipped one byte at a time and there is no SIMD stage (issue #120, 'SIMD vectorization behind a feature flag', open since 2016). Floats take a best-effort path by default: the u64 significand is cast to f64, then multiplied or divided by one power-of-ten table entry. Exact parsing (the float_roundtrip feature, a vendored lexical port) is opt-in and costs about 2x on floats. Output uses itoa for integers and, since 1.0.147, the Żmij float formatter in place of Ryū.",
+  "when_to_use": [
+    "Rust code that decodes JSON with a known schema into structs, especially large documents where only a few fields matter. Unknown keys are skipped without allocating: in kostya's test the derived three-field struct added 11.12 MiB of RSS, against 123.44 MiB for RapidJSON's DOM (g++).",
+    "Folding huge arrays without materializing them. A hand-written Visitor hooked in with #[serde(deserialize_with)] or a DeserializeSeed processed 524,288 objects in 0.103 s with 0.00 MiB extra RSS (kostya's Serde Custom row).",
+    "Input that is already in memory. Call from_str or from_slice on a buffer. In issue #160 a 23 MiB file took 4710 ms with unbuffered from_reader, 562 ms with a BufReader, and 55 ms with from_str or from_slice.",
+    "Portable or embedded Rust builds. The crate is pure Rust with no target-specific intrinsics, picks 64-bit limb arithmetic on 64-bit targets in build.rs, and supports no_std plus alloc (default-features = false, features = [\"alloc\"])."
+  ],
+  "when_not_to_use": [
+    "A C++ codebase that wants faster JSON. On the same kostya test, simdjson On-Demand (0.060 s with g++) and DAW JSON Link (0.085-0.089 s) beat Serde Typed (0.110 s) natively, and simdjson DOM (0.103-0.107 s) ties it.",
+    "Dynamic or untyped JSON. serde_json::Value took 0.557 s and added 839.75 MiB in kostya's test, 2.9x-3.6x slower than RapidJSON's DOM (derived from page data). Value objects are a BTreeMap<String, Value> with owned keys (an IndexMap with preserve_order), and issue #635 reports Value using more than 10x the input size in memory.",
+    "Rust code where raw parse throughput is the bottleneck. sonic-rs's README (Xeon Platinum 8260) shows twitter.json struct decoding at 0.708 ms for sonic_rs::from_slice_unchecked, against 1.384 ms for serde_json::from_str and 2.290 ms for serde_json::from_slice, and canada.json to a DOM at 4.957 ms against 16.980 ms.",
+    "Data that must round-trip floats exactly, unless you enable float_roundtrip. The default parser is best-effort, and the feature costs about 2x on float parsing per the crate's Cargo.toml.",
+    "Unbuffered streaming Read sources. from_reader adds no buffering of its own and is the slowest entry point (issue #160 is still open)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "serde_core (>= 1.0.220), itoa, memchr, zmij; optional indexmap and foldhash for preserve_order. User code adds serde with the derive feature for typed decoding.",
+    "min_toolchain": "Rust 1.71 (rust-version of 1.0.150-1.0.154; 1.0.142, the version measured in kostya's suite, declared 1.56)",
+    "platforms": "Any Rust target, with no SIMD intrinsics and no CPU-feature requirement; std, or no_std with alloc",
+    "thread_safety": "Not documented. Each Deserializer or Serializer is a single-threaded cursor over its own input, and the source files read (de.rs, read.rs, ser.rs, value/mod.rs) have no global mutable state, so independent parses can run on separate threads.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Nesting depth is capped at 128 (remaining_depth) and deeper input returns an error. Turning the cap off with disable_recursion_limit needs the unbounded_depth feature plus a stack guard such as serde_stacker. The maintainer closed issue #1327, a stack overflow from comparing Values nested 100,000 deep, as not a serde_json vulnerability, pointing to the 128 limit on parsed data.",
+    "Default float parsing rounds twice (cast the significand, then multiply or divide by POW10), so values with 16-17 significant digits, like the random doubles kostya's generator writes, can come out 1-2 ULP off (an earlier enricher's emulation found this for about 35% of x values). Serialization switched from Ryū to Żmij in 1.0.147, which changed some output strings (issues #1309 and #1340 are open).",
+    "from_str trusts the UTF-8 of its &str (StrRead uses str::from_utf8_unchecked), while from_slice validates strings during the parse and is slower: 2.290 ms against 1.384 ms on twitter.json struct decoding in sonic-rs's README. In kostya's harness the UTF-8 check runs in fs::read_to_string before the timer starts. That is no advantage over default RapidJSON, whose default flags (kParseNoFlags) leave kParseValidateEncodingFlag off, but it matters against parsers that validate inside the timed region.",
+    "#[serde(flatten)], untagged enums and internally tagged enums buffer each value in serde's private Content tree, which costs allocations and breaks arbitrary_precision (issues #721 and #1108) and 128-bit integers inside untagged enums (#740). Unknown fields are ignored silently unless the struct has #[serde(deny_unknown_fields)]."
+  ],
+  "pick_this_over_siblings_when": "Pick serde_json when you write Rust and want the ecosystem default: typed derive decoding, no target-specific code, and the widest format and crate interoperability. If the parse itself is the bottleneck, sonic-rs and simd-json (Rust) are faster per their READMEs. A C++ project should use simdjson or yyjson natively rather than cross an FFI to reach serde_json.",
+  "verified_claims_summary": "In kostya/benchmarks' Json test, the rows were measured on 2025-08-17 on an Intel Xeon E-2324G in a Debian trixie/sid Docker image with Rust 1.89.0, serde_json 1.0.142, LTO and target-cpu=native, and carried unchanged into the 2026-07-19 README. serde_json::from_str into a derived struct holding only x, y and z took 0.110 s (0.103 s with a folding visitor), against 0.154 s (g++ 14.2.0) and 0.194 s (clang++ 19.1.7, libc++) for a full RapidJSON DOM parse and 1.182-1.266 s for nlohmann/json. The work is unequal: typed skipping against full DOM builds, with C++ built without -DNDEBUG and RapidJSON without its SSE paths, though serde_json's whitespace skipping is scalar too. The like-for-like serde_json::Value row took 0.557 s, slower than RapidJSON.",
+  "status_note": "Actively maintained (1.0.154 released 2026-10-11, last commit 2026-10-16), MIT OR Apache-2.0, about 1.49 billion crates.io downloads; usable from C++ only across an FFI or process boundary.",
+  "sources_read": [
+    "https://github.com/serde-rs/json",
+    "https://raw.githubusercontent.com/serde-rs/json/HEAD/README.md",
+    "https://raw.githubusercontent.com/serde-rs/json/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/serde-rs/json/HEAD/build.rs",
+    "https://raw.githubusercontent.com/serde-rs/json/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/serde-rs/json/HEAD/src/de.rs",
+    "https://raw.githubusercontent.com/serde-rs/json/HEAD/src/read.rs",
+    "https://raw.githubusercontent.com/serde-rs/json/HEAD/src/ser.rs",
+    "https://raw.githubusercontent.com/serde-rs/json/HEAD/src/value/mod.rs",
+    "https://raw.githubusercontent.com/serde-rs/json/HEAD/src/map.rs",
+    "https://raw.githubusercontent.com/serde-rs/json/HEAD/src/number.rs",
+    "https://github.com/serde-rs/json/releases",
+    "https://github.com/serde-rs/json/commits/master",
+    "https://github.com/serde-rs/json/issues?q=is%3Aissue+label%3Aperformance",
+    "https://github.com/serde-rs/json/issues?q=is%3Aissue+is%3Aopen+float",
+    "https://github.com/serde-rs/json/issues?q=is%3Aissue+stack+overflow+OR+recursion+OR+duplicate+key",
+    "https://github.com/serde-rs/json/issues/160",
+    "https://github.com/serde-rs/json/issues/635",
+    "https://github.com/serde-rs/json/issues/1327",
+    "https://crates.io/api/v1/crates/serde_json",
+    "https://raw.githubusercontent.com/serde-rs/json-benchmark/master/README.md",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/README.md",
+    "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/README.md",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/Cargo.toml",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/Cargo.lock",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/src/json_struct.rs",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/src/json_pull.rs",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/json.rs/src/json_value.rs",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/test_rapid.cpp",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/generate_json.rb",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/json/Makefile",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/common/commands.mk",
+    "https://raw.githubusercontent.com/Tencent/rapidjson/master/include/rapidjson/reader.h",
+    "https://raw.githubusercontent.com/cloudwego/sonic-rs/main/README.md"
+  ],
+  "confidence": 0.8
+}
