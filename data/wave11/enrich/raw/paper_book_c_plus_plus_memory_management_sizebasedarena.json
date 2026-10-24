@@ -1,0 +1,50 @@
+{
+  "id": "paper:book-c-plus-plus-memory-management-sizebasedarena",
+  "one_liner": "Per-class bump arena behind class-specific operator new/delete; book run shows about 1.3x faster construction than new/delete.",
+  "what_it_does": "SizeBasedArena<T, N> is a singleton that mallocs room for N objects of type T once and hands out consecutive sizeof(T) slots. A class opts in by overloading its own operator new/delete (and new[]/delete[]) to call the arena, so call sites keep writing new Orc and delete p unchanged. The chapter10 programs build up to it in steps: a hand-written Tribe arena reached through a Meyers singleton, the same with a global static singleton, the templated SizeBasedArena, and a safer variant that requires T to be final.",
+  "how_it_is_fast": "Allocation is a pointer bump (cur += sizeof(T)) under a std::mutex, with no size-class lookup, no per-object header and no call into malloc after the first one. Deallocation is an empty function, so freeing is free; the global-singleton variant lets the compiler delete the whole free loop, which is where the book's 0 us delete figure comes from. Objects are packed contiguously at sizeof(T) stride (16 bytes for Orc), so the timed loop touches fewer fresh pages than glibc's header-carrying chunks.",
+  "when_to_use": [
+    "Single-class, allocate-many-then-drop-all phases (a level's entities, a parse tree, a batch job) with a known lifetime cap on the number of objects created.",
+    "Retrofitting an existing class whose call sites use plain new/delete, by adding four class-level operator overloads.",
+    "Teaching or prototyping region allocation before moving to a production arena such as std::pmr::monotonic_buffer_resource."
+  ],
+  "when_not_to_use": [
+    "Any workload that creates more than N objects over the program's life, even if few are alive at once: delete never returns space and allocate_one has no bounds check, so object N+1 writes past the malloc'd buffer.",
+    "Class hierarchies: operator new ignores its size argument and hands out sizeof(T) slots, so a larger derived class overruns the next slot unless you use the -safer variant (static_assert(std::is_final_v<T>)).",
+    "Multithreaded hot allocation paths: every allocation takes the arena's single std::mutex.",
+    "Memory-sensitive code: N * sizeof(T) bytes (16 MB for 1,000,000 Orcs) are reserved up front and released only when the singleton dies at program exit.",
+    "Anything that needs a general allocator; it serves one type and is a book example, not a maintained library."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (standard library <mutex>, <cstdlib>, <cassert>; <type_traits> for the safer variant)",
+    "min_toolchain": "C++17 for the arena (class template argument deduction in std::lock_guard, std::is_final_v in the safer variant); the test drivers use C++23 <print>. Book build was online gcc 15 at -O2 per the record.",
+    "platforms": "any (portable standard C++ over std::malloc)",
+    "thread_safety": "allocate_one/allocate_n are serialised by one std::mutex; the Meyers-singleton construction is thread-safe function-local static initialisation; deallocate is a no-op.",
+    "drop_in_for_baseline": "partial — call sites keep new/delete unchanged for the one class that overloads its operators, but delete never frees and capacity is fixed at N objects for the whole run"
+  },
+  "gotchas": [
+    "No exhaustion check: past N lifetime allocations the arena silently hands out memory beyond its buffer (heap overflow), unlike a pool that falls back to ::operator new.",
+    "Array new differs by variant: the Tribe versions' operator new[] is assert(false) with no return statement (undefined behaviour under NDEBUG); SizeBasedArena's version computes n / sizeof(T) and so assumes the compiler adds no array cookie, which holds only for trivially destructible T such as Orc.",
+    "Singleton choice changes timing: with the Meyers singleton the 16 MB malloc happens inside the first timed new and every call pays a static-guard check (the 638 us delete loop); the global static member avoids both but is exposed to static initialisation order if another translation unit's static initialiser news the class.",
+    "The book's delete comparison is glibc free() against an empty function the optimiser can drop, so the 8.03% and 0 us delete ratios measure doing nothing, not a faster free."
+  ],
+  "pick_this_over_siblings_when": "Pick it when you want the smallest possible per-class arena with unchanged call sites; ArenaAllocator (privateMwb) has a real benchmark against std::pmr::monotonic_buffer_resource, and obstack (cleeus) or fast-alloc are better choices when you need arena or pool code with published measurements.",
+  "verified_claims_summary": "In the book's single run (online gcc 15, -O2 per the record, CPU not stated), constructing 1,000,000 16-byte Orc objects took 23,433 us through libstdc++ operator new (glibc malloc) versus 17,906 us (Meyers-singleton arena) and 17,573 us (global-singleton arena), about 1.3x; destroying them took 7,943 us with free() versus 638 us and 0 us for the arena's no-op delete. The repo carries the five driver programs (identical loops, only the operator overloads differ) but no results, build line or CPU, and the arena side still pays a mutex per allocation and first-touch page faults inside the timed loop.",
+  "status_note": "MIT-licensed Packt companion repository (87 stars) with commits through 2026-08-14, but the chapter10 arena files are unchanged since their 2024-08-14 upload; tiny and copyable, best treated as a worked example rather than a library.",
+  "sources_read": [
+    "https://github.com/packtpublishing/c-plus-plus-memory-management",
+    "https://github.com/packtpublishing/c-plus-plus-memory-management/commits",
+    "https://github.com/packtpublishing/c-plus-plus-memory-management/tree/main/chapter10",
+    "https://github.com/packtpublishing/c-plus-plus-memory-management/commits/main/chapter10",
+    "https://github.com/packtpublishing/c-plus-plus-memory-management/issues",
+    "https://github.com/packtpublishing/c-plus-plus-memory-management/pulls",
+    "https://raw.githubusercontent.com/PacktPublishing/C-Plus-Plus-Memory-Management/HEAD/README.md",
+    "https://raw.githubusercontent.com/PacktPublishing/C-Plus-Plus-Memory-Management/HEAD/chapter10/carnage-stdlib-version.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/C-Plus-Plus-Memory-Management/HEAD/chapter10/carnage-homemade-version-meyers-singleton.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/C-Plus-Plus-Memory-Management/HEAD/chapter10/carnage-homemade-version-global-singleton.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/C-Plus-Plus-Memory-Management/HEAD/chapter10/carnage-homemade-version-SizeBasedArena.cpp",
+    "https://raw.githubusercontent.com/PacktPublishing/C-Plus-Plus-Memory-Management/HEAD/chapter10/carnage-homemade-version-SizeBasedArena-safer.cpp"
+  ],
+  "confidence": 0.7
+}

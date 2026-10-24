@@ -1,0 +1,73 @@
+[
+  {
+    "id": "paper:book-gpu-programming-with-cpp-and-cuda-stream-overlap",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": false,
+    "evidence_tier_final": "C",
+    "tier_reason": "ch8/3_multiplying_with_streams/vec_mat_mul_streams.cu and vec_mat_mul_nostreams.cu implement the streamed and unstreamed versions with CUDA-event timing, but the repo holds code only: the 87.03 ms and 343.555 ms averages are the book's own run relayed by the lead, only the no-streams reference times 119.299 and 500.615 ms appear (in commented-out average() calls), and no flags or CPU/GPU are stated in the repo. First-party, partial methodology, so C.",
+    "corrections": {
+      "compiler_and_flags": "Not stated. ch8/3_multiplying_with_streams/CMakeLists.txt (project language CUDA, cmake_minimum_required 3.10) adds the two executables with no flags, no build type and no CMAKE_CUDA_ARCHITECTURES, so nvcc's defaults apply. Repo README lists g++ 9.4, CUDA Toolkit 12 and CMake 3.16 as the environment but no flags.",
+      "caveats": "The two programs differ in more than streams: the baseline allocates the matrix with malloc (pageable memory) while the streams version uses cudaMallocHost (pinned memory), so part of the gain is faster pinned-memory transfers rather than overlap; the repo does not isolate the two effects (no pinned, no-stream variant). The relayed best times correspond to about 12.3 GB/s (1.07 GB matrix in 87.03 ms) and 12.5 GB/s (4.29 GB matrix in 343.555 ms) against about 9.0 and 8.6 GB/s for the no-streams reference times (derived from page data plus the relayed averages), close to the pinned PCIe rate the book reports, so the streamed version is transfer-bound and the share of the 27-31% that comes from hiding the kernel rather than from pinned memory is unmeasured. The no-streams reference times in the comments are single values from the author's machine (the code says to replace them with your own measurement) and the book's ten-run averages are not stored in the repo; the comparison is across two separate programs and runs. The streams version creates its two streams inside the timed region (a small cost against it). The kernel uses one thread per row with strided, uncoalesced row-major reads, and small chunks launch tiny grids (2 blocks of 256 threads at 273 rows), so neither side is a tuned GEMV and cuBLAS is not compared. The chunk loop assumes the row count is a multiple of twice the chunk size, which holds for every size in main(). The CPU run in compute() is skipped in the averaging path. Timing includes the result copy back and the stream synchronisation. Tier C: first-party, hardware from the book only. Files opened: ch8/3_multiplying_with_streams/vec_mat_mul_streams.cu, vec_mat_mul_nostreams.cu, CMakeLists.txt, ch8/readme.md, README.md."
+    },
+    "notes": "Source matches the record: two alternating streams with cudaMemcpyAsync from pinned memory against one blocking pageable copy, and 27.05% and 31.37% reproduce from the relayed averages and the commented reference times (the program's own gain formula is 100 - average/reference*100; 1020 MB and 4092 MB are its integer-rounded total sizes). Added the transfer-bound derivation, stream creation inside the timed region and the kernel launch-shape caveats. Metadata confirmed: MIT, 117 stars, 40 forks, not a fork or archived, last commit 2025-12-15 (a README banner update; last code change 2025-08-20), active; category math-simd-linear-algebra is a loose fit for a CUDA copy/compute overlap technique.",
+    "urls_opened": [
+      "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/blob/main/ch8/3_multiplying_with_streams/vec_mat_mul_streams.cu",
+      "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/ch8/3_multiplying_with_streams/vec_mat_mul_streams.cu",
+      "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/ch8/3_multiplying_with_streams/vec_mat_mul_nostreams.cu",
+      "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/ch8/3_multiplying_with_streams/CMakeLists.txt",
+      "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/ch8/readme.md",
+      "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/README.md",
+      "https://raw.githubusercontent.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/HEAD/LICENSE",
+      "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA",
+      "https://github.com/PacktPublishing/GPU-Programming-with-CPP-and-CUDA/commits/main"
+    ]
+  },
+  {
+    "id": "paper:book-hands-on-design-patterns-with-cpp-second-edition-crtp-static-polymorphism",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": false,
+    "evidence_tier_final": "C",
+    "tier_reason": "Chapter08/01_function_call.C registers BM_none, BM_dynamic, BM_static and BM_static1 with Google Benchmark, so the code compares CRTP against a virtual call, but the repo holds code only: the 9.04/1.55/1.60 ns figures are the book's own run relayed by the lead, with no build files, flags or CPU anywhere in the repo. First-party, so C.",
+    "corrections": {
+      "compared_against_cpp_std_directly": false,
+      "compiler_and_flags": "Not stated. The repo has no build files (no CMakeLists.txt or Makefile at the root or in Chapter08) and the README's software table lists only 'GCC, Clang or Visual Studio'. Google Benchmark, version not stated.",
+      "caveats": "Per-call figures work out to about 0.28 ns for the virtual call and about 0.05 ns for the CRTP and non-virtual calls (derived from the relayed numbers), below one cycle for the inlined versions, so the compiler folded the 32 inlined additions (the timed loop calls nothing opaque and the counter is read only after the loop) and the gap measures inlining and loop folding as much as dispatch cost. The virtual row is suspect too: BM_dynamic creates the object with new D in the same function, so its dynamic type is visible to the compiler, and about one cycle per call for a body that loads and stores the same member is hard to reach with a real indirect call, which suggests the compiler devirtualized it, likely speculatively with a guard (inferred from the source and the relayed numbers, not compiled). The CRTP base static_polymorphism::B keeps a virtual destructor, so the CRTP object still carries a vtable pointer; BM_static1 uses a stack object and a free apply() helper. Virtual dispatch gives runtime flexibility that the CRTP version cannot, so the comparison is not feature-equal. Compiler, flags and CPU not stated, first-party, one tiny function. Tier C. Files opened: Chapter08/01_function_call.C, README.md, LICENSE."
+    },
+    "notes": "Source matches the record's workload (REPEAT32 of f(++i), counter read through DoNotOptimize after the loop). The numbers appear nowhere in the repo; the book was not consulted. Set compared_against_cpp_std_directly to false (the baseline is a language feature, not a standard-library component; same as the bendersky virtual-vs-CRTP record) and added the devirtualization and loop-folding caveats. Metadata confirmed: MIT, 137 stars, 42 forks, not a fork or archived, last commit 2024-08-29 (README errata), stale.",
+    "urls_opened": [
+      "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/blob/main/Chapter08/01_function_call.C",
+      "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/Chapter08/01_function_call.C",
+      "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/README.md",
+      "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/LICENSE",
+      "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition",
+      "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/commits/main"
+    ]
+  },
+  {
+    "id": "paper:book-hands-on-design-patterns-with-cpp-second-edition-virtual-call-vs-dynamic-cast",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": false,
+    "evidence_tier_final": "C",
+    "tier_reason": "Chapter01/02_dynamic_cast.C registers BM_virtual and BM_dynamic_cast with Google Benchmark, so the code compares the two idioms, but the repo holds code only: the 1 ns versus 5-10 ns figures are the book's own run relayed by the lead, with no build files, flags or CPU anywhere in the repo. First-party, so C.",
+    "corrections": {
+      "compared_against_cpp_std_directly": false,
+      "compiler_and_flags": "Not stated. The repo has no build files (no CMakeLists.txt or Makefile at the root or in Chapter01) and the README's software table lists only 'GCC, Clang or Visual Studio'. Google Benchmark, version not stated.",
+      "caveats": "The two benchmarks do different jobs (a call that does work against a successful type test), so the ratio compares idioms, not a drop-in replacement. The cast is the cheapest case for dynamic_cast: a one-level hierarchy where the cast always succeeds (p is Derived unless rand() returns 0, and with no srand call glibc's first rand() value is non-zero, so it is always Derived there); cost grows with deep or multiple inheritance, cross-casts and failing casts, and depends on the C++ ABI runtime (libsupc++, libc++abi, MSVC). The virtual call's effect is never observed (no DoNotOptimize or ClobberMemory on the result or the member, and the object is deleted afterwards), so the compiler may speculatively devirtualize and inline the 64 calls; the virtual row may not measure a real indirect call. Numbers are the book's, not on any repo page; compiler, flags and CPU not stated, first-party. Tier C. Files opened: Chapter01/02_dynamic_cast.C, README.md, LICENSE."
+    },
+    "notes": "Source matches the record (REPEAT64, one-level Base/Derived, dynamic_cast result through DoNotOptimize, virtual result discarded). The numbers appear nowhere in the repo; the book was not consulted. Set compared_against_cpp_std_directly to false (dynamic_cast and virtual calls are language features, not standard-library components) and added the observability and ABI-runtime caveats. Metadata confirmed: MIT, 137 stars, 42 forks, not a fork or archived, last commit 2024-08-29, stale.",
+    "urls_opened": [
+      "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/blob/main/Chapter01/02_dynamic_cast.C",
+      "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/Chapter01/02_dynamic_cast.C",
+      "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/README.md",
+      "https://raw.githubusercontent.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/HEAD/LICENSE",
+      "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition",
+      "https://github.com/PacktPublishing/Hands-On-Design-Patterns-with-CPP-Second-Edition/commits/main"
+    ]
+  }
+]
