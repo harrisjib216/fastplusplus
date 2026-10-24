@@ -1,0 +1,49 @@
+[
+  {
+    "id": "https://github.com/stmicroelectronics/stm32f4xx_hal_driver",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "Third-party hobby tutorial (5-star repo) whose toggle loop code is public (linked VictorTagayun/STM32F334_HAL_LL_REG_GPIO Src/main.c) and whose board and clock are stated, but the optimization flags are not, and it is not a well-known independent suite, so C rather than A or B.",
+    "corrections": {
+      "claimed_speedup": "Tutorial (PC9, NUCLEO-F334R8): LL_GPIO_SetOutputPin/ResetOutputPin 1.09 MHz vs HAL_GPIO_WritePin set/reset 806 kHz (about 1.35x, derived from page data); HAL_GPIO_TogglePin and LL_GPIO_TogglePin both 625 kHz (no gain); direct GPIOC->BSRR/BRR 2.94 MHz. Linked repo main.c comments (PA8, STM32F334C8 project): HAL_GPIO_WritePin set/reset 878 kHz vs LL Set/ResetOutputPin 1.18 MHz (about 1.34x, derived from page data); HAL and LL TogglePin both 922 kHz; direct BSRR/BRR 5.54 MHz (HAL project) and 6.00 MHz (LL project).",
+      "workload": "Third-party GPIO pin toggle loop at 72 MHz: HAL_GPIO_WritePin set/reset versus LL_GPIO_SetOutputPin/LL_GPIO_ResetOutputPin versus HAL_GPIO_TogglePin versus LL_GPIO_TogglePin versus direct BSRR/BRR register writes, toggle frequency measured on PC9 of a NUCLEO-F334R8 (tutorial) and on PA8 in the linked STM32F334_HAL_LL_REG_GPIO project (each variant commented in or out of one while loop).",
+      "hardware": "Tutorial: NUCLEO-F334R8 (STM32F334R8, Cortex-M4F), 8 MHz external clock with PLLMUL 9, 72 MHz system clock. Linked repo's .ioc targets STM32F334C8Tx with a 72 MHz PLL clock.",
+      "compiler_and_flags": "Not stated. The linked .ioc names STM32CubeIDE as the toolchain (STM32Cube FW_F3 V1.10.0, HAL full assert off); the optimization level is not given and no IDE build configuration is in the repo.",
+      "stars_or_usage": "209 stars, 76 forks (STM32F4 HAL/LL driver repository); the STM32Cube MCU component hal_driver for the STM32F4 series",
+      "caveats": "The speed numbers are third-party, from a hobby tutorial (Basic_DSMPS_Tutorial, 5 stars) and its linked test repo, not a controlled study, and from the STM32F3 family (STM32F334 with STM32Cube FW_F3), not the F4 driver repo this record points at; the LL GPIO API is shared across families. Compiler optimization level is not stated anywhere (the .ioc says STM32CubeIDE, HAL assert off, PA8 high speed; no build config committed). The two sources disagree on the plain register loop (2.94 MHz on PC9 versus 5.54-6.00 MHz on PA8 for the same BSRR/BRR writes), and the linked repo's comments show the same register code at 5.54 MHz in a HAL-generated project and 6.00 MHz in an LL-generated one, so build settings differed between runs and a low-optimization (Debug) build is plausible for the tutorial figures. The gain is only for separate set/reset calls (about 1.35x); TogglePin shows no LL gain, and direct register writes beat both APIs by 2.7x to 5x. ST's release notes describe the LL drivers as 'optimized and one shot services' without numbers; the repository README makes no speed or footprint claim. Code-size evidence exists only as forum snippets not opened (community.st.com and eevblog.com unreachable): a GPIO plus LPUART build reportedly 10128 bytes with HAL versus 5848 bytes with LL, chip and flags unstated."
+    },
+    "notes": "Numbers on the tutorial page match the record; linked repo main.c gives a second, consistent set (LL set/reset about 1.34x over HAL_GPIO_WritePin, toggle equal). Category filesystems-and-io looks wrong for an MCU GPIO driver layer (closer to an embedded/runtime category); consider a category override, and consider pointing repo_url at STMicroelectronics/stm32f3xx_hal_driver since the measurement used F3 parts (not checked here).",
+    "urls_opened": [
+      "https://github.com/VictorTagayun/Basic_DSMPS_Tutorial",
+      "https://github.com/VictorTagayun/STM32F334_HAL_LL_REG_GPIO",
+      "https://raw.githubusercontent.com/VictorTagayun/STM32F334_HAL_LL_REG_GPIO/HEAD/Src/main.c",
+      "https://raw.githubusercontent.com/VictorTagayun/STM32F334_HAL_LL_REG_GPIO/HEAD/STM32F334_HAL_LL_REG_GPIO.ioc",
+      "https://github.com/STMicroelectronics/stm32f4xx_hal_driver",
+      "https://github.com/STMicroelectronics/stm32f4xx_hal_driver/commits",
+      "https://raw.githubusercontent.com/STMicroelectronics/stm32f4xx_hal_driver/HEAD/Release_Notes.html"
+    ]
+  },
+  {
+    "id": "https://github.com/google/afl",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party coverage tables in docs/technical_details.txt (GNU patch 2.7.3 at -O3, one session) with no CPU, no run count and no published harness for the variant fuzzers; speed claims in llvm_mode/README.llvm and technical_details.txt are first-party prose ratios without methodology.",
+    "corrections": {
+      "claimed_speedup": "Coverage, not speed: AFL model reached 1,765 blocks and 2,597 edges versus 182 blocks / 205 edges (blind fuzzing S, single round), 228 / 265 (blind fuzzing L, comparable number of cycles), 855 / 1,130 (block-coverage guidance) and 1,452 / 2,070 (edge-coverage guidance), from an initial file at 156 / 163. Deterministic-only experiment seeded with a valid unified diff (initial 624 / 717): AFL model 1,452 blocks / 2,040 edges and 1 unique crash versus blind fuzzing 1,101 / 1,409, block coverage 1,255 / 1,649 and edge coverage 1,259 / 1,734, all with 0 crashes. Separate speed claims in the same docs: LLVM-mode instrumentation lets some slow CPU-bound programs run up to around 2x faster and stays within about 10% for fast binaries (versus afl-gcc/afl-clang assembly-level rewriting); the fork server usually gives 1.5x-2x on fast targets; deferred fork server 10x+ on some targets. The README calls the fuzzer far superior to blind fuzzing or coverage-only tools."
+    },
+    "notes": "All numbers match docs/technical_details.txt and llvm_mode/README.llvm; metadata confirmed (Apache-2.0, 4.2k stars, 672 forks, archived 2024-03-22, last commit 2021-06-08). The metric is coverage, not speed, and the baselines are AFL's own variants; the maintained successor AFL++ is a separate fork and may be a lead.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/google/AFL/master/docs/technical_details.txt",
+      "https://raw.githubusercontent.com/google/AFL/master/llvm_mode/README.llvm",
+      "https://raw.githubusercontent.com/google/AFL/master/README.md",
+      "https://github.com/google/AFL",
+      "https://github.com/google/AFL/commits/master"
+    ]
+  }
+]
