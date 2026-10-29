@@ -366,7 +366,7 @@ std::string float_repr(double value) {
     } else {
         out += digits.substr(0, 1);
         if (digits.size() > 1) out += "." + digits.substr(1);
-        char exp[8];
+        char exp[16];
         std::snprintf(exp, sizeof exp, "e%c%02d", exponent < 0 ? '-' : '+', std::abs(exponent));
         out += exp;
     }
