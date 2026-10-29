@@ -9,5 +9,5 @@
 ## Checklist
 
 - [ ] Data changes go through `data/` (decisions, retier files or pipeline records), not hand edits to `catalog/`
-- [ ] `python3 pipeline/render_lists.py` re-run and its output committed
-- [ ] `python3 pipeline/check_pii.py` passes
+- [ ] `build/fastpp render` re-run and its output committed
+- [ ] `build/fastpp check-pii` passes

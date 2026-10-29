@@ -9,8 +9,8 @@ A centralized list of the fastest C++ code (other languages later) so agents and
 implementations and libraries for their projects. C++ comes first; C libraries callable from C++ count. The spec is
 `pipeline/spec.md` (Part 4 lists each wave's categories and baselines). Scripts are in `pipeline/`, data in
 `data/waveN/`, the rendered catalog in `catalog/` (plus `catalog.jsonl`, `catalog.csv` and the generated blocks of
-`README.md`), written by `pipeline/render_lists.py`; never hand-edit those outputs. Reader docs are in `docs/` (the
-build history is `docs/build-log.md`).
+`README.md`), written by `build/fastpp render` (the C++ tool in `src/`); never hand-edit those outputs. Reader docs
+are in `docs/` (the build history is `docs/build-log.md`).
 
 ## Rules
 
@@ -44,7 +44,7 @@ build history is `docs/build-log.md`).
 - Books are copyrighted: book files, their extracted text, chunks and book prompts stay in the scratchpad, never in
   the repo; only the miners' JSON seed arrays are committed (`docs/QUEUE.md` section F, "Books").
 - No personal data, home-directory paths or credentials in tracked files or commit metadata. Prompts rendered on a
-  local machine embed the checkout's absolute path: run `python3 pipeline/check_pii.py --fix` before committing them
+  local machine embed the checkout's absolute path: run `build/fastpp check-pii --fix` before committing them
   (CI runs the same check with `--commits`). Copyright lines say "the fastpp contributors".
 - Commits are authored by `Claude <noreply@anthropic.com>`. Land work on main by squashing locally under that
   identity (`git commit-tree <branch>^{tree} -p origin/main`) and fast-forwarding main; a squash or merge through
@@ -78,8 +78,8 @@ from spec Part 4 the same way as `data/wave8/assignments.json`, and create `data
    `python3 pipeline/seed.py data/waveN --batch seed`, then merge, verify and enrich the seed records.
 6. Close: final `verify.py apply`, confirm every verified entry has `enrich/raw/<slug>.json`
    (slug = `re.sub(r"[^a-z0-9]+","_", id.removeprefix("https://")).strip("_")`), run
-   `python3 pipeline/render_lists.py` (and `pipeline/seeds_no_evidence.py` when seeds changed), run
-   `python3 pipeline/check_pii.py`, commit, and update these notes.
+   `build/fastpp render` (after `build/fastpp seeds` when seeds changed), run `build/fastpp check-pii`, commit,
+   and update these notes.
 
 Recording decisions: pipe JSON lines into `python3 pipeline/add_decisions.py`, e.g.
 
@@ -174,7 +174,7 @@ Decisions and retiers:
   batch), so maintenance_status, compiler_and_flags and claim fixes go through retier corrections. `verify.py apply`
   appends caveat corrections as "[retier] ..." addenda (write addenda, not rewrites) and replaces the other fields.
 - Category overrides that move an entry to another wave's category need a `domain` override too, or
-  render_lists.py shows the category under two domains.
+  the renderer shows the category under two domains.
 - kostya/benchmarks rows are often older than the README's Versions table; record the measured toolchain, not the
   listed one.
 
@@ -199,11 +199,11 @@ Dates and rendering:
 
 - Never bump a closed wave's `today` in assignments.json: `verify.py apply` stamps every applied verdict with it.
   Render seed prompts for a closed wave with its original `today`.
-- `render_lists.py` writes `catalog/` (pages per domain, category and entry, JSONL and CSV) and the README's marked
+- `fastpp render` writes `catalog/` (pages per domain, category and entry, JSONL and CSV) and the README's marked
   blocks; CI fails if a fresh render differs from the commit, so re-render before every data commit.
 - While enrichers are still writing, render in a scratch copy of the checkout with their in-flight enrich/raw drafts
   removed and copy `catalog/` and `README.md` back, so the commit matches CI's fresh render of the committed files.
-- `render_lists.py` exits when a category has no title in `pipeline/catalog_meta.py` CATEGORY_TITLES; add the title
+- `fastpp render` exits when a category has no title in `data/catalog_meta.json` (`categories`); add the title
   when a verifier or override creates a category (polymorphic-dispatch), and check the render's exit code rather
   than piping it through a filter that hides it.
 
