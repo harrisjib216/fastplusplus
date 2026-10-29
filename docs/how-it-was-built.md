@@ -20,7 +20,7 @@ flowchart LR
   V --> A["verify.py apply<br/>verified.json"]
   A --> E["Enrichment agents<br/>(Opus)"]
   E --> R["Retier files and<br/>decisions.json"]
-  R --> C["render_lists.py<br/>catalog/"]
+  R --> C["fastpp render<br/>catalog/"]
   V -. invalid evidence .-> X["rejected.json"]
 ```
 
@@ -42,8 +42,9 @@ flowchart LR
 6. **Retier and decide.** Every finding that changed a record went into a retier file or into
    [`data/decisions.json`](../data/decisions.json) (keep with shortcomings, duplicate, or reject, plus overrides).
    Nothing was edited by hand.
-7. **Render.** [`render_lists.py`](../pipeline/render_lists.py) turns the records into the pages under
-   [`catalog/`](../catalog/README.md) and the JSONL and CSV exports.
+7. **Render.** [`fastpp render`](../src/render.cpp) turns the records into the pages under
+   [`catalog/`](../catalog/README.md) and the JSONL and CSV exports. The renderer began as a Python script and was
+   ported to C++; the port reproduced the Python output byte for byte before the script was removed.
 
 After the 14 domain waves, backfill passes mined curated lists (awesome-cpp, awesome-c and the leads that
 enrichers wrote down) for projects the searches had missed, and sent every new seed through the same verify and

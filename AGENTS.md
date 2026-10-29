@@ -73,5 +73,6 @@ Without `jq`, `grep '"category": "json"' catalog/catalog.jsonl` works because ea
 ## Changing the catalog
 
 Never hand-edit files under `catalog/` or the generated blocks of `README.md`; they are rebuilt by
-`python3 pipeline/render_lists.py`. Changes go into the records under `data/` (see `CONTRIBUTING.md` and the wave
-loop in `CLAUDE.md`), and `python3 pipeline/check_pii.py` must pass before a commit.
+`build/fastpp render` (build it once with `cmake -B build && cmake --build build`). Changes go into the records under
+`data/` (see `CONTRIBUTING.md` and the wave loop in `CLAUDE.md`), and `build/fastpp check-pii` must pass before a
+commit.
