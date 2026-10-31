@@ -3,7 +3,7 @@
 <sub>[fastpp](../README.md) › Docs</sub>
 
 The catalog is generated from the records in [`data/`](../data/README.md) by
-[`pipeline/render_lists.py`](../pipeline/render_lists.py). Two exports carry every entry:
+[`fastpp render`](../src/render.cpp). Two exports carry every entry:
 
 - [`catalog/catalog.jsonl`](../catalog/catalog.jsonl): one JSON object per line, sorted by `id`, all fields below.
 - [`catalog/catalog.csv`](../catalog/catalog.csv): one row per entry with the summary columns listed at the end.

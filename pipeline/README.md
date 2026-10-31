@@ -27,9 +27,9 @@ pages; the searching, verifying and writing is done by Claude Code agents that r
 | `verify.py apply data/waveN` | Folds verdicts, retier files and decision overrides into `verified.json` and `rejected.json`. |
 | `enrich.py data/waveN` | Renders an enrichment prompt for every verified entry that has no enrichment record yet. |
 | `add_decisions.py` | Appends shortcomings, measurements, duplicates, rejects and override fields to `data/decisions.json` (JSON lines on stdin). |
-| `seeds_no_evidence.py` | Compiles the seeds with no published comparison into `catalog/seeds-no-evidence.md`. |
-| `render_lists.py` | Renders `catalog/` (index, domain, category and entry pages, rejected list, JSONL and CSV exports) and the generated blocks of the top-level `README.md`. Display titles and the README highlights are in `catalog_meta.py`. |
-| `check_pii.py [--fix]` | Fails on home-directory paths, personal email addresses or credentials in tracked files; `--fix` rewrites the paths. |
+
+Rendering `catalog/` and the privacy check are the C++ tool in [`src/`](../src/README.md): `fastpp seeds`,
+`fastpp render` and `fastpp check-pii`.
 
 ## The wave loop
 
@@ -43,7 +43,7 @@ pages; the searching, verifying and writing is done by Claude Code agents that r
    findings that change a record go in a retier file.
 5. Seed the leads the enrichers wrote down (`seed.py`), and send the seed records through merge, verify and enrich.
 6. Close: a final `verify.py apply`, check every verified entry has an enrichment record, then
-   `render_lists.py`, `check_pii.py`, commit and push.
+   `fastpp render`, `fastpp check-pii`, commit and push.
 
 The full operating notes (concurrency, rate limits, recovery after killed agents, id drift, the rules for
 recording decisions) are in [CLAUDE.md](../CLAUDE.md#the-wave-loop).

@@ -55,8 +55,9 @@ hand. A data change goes in through the pipeline:
 Before you open the pull request:
 
 ```sh
-python3 pipeline/render_lists.py   # rebuild catalog/ and the README blocks
-python3 pipeline/check_pii.py      # no home-directory paths, personal emails or credentials
+cmake -B build && cmake --build build   # once: builds build/fastpp (C++20, no dependencies)
+build/fastpp render                     # rebuild catalog/ and the README blocks
+build/fastpp check-pii                  # no home-directory paths, personal emails or credentials
 ```
 
 CI runs both and fails if the committed catalog differs from a fresh render.
@@ -64,7 +65,7 @@ CI runs both and fails if the committed catalog differs from a fresh render.
 ## Privacy
 
 Do not commit personal names, personal email addresses, home-directory paths or credentials. Prompts rendered on
-a personal machine embed the checkout's absolute path; `python3 pipeline/check_pii.py --fix` rewrites those
+a personal machine embed the checkout's absolute path; `build/fastpp check-pii --fix` rewrites those
 paths to `/path/to/fastpp`.
 
 ## License
